@@ -37,7 +37,11 @@ the call… worth testing the demo flow before 10:30."
 
 **MausBot**
 
-- A built-in bot named "MausBot" with the MausBot mascot.
+- A built-in bot named "MausBot" with the MausBot mascot in greyish silver (Omkar, 2026-10-17).
+  - This is a new `silver` mascot colour, about `#A8ADB4`, reserved for MausBot. It is never picked for other bots
+    and not offered in the colour picker.
+  - `MausColor` is a wire type the phones parse, so the phone apps need to draw `silver` too (Part 4). An older
+    phone falls back to its default colour.
 - It is always first in the sidebar, and in the phone apps once they update.
 - It cannot be deleted. Its name and mascot are fixed. Its notifications can be muted.
 - It runs on the person's default engine with their connected apps.
