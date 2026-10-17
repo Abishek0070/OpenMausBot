@@ -52,6 +52,11 @@ describe("unreadable lists", () => {
     expect(emailsFromData({ messages: [{ message_id: "m" }, { id: "n" }] }).map((email) => email.id)).toEqual(["n"]);
   });
 
+  it("a calendar of only cancelled instances without a start is empty; any other unreadable item still throws", () => {
+    expect(eventsFromData({ items: [{ id: "c1", status: "cancelled" }, { id: "c2", status: "cancelled" }] })).toEqual([]);
+    expect(() => eventsFromData({ items: [{ id: "c1", status: "cancelled" }, { event_id: "x" }] })).toThrow(/none of the calendar events/);
+  });
+
   it("drops a cancelled instance without a start, keeps tentative, and ends a missing end at the start", () => {
     const start = { dateTime: "2026-10-17T10:00:00Z" };
     const events = eventsFromData({ items: [{ id: "c", status: "cancelled" }, { id: "t", status: "tentative", start }] });

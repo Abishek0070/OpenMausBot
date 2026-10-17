@@ -134,11 +134,13 @@ function calendarEvent(raw: unknown): CalendarEvent | null {
 
 export function eventsFromData(data: unknown): CalendarEvent[] {
   const list = eventList(data);
+  let cancelledDropped = 0;
   const events = list.flatMap((raw) => {
     const event = calendarEvent(raw);
+    if (!event && record(raw)?.status === "cancelled") cancelledDropped += 1;
     return event ? [event] : [];
   });
-  if (list.length > 0 && events.length === 0) throw new Error("none of the calendar events could be read");
+  if (list.length > cancelledDropped && events.length === 0) throw new Error("none of the calendar events could be read");
   return events;
 }
 
