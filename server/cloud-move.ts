@@ -37,6 +37,13 @@ function rosterLength(path: string): number {
   } catch { return 0; }
 }
 
+function botsWorthMoving(path: string): number {
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return Array.isArray(value) ? value.filter((bot) => !(bot && typeof bot === "object" && "builtIn" in bot)).length : 0;
+  } catch { return 0; }
+}
+
 export function workspaceContents(dataDir: string): WorkspaceContents {
   let chats = 0;
   const database = join(dataDir, "messages.db");
@@ -50,7 +57,7 @@ export function workspaceContents(dataDir: string): WorkspaceContents {
       }
     } finally { db.close(); }
   }
-  return { bots: rosterLength(join(dataDir, "bots.json")), rooms: rosterLength(join(dataDir, "groups.json")), chats };
+  return { bots: botsWorthMoving(join(dataDir, "bots.json")), rooms: rosterLength(join(dataDir, "groups.json")), chats };
 }
 
 export function isEmptyWorkspace(contents: WorkspaceContents): boolean {

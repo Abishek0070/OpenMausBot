@@ -150,14 +150,14 @@ export function createTeamRoutes(deps: TeamRouteDeps): RouteHandler {
           : profileName
             ? `${profileName}'s Team`
             : "My OpenMaus Team";
-      const memberIds = store.bots.filter((bot) => !bot.hidden).map((bot) => bot.id);
+      const memberIds = store.bots.filter((bot) => !bot.hidden && bot.builtIn === undefined).map((bot) => bot.id);
       if ((body.format === "backup" ? store.bots.length : memberIds.length) === 0) return json(res, 400, { error: "Create a bot before exporting your team" });
       try {
         if (body.format === "backup") {
           return json(res, 200, createTeamBackup(store, routines!.listRoutines(), name));
         }
         if (body.format === "package") {
-          const selectedBots = store.bots.filter((bot) => !bot.hidden);
+          const selectedBots = store.bots.filter((bot) => !bot.hidden && bot.builtIn === undefined);
           const skillNames = checkedExportSkillNames(body.skillIds, selectedBots);
           if (!skillNames.ok) return json(res, 400, { error: skillNames.error });
           const document = createBotPackageExport({

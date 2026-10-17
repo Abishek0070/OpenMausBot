@@ -86,6 +86,12 @@ it("calls a Cloud empty only with its starter bot at most, no rooms, and nobody'
   expect(isEmptyWorkspace(workspaceContents(dataDir))).toBe(false);
 });
 
+it("does not count MausBot, which every install has, as work to move", () => {
+  writeFileSync(join(dataDir, "bots.json"), JSON.stringify([{ id: "chief" }, { id: "mausbot", builtIn: "mausbot" }]));
+  expect(workspaceContents(dataDir)).toEqual({ bots: 1, rooms: 0, chats: 0 });
+  expect(isEmptyWorkspace(workspaceContents(dataDir))).toBe(true);
+});
+
 it("counts a conversation someone took part in as a chat", () => {
   writeFileSync(join(dataDir, "bots.json"), JSON.stringify([{ id: "starter" }]));
   messages([{ thread: "t1", role: "bot" }, { thread: "t1", role: "user" }, { thread: "t2", role: "user" }, { thread: "t3", role: "bot" }]);
