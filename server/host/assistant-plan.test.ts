@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
 import {
-  DAILY_TURN_CAP, emailSince, fingerprint, keepNewest, KEEP_MEETINGS_MS, localDate, MAX_WORK_THREADS, planMeetings, planTriage, pruneMeetings, qualifies, todayDue, turnsLeft,
+  DAILY_TURN_CAP, emailSince, fingerprint, keepNewest, KEEP_MEETINGS_MS, localDate, planMeetings, planTriage, pruneMeetings, qualifies, todayDue, turnsLeft,
 } from "./assistant-plan.ts";
-import type { MeetingRecord } from "./assistant-state.ts";
+import { MAX_WORK_THREADS, type MeetingRecord } from "./assistant-state.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -144,6 +144,15 @@ describe("days in the person's zone", () => {
     expect(turnsLeft({ now: NOW, timeZone: "America/Los_Angeles", turnDay: "2026-10-17", dayTurns: 5 })).toEqual({ day: "2026-10-17", left: DAILY_TURN_CAP - 5 });
     expect(turnsLeft({ now: NOW + 24 * HOUR, timeZone: "America/Los_Angeles", turnDay: "2026-10-17", dayTurns: 12 })).toEqual({ day: "2026-10-17", left: 0 });
     expect(turnsLeft({ now: NOW + 48 * HOUR, timeZone: "America/Los_Angeles", turnDay: "2026-10-17", dayTurns: 12 })).toEqual({ day: "2026-10-18", left: DAILY_TURN_CAP });
+  });
+
+  it("treats a stored day more than one day ahead as a clock jump, for turns and for Today", () => {
+    expect(turnsLeft({ now: NOW, timeZone: "Asia/Kolkata", turnDay: "2026-10-18", dayTurns: 12 })).toEqual({ day: "2026-10-18", left: 0 });
+    expect(turnsLeft({ now: NOW, timeZone: "Asia/Kolkata", turnDay: "2026-10-19", dayTurns: 12 })).toEqual({ day: "2026-10-17", left: DAILY_TURN_CAP });
+    expect(turnsLeft({ now: NOW, timeZone: "Asia/Kolkata", turnDay: "2027-01-01", dayTurns: 12 })).toEqual({ day: "2026-10-17", left: DAILY_TURN_CAP });
+    expect(todayDue({ now: NOW, timeZone: "Asia/Kolkata", lastTodayDate: "2026-10-18" })).toBeNull();
+    expect(todayDue({ now: NOW, timeZone: "Asia/Kolkata", lastTodayDate: "2026-10-19" })).toBe("2026-10-17");
+    expect(todayDue({ now: NOW, timeZone: "Asia/Kolkata", lastTodayDate: "2026-12-31" })).toBe("2026-10-17");
   });
 
   it("forgets meetings more than five weeks old", () => {

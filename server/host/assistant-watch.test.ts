@@ -42,6 +42,12 @@ function defaultReply(title: string, prompt: string): JobResult {
 
 type Owner = NonNullable<ReturnType<AssistantWatchDeps["threadOf"]>>;
 
+function gate(): { closed: Promise<void>; open(): void } {
+  let open = () => {};
+  const closed = new Promise<void>((resolve) => { open = resolve; });
+  return { closed, open };
+}
+
 function world(options: {
   events?: CalendarEvent[]; emails?: EmailHeader[]; connected?: { gmail: boolean; googlecalendar: boolean } | null;
   reply?: (title: string, prompt: string) => JobResult | Promise<JobResult>; hosted?: boolean; tools?: { agentsTools: boolean; mailTools: boolean };
@@ -49,6 +55,7 @@ function world(options: {
   connectorTools?: BotRecord["connectorTools"];
   /** When Gmail received a message, if not when it was sent: Gmail's `after:` counts arrival. */
   arrivals?: Record<string, number>;
+  deps?: Partial<Pick<AssistantWatchDeps, "capabilities" | "team" | "threadBusy">>;
 } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "omb-assistant-watch-"));
   dirs.push(dataDir);
@@ -59,6 +66,7 @@ function world(options: {
     events: options.events ?? [], emails: options.emails ?? [], arrivals: options.arrivals ?? {},
     connected: options.connected === undefined ? { gmail: true, googlecalendar: true } : options.connected,
     calendarFailures: 0, newMailFromAttendees: false,
+    refuseAppend: undefined as ((message: Omit<Message, "id" | "at">) => boolean) | undefined,
   };
   const messages: Message[] = [];
   const tasks = new Map<string, { routineRunId?: string }>([["m-main", {}], ["scout-main", {}]]);
@@ -67,6 +75,7 @@ function world(options: {
   let ids = 0;
   const store = {
     appendMessage: (_threadId: string, message: Omit<Message, "id" | "at">) => {
+      if (live.refuseAppend?.(message)) throw new Error("messages.jsonl is read-only");
       const full = { id: `msg${messages.length}`, at: now, ...message } as Message;
       messages.push(full);
       return full;
@@ -109,6 +118,7 @@ function world(options: {
     capabilities: () => options.tools ?? { agentsTools: true, mailTools: true }, sources, runJob, notify, noteCard,
     team: () => options.team ?? null, threadOf: (threadId) => threads[threadId] ?? null,
     threadBusy: () => false, newId: () => `rq${++ids}`, every: (run) => { clocks.push(run); return { cancel: () => {} }; },
+    ...options.deps,
   });
   const watch = make();
   const widgets = () => messages.filter((line) => line.kind === "widget").map((line) => line.widget!.root as unknown as { title: string });
@@ -117,6 +127,7 @@ function world(options: {
     widgets,
     titles: () => widgets().map((card) => card.title),
     retries: () => messages.filter((line) => line.kind === "options" && line.card?.options.includes(RETRY)),
+    todays: () => messages.filter((line) => line.kind === "widget" && (line.widget!.root as unknown as { title: string }).title === "Today"),
     texts: () => messages.filter((line) => line.kind === "text").map((line) => line.text),
     tick: (ms: number) => { now += ms; }, now: () => now, setZone: (next: string) => { zone = next; }, switchOff: () => { enabled = false; }, switchOn: () => { enabled = true; },
     settle: async () => { await watch.check(); await watch.idle(); },
@@ -289,6 +300,19 @@ describe("the daily cap", () => {
   });
 });
 
+describe("past the daily cap", () => {
+  it("only reminds once the day's turns are used up", async () => {
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
+    w.watch.state.patch({ turnDay: "2026-10-17", dayTurns: 12 });
+    await w.settle();
+    expect(w.jobs).toEqual([]);
+    expect(w.watch.state.get().meetings?.a).toBeUndefined();
+    w.tick(2 * HOUR - 9 * MINUTE);
+    w.watch.reminders();
+    expect(w.titles()).toEqual(["Call with Jake Price in 9 minutes"]);
+  });
+});
+
 describe("catch-up", () => {
   it("checks at once on start and on a return, and not on an ordinary presence", async () => {
     const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
@@ -329,24 +353,37 @@ describe("Today", () => {
     expect(JSON.stringify(todays()[1])).toContain("important-1 <important-1@example.test>: Subject important-1");
   });
 
-  it("on a return, reads a stale calendar again before it posts Today, and posts at once from a fresh one", async () => {
-    const stale = world({ events: [meeting("a", NOW + 2 * HOUR)] });
-    await stale.settle();
-    stale.tick(24 * HOUR);
-    stale.live.events = [meeting("overnight", stale.now() + 5 * HOUR)];
-    stale.watch.onPresence({ source: "desktop", returned: true });
-    expect(stale.titles()).not.toContain("Today");
-    await stale.watch.idle();
-    expect(JSON.stringify(stale.widgets().find((card) => card.title === "Today"))).toContain("Meeting overnight");
-    const fresh = world({ events: [meeting("a", NOW + 2 * HOUR)] });
-    await fresh.settle();
-    fresh.tick(24 * HOUR);
-    fresh.live.events = [meeting("morning", fresh.now() + 5 * HOUR)];
-    await fresh.settle();
-    fresh.watch.onPresence({ source: "desktop", returned: true });
-    expect(JSON.stringify(fresh.widgets().find((card) => card.title === "Today"))).toContain("Meeting morning");
-    expect(fresh.noteCard).toHaveBeenLastCalledWith({ botId: "m", threadId: "m-main" });
-    await fresh.watch.idle();
+  it("posts Today at once from a stale calendar, so the presence can open it, then corrects that card in place", async () => {
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
+    await w.settle();
+    w.notify.mockClear();
+    w.noteCard.mockClear();
+    w.tick(24 * HOUR);
+    w.live.events = [meeting("overnight", w.now() + 5 * HOUR)];
+    w.watch.onPresence({ source: "desktop", returned: true });
+    expect(w.todays()).toHaveLength(1);
+    expect(w.noteCard).toHaveBeenCalledWith({ botId: "m", threadId: "m-main" });
+    const id = w.todays()[0]!.id;
+    expect(JSON.stringify(w.todays()[0]!.widget)).not.toContain("Meeting overnight");
+    await w.watch.idle();
+    expect(w.todays()).toHaveLength(1);
+    expect(w.todays()[0]!.id).toBe(id);
+    expect(w.todays()[0]!.widget).toMatchObject({ rev: 1 });
+    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Meeting overnight");
+    expect(w.notify).toHaveBeenCalledTimes(1);
+    expect(w.noteCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a stale Today alone when the fresh read finds the same meetings, and reads at once after an ordinary presence", async () => {
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR), meeting("b", NOW + 26 * HOUR)] });
+    await w.settle();
+    w.tick(24 * HOUR);
+    w.watch.onPresence({ source: "desktop", returned: false });
+    expect(w.todays()).toHaveLength(1);
+    await w.watch.idle();
+    expect(w.sources.events).toHaveBeenCalledTimes(2);
+    expect(w.todays()[0]!.widget).not.toHaveProperty("rev");
+    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Meeting b");
   });
 
   it("posts no Today when neither Gmail nor Calendar is connected", async () => {
@@ -437,7 +474,237 @@ describe("a failed AI turn", () => {
   });
 });
 
+describe("Retry settles honestly", () => {
+  const failing = (more: Parameters<typeof world>[0] = {}) => world({ events: [meeting("a", NOW + 2 * HOUR)], reply: () => ({ ok: false, error: "engine down" }), ...more });
+  const press = (w: ReturnType<typeof world>, behavior: "answer" | "deny" = "answer") => w.watch.answerCard("m-main", w.retries()[0]!.card!.requestId!, behavior, behavior === "answer" ? RETRY : undefined, owner);
+  const unavailable = async (w: ReturnType<typeof world>) => {
+    const jobs = w.jobs.length;
+    expect(press(w)).toBe("unavailable");
+    await w.watch.idle();
+    expect(w.jobs).toHaveLength(jobs);
+    expect(w.retries()[0]!.card).toMatchObject({ answered: "unavailable" });
+    expect(w.retries()[0]!.card?.answeredText).toBeUndefined();
+    expect(w.watch.state.get().meetings?.a?.failedAt).toBe(NOW);
+    expect(press(w)).toBe("unavailable");
+  };
+
+  it("is unavailable when the day's turns are used up", async () => {
+    const w = failing();
+    await w.settle();
+    w.watch.state.patch({ dayTurns: 12 });
+    await unavailable(w);
+  });
+
+  it("is unavailable once the meeting has started", async () => {
+    const w = failing();
+    await w.settle();
+    w.tick(2 * HOUR + MINUTE);
+    await unavailable(w);
+  });
+
+  it("is unavailable once the meeting has left the calendar", async () => {
+    const w = failing();
+    await w.settle();
+    w.live.events = [];
+    await w.settle();
+    await unavailable(w);
+  });
+
+  it("is unavailable with the switch off, and reads nothing", async () => {
+    const w = failing();
+    await w.settle();
+    w.switchOff();
+    await unavailable(w);
+    expect(w.sources.connected).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a dismissed card with its recorded outcome, never a fresh one", async () => {
+    const w = failing();
+    await w.settle();
+    expect(press(w, "deny")).toBe("rejected");
+    expect(w.retries()[0]!.card).toMatchObject({ answered: "answer", answeredText: "Dismissed" });
+    expect(press(w)).toBe("rejected");
+    await w.watch.idle();
+    expect(w.jobs).toHaveLength(1);
+  });
+
+  it("keeps a cut-short card open until this start has read the calendar", async () => {
+    let hang = true;
+    const first = world({ events: [meeting("a", NOW + 2 * HOUR)], reply: (title, prompt) => {
+      if (!hang) return defaultReply(title, prompt);
+      hang = false;
+      return new Promise<JobResult>(() => {});
+    } });
+    void first.watch.check();
+    await vi.waitFor(() => expect(first.jobs).toHaveLength(1));
+    const restarted = first.make();
+    restarted.start();
+    const requestId = first.retries()[0]!.card!.requestId!;
+    expect(restarted.answerCard("m-main", requestId, "answer", RETRY, owner)).toBe("unavailable");
+    expect(first.retries()[0]!.card?.answered).toBeUndefined();
+    await restarted.idle();
+    expect(restarted.answerCard("m-main", requestId, "answer", RETRY, owner)).toBe("answered");
+    await restarted.idle();
+    expect(first.titles()).toEqual(["Prep: Meeting a"]);
+  });
+});
+
+describe("a throw inside a job or a step", () => {
+  it("turns a throw inside a job into the usual error card with Retry", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let explode = true;
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], deps: { capabilities: () => {
+      if (explode) {
+        explode = false;
+        throw new Error("the engine list is reloading");
+      }
+      return { agentsTools: true, mailTools: true };
+    } } });
+    await w.settle();
+    expect(w.jobs).toEqual([]);
+    expect(w.retries().map((line) => line.card?.title)).toEqual(["I couldn't prepare \"Meeting a\""]);
+    expect(w.watch.state.get().meetings?.a).toMatchObject({ failedAt: NOW });
+    expect(w.watch.state.get().inFlight).toEqual([]);
+    expect(w.watch.answerCard("m-main", w.retries()[0]!.card!.requestId!, "answer", RETRY, owner)).toBe("answered");
+    await w.watch.idle();
+    expect(w.titles()).toEqual(["Prep: Meeting a"]);
+  });
+
+  it("puts back the emails of a check that threw, but not the ones it already carded", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ emails: [mail("important-1", NOW - MINUTE), mail("important-2", NOW - 2 * MINUTE)] });
+    let refuse = true;
+    w.live.refuseAppend = (message) => refuse && message.kind === "widget" && JSON.stringify(message.widget).includes("Subject important-2");
+    await w.settle();
+    expect(w.titles()).toEqual(["Subject important-1"]);
+    expect(w.watch.state.get().judged).toEqual(["important-1"]);
+    refuse = false;
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect([...w.jobs[1]!.prompt.matchAll(/id (\S+) ·/g)].map((match) => match[1])).toEqual(["important-2"]);
+    expect(w.titles()).toEqual(["Subject important-1", "Subject important-2"]);
+  });
+
+  it("settles every job cut short by a restart, even when one card cannot be posted", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR), meeting("b", NOW + 2 * HOUR)] });
+    const started = { start: NOW + 2 * HOUR, fingerprint: fingerprint(meeting("a", 0)), prepStartedAt: NOW - MINUTE };
+    w.watch.state.patch({ meetings: { a: started, b: started }, inFlight: [{ item: "prep:a", at: NOW - MINUTE }, { item: "prep:b", at: NOW - MINUTE }] });
+    let refusals = 1;
+    w.live.refuseAppend = (message) => message.kind === "options" && refusals-- > 0;
+    await w.settle();
+    expect(w.watch.state.get().meetings?.a?.failedAt).toBe(NOW);
+    expect(w.watch.state.get().meetings?.b?.failedAt).toBe(NOW);
+    expect(w.retries().map((line) => line.card?.title)).toEqual(["A meeting prep was cut short"]);
+    expect(w.jobs).toEqual([]);
+  });
+
+  it("still reads and plans when settling the cut-short jobs throws", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ events: [meeting("b", NOW + 2 * HOUR)] });
+    w.watch.state.patch({ inFlight: [{ item: "prep:a", at: NOW - MINUTE }] });
+    vi.spyOn(w.watch.state, "patch").mockImplementationOnce(() => { throw new Error("disk full"); });
+    await w.settle();
+    expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting b"]);
+  });
+
+  it("still posts Today and runs queued jobs when sweeping throws", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], deps: { threadBusy: () => { throw new Error("the busy list is gone"); } } });
+    w.tasks.set("job-old", { routineRunId: "mausbot-job-old" });
+    w.watch.state.patch({ workThreads: [{ threadId: "job-old", at: NOW - 25 * HOUR }] });
+    w.watch.onPresence({ source: "desktop", returned: false });
+    await w.settle();
+    expect(w.titles()).toEqual(["Today", "Prep: Meeting a"]);
+  });
+
+  it("still runs queued jobs when Today throws, and a return still reads", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], deps: { team: () => { throw new Error("the recap broke"); } } });
+    w.watch.onPresence({ source: "desktop", returned: false });
+    await w.settle();
+    expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a"]);
+    expect(w.todays()).toEqual([]);
+    w.tick(24 * HOUR);
+    w.watch.onPresence({ source: "desktop", returned: true });
+    await w.watch.idle();
+    expect(w.sources.events).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("checks running together", () => {
+  it("joins a second check to the one running, so one check reads once", async () => {
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], emails: [mail("plain-1", NOW - MINUTE)] });
+    const first = w.watch.check();
+    expect(w.watch.check()).toBe(first);
+    await w.watch.idle();
+    expect(w.sources.connected).toHaveBeenCalledTimes(1);
+    expect(w.sources.events).toHaveBeenCalledTimes(1);
+    expect(w.sources.emails).toHaveBeenCalledTimes(1);
+    expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a", "Email check"]);
+  });
+
+  it("reminds once when the minute clock fires during a check", async () => {
+    const w = world({ events: [meeting("a", NOW + 3 * HOUR)] });
+    await w.settle();
+    w.tick(3 * HOUR - 9 * MINUTE);
+    const reading = gate();
+    const entered = gate();
+    w.sources.events.mockImplementationOnce(async () => {
+      entered.open();
+      await reading.closed;
+      return w.live.events;
+    });
+    const running = w.watch.check();
+    await entered.closed;
+    w.watch.reminders();
+    reading.open();
+    await running;
+    await w.watch.idle();
+    w.watch.reminders();
+    expect(w.titles()).toEqual(["Prep: Meeting a", "Call with Jake Price in 9 minutes"]);
+  });
+
+  it("keeps a cursor moved back by Retry when a Gmail read that started earlier finishes", async () => {
+    let fail = true;
+    const w = world({ emails: [mail("important-1", NOW - MINUTE)], reply: (title, prompt) => (fail ? { ok: false, error: "engine down" } : defaultReply(title, prompt)) });
+    await w.settle();
+    for (let check = 0; check < 2; check += 1) {
+      w.tick(15 * MINUTE);
+      await w.settle();
+    }
+    fail = false;
+    const reading = gate();
+    const entered = gate();
+    w.sources.emails.mockImplementationOnce(async () => {
+      entered.open();
+      await reading.closed;
+      return [];
+    });
+    w.tick(15 * MINUTE);
+    const running = w.watch.check();
+    await entered.closed;
+    expect(w.watch.answerCard("m-main", w.retries()[0]!.card!.requestId!, "answer", RETRY, owner)).toBe("answered");
+    reading.open();
+    await running;
+    await w.watch.idle();
+    await w.settle();
+    expect(w.titles()).toEqual(["Subject important-1"]);
+  });
+});
+
 describe("cards and the open rule", () => {
+  it("sends exactly one notification and one note per new card", async () => {
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)] });
+    w.watch.onPresence({ source: "desktop", returned: false });
+    await w.settle();
+    w.tick(2 * HOUR - 9 * MINUTE);
+    w.watch.reminders();
+    expect(w.titles()).toEqual(["Today", "Prep: Meeting a", "Subject important-1", "Call with Jake Price in 9 minutes"]);
+    expect(w.notify).toHaveBeenCalledTimes(4);
+    expect(w.noteCard).toHaveBeenCalledTimes(4);
+  });
+
   it("notes each newly posted card once, and never a Retry card or its answer", async () => {
     let fail = true;
     const w = world({ events: [meeting("a", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)],
@@ -556,23 +823,77 @@ describe("when MausBot may not act, or says what it cannot do", () => {
     expect(w.watch.state.get().meetings?.w2?.preppedAt).toBe(NOW);
   });
 
-  it("leaves waiting jobs to be planned again when the switch goes off, and runs them once it is on", async () => {
+  it("posts nothing from a job running when the switch goes off, gives its turn back, and plans it again once on", async () => {
     let first = true;
     const w = world({ events: [meeting("a", NOW + HOUR), meeting("b", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)],
       reply: (title, prompt) => {
         if (first) w.switchOff();
         first = false;
-        return defaultReply(title, prompt);
+        return title.startsWith("Prep: ") ? { ok: true, threadId: "", reply: JSON.stringify({ brief: `Brief for ${title}`, noWebSearch: true }) } : defaultReply(title, prompt);
       } });
     await w.settle();
     expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a"]);
+    expect(w.messages).toEqual([]);
+    expect(w.notify).not.toHaveBeenCalled();
+    expect(w.noteCard).not.toHaveBeenCalled();
+    expect(w.watch.state.get()).toMatchObject({ dayTurns: 0, inFlight: [] });
+    expect(w.watch.state.get().meetings?.a?.prepStartedAt).toBeUndefined();
     expect(w.watch.state.get().meetings?.b?.prepStartedAt).toBeUndefined();
-    expect(w.watch.state.get().inFlight).toEqual([]);
+    expect(w.watch.state.get().workThreads?.map((entry) => entry.threadId)).toEqual(["job-1"]);
     w.switchOn();
     w.tick(15 * MINUTE);
     await w.settle();
-    expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a", "Prep: Meeting b", "Email check"]);
+    expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a", "Prep: Meeting a", "Prep: Meeting b", "Email check"]);
     expect(w.titles()).toEqual(["Prep: Meeting a", "Prep: Meeting b", "Subject important-1"]);
+    expect(w.watch.state.get().dayTurns).toBe(2);
+  });
+
+  it("gives a failed turn no Retry card when the switch went off while it ran", async () => {
+    const w = world({ events: [meeting("a", NOW + HOUR)], reply: () => { w.switchOff(); return { ok: false, error: "engine down" }; } });
+    await w.settle();
+    expect(w.retries()).toEqual([]);
+    expect(w.watch.state.get().meetings?.a?.failedAt).toBeUndefined();
+    expect(w.watch.state.get().dayTurns).toBe(0);
+  });
+
+  it("posts no email card from a check running when the switch goes off, and judges those emails again once on", async () => {
+    let first = true;
+    const w = world({ emails: [mail("important-1", NOW - MINUTE)], reply: (title, prompt) => {
+      if (first) w.switchOff();
+      first = false;
+      return defaultReply(title, prompt);
+    } });
+    await w.settle();
+    expect(w.messages).toEqual([]);
+    expect(w.watch.state.get().judged ?? []).not.toContain("important-1");
+    w.switchOn();
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect(w.titles()).toEqual(["Subject important-1"]);
+  });
+
+  it("posts no update and no since-last-time note from a turn running when the switch goes off, and gives the turn back", async () => {
+    const original = meeting("a", NOW + 3 * HOUR);
+    const moving = world({ events: [original], reply: (title, prompt) => {
+      if (title.startsWith("Update: ")) moving.switchOff();
+      return defaultReply(title, prompt);
+    } });
+    await moving.settle();
+    moving.live.events = [{ ...original, start: original.start + 30 * MINUTE, end: original.end + 30 * MINUTE }];
+    await moving.settle();
+    expect(moving.titles()).toEqual(["Prep: Meeting a"]);
+    expect(moving.watch.state.get().dayTurns).toBe(1);
+    expect(moving.watch.state.get().meetings?.a).toMatchObject({ start: original.start });
+    expect(moving.watch.state.get().meetings?.a?.updateStartedAt).toBeUndefined();
+    const earlier = meeting("w1", NOW - 7 * 24 * HOUR, { seriesId: "weekly" });
+    const repeating = world({ events: [meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" })], reply: (title, prompt) => { repeating.switchOff(); return defaultReply(title, prompt); } });
+    repeating.watch.state.patch({ meetings: { w1: { start: earlier.start, fingerprint: fingerprint(earlier), seriesId: "weekly", preppedAt: earlier.start - HOUR } } });
+    repeating.live.newMailFromAttendees = true;
+    await repeating.settle();
+    expect(repeating.jobs.map((job) => job.title)).toEqual(["Since last time: Meeting w2"]);
+    expect(repeating.watch.state.get().dayTurns).toBe(0);
+    expect(repeating.watch.state.get().meetings?.w2?.prepStartedAt).toBeUndefined();
+    expect(repeating.watch.state.get().meetings?.w2?.preppedAt).toBeUndefined();
   });
 
   it("skips an event or an email whose id the state file could not hold, and carries on with the rest", async () => {

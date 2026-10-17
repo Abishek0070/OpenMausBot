@@ -6,6 +6,7 @@ import { writeFileAtomic } from "../atomic.ts";
 export const ASSISTANT_STATE_FILE = "assistant.json";
 export const MAX_JUDGED = 500;
 export const MAX_IN_FLIGHT = 100;
+export const MAX_WORK_THREADS = 1_000;
 export const MAX_ID_LENGTH = 256;
 
 const at = z.number().finite().nonnegative();
@@ -46,9 +47,9 @@ export const assistantStateSchema = z.object({
   notices: z.object({ noWebSearch: z.boolean().optional(), noConnectorTools: z.boolean().optional() }).strict().optional(),
   /** AI jobs started and not finished; after a restart each becomes one error card with Retry. */
   inFlight: z.array(z.object({ item, at }).strict()).max(MAX_IN_FLIGHT).optional(),
-  retryCards: z.record(id, z.object({ item, threadId: id, messageId: id, answered: z.boolean().optional() }).strict()).optional(),
+  retryCards: z.record(id, z.object({ item, threadId: id, messageId: id, outcome: z.enum(["answered", "rejected", "unavailable"]).optional() }).strict()).optional(),
   /** Hidden job threads, deleted a day after they started. */
-  workThreads: z.array(z.object({ threadId: id, at }).strict()).max(1_000).optional(),
+  workThreads: z.array(z.object({ threadId: id, at }).strict()).max(MAX_WORK_THREADS).optional(),
 });
 
 export type AssistantState = z.infer<typeof assistantStateSchema>;

@@ -10,11 +10,13 @@ import type { RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
 import { cancelledCard, clip, clockTime, emailCard, prepCard, reminderCard, todayCard, updateCard, type BuiltCard, type TodayMeeting } from "./assistant-cards.ts";
 import {
-  DAILY_TURN_CAP, emailSince, fingerprint, keepNewest, localDate, LOOKAHEAD_MS, MAX_WORK_THREADS, planMeetings, planTriage, PREP_LEAD_MS, pruneMeetings, qualifies,
-  RECONNECT_AFTER, todayDue, turnsLeft,
+  DAILY_TURN_CAP, emailSince, fingerprint, keepNewest, localDate, LOOKAHEAD_MS, planMeetings, planTriage, PREP_LEAD_MS, pruneMeetings, qualifies, RECONNECT_AFTER,
+  todayDue, turnsLeft,
 } from "./assistant-plan.ts";
 import { calendarRecords, emailRecords, lineReply, prepPrompt, prepReply, repeatPrompt, triagePrompt, triageReply, updatePrompt, type TurnTools } from "./assistant-prompts.ts";
-import { ASSISTANT_STATE_FILE, createAssistantState, MAX_ID_LENGTH, MAX_IN_FLIGHT, MAX_JUDGED, type AssistantStateStore, type MeetingRecord } from "./assistant-state.ts";
+import {
+  ASSISTANT_STATE_FILE, createAssistantState, MAX_ID_LENGTH, MAX_IN_FLIGHT, MAX_JUDGED, MAX_WORK_THREADS, type AssistantState, type AssistantStateStore, type MeetingRecord,
+} from "./assistant-state.ts";
 import { isAssistantJobThread, type JobResult } from "./assistant-turns.ts";
 import { presenceOwner } from "./chief-brief.ts";
 import { mausbotMayUse } from "./mausbot-intro.ts";
@@ -43,12 +45,17 @@ const CUT_SHORT: Record<string, string> = {
   update: "A meeting update was cut short",
   triage: "An email check was cut short",
 };
+const RETRY_CLEARS: Record<string, ReadonlyArray<keyof MeetingRecord>> = {
+  prep: ["failedAt", "prepStartedAt", "repeat"],
+  repeat: ["failedAt", "prepStartedAt", "repeat"],
+  update: ["updateStartedAt", "updateFailedAt"],
+};
 
 type Job =
-  | { kind: "prep"; item: string; event: CalendarEvent; short: boolean }
+  | { kind: "prep"; item: string; event: CalendarEvent; short: boolean; turn: string }
   | { kind: "repeat"; item: string; event: CalendarEvent; previousStart: number }
-  | { kind: "update"; item: string; event: CalendarEvent; previous: MeetingRecord }
-  | { kind: "triage"; item: string; batch: EmailHeader[] };
+  | { kind: "update"; item: string; event: CalendarEvent; previous: MeetingRecord; turn: string }
+  | { kind: "triage"; item: string; batch: EmailHeader[]; carded: Set<string> };
 
 const FAILED: Record<Job["kind"], (title: string) => string> = {
   prep: (title) => `I couldn't prepare "${title}"`,
@@ -58,6 +65,8 @@ const FAILED: Record<Job["kind"], (title: string) => string> = {
 };
 
 type Target = { botId: string; threadId: string };
+type Outcome = NonNullable<NonNullable<AssistantState["retryCards"]>[string]["outcome"]>;
+type TodayPost = { messageId: string; threadId: string; day: string; key: string; emails: Array<{ from: string; subject: string }>; team?: { text: string; open: Target } };
 
 export interface AssistantWatchDeps {
   store: Pick<Store, "appendMessage" | "messagesFor" | "patchMessage" | "groupByThread" | "patchTask" | "deleteTasks" | "taskByThread">;
@@ -65,20 +74,16 @@ export interface AssistantWatchDeps {
   now?: () => number;
   checkMs: number;
   hosted: boolean;
-  /** "MausBot can act on its own". */
   enabled(): boolean;
   mausbot(): BotRecord | null;
   mainThread(bot: BotRecord): string | undefined;
-  /** The device's zone from brief.json, else the host's; none on a Cloud home. */
   timeZone(): string | undefined;
   capabilities(bot: BotRecord, threadId: string): { agentsTools: boolean; mailTools: boolean };
   sources: AssistantSources;
   runJob(bot: BotRecord, title: string, prompt: string): Promise<JobResult>;
   notify(notification: Notification | null): void;
-  /** Counts a newly posted card for the open rule. */
   noteCard(card: Target): void;
   team(since: number): { text: string; open: Target } | null;
-  /** The bot whose conversation this is, and whether a Cloud guest opened or drives it; null for a room or an unknown id. */
   threadOf(threadId: string): { bot: Pick<BotRecord, "id" | "visibility">; cloudGuest: boolean } | null;
   threadBusy(botId: string, threadId: string): boolean;
   newId(): string;
@@ -90,7 +95,9 @@ const kindOf = (item: string): string => item.slice(0, item.indexOf(":"));
 const subjectOf = (item: string): string => item.slice(item.indexOf(":") + 1);
 const triageItem = (batch: readonly EmailHeader[]): string => `triage:${Math.min(...batch.map((email) => email.at))}:${batch.map((email) => email.id).join(",")}`;
 const titleOf = (job: Job): string => (job.kind === "triage" ? "" : clip(job.event.title, TITLE_MAX));
+const turnOf = (job: Job): string | undefined => (job.kind === "prep" || job.kind === "update" ? job.turn : undefined);
 const storable = (value: string | undefined): boolean => value === undefined || (value.length >= 1 && value.length <= MAX_ID_LENGTH);
+const meetingsKey = (list: readonly TodayMeeting[]): string => JSON.stringify(list.map((meeting) => [meeting.title, meeting.start, meeting.end, meeting.joinUrl ?? "", meeting.allDay === true]));
 
 function triageOf(item: string): { oldest: number; ids: string[] } {
   const subject = subjectOf(item);
@@ -102,6 +109,14 @@ function remember<T>(map: Map<string, T>, key: string, value: T): void {
   map.delete(key);
   map.set(key, value);
   if (map.size > MAX_REMEMBERED) map.delete(map.keys().next().value!);
+}
+
+function quietly(what: string, step: () => void): void {
+  try {
+    step();
+  } catch (error) {
+    console.warn(`assistant: ${what}: ${failure(error)}`);
+  }
 }
 
 export function createAssistantWatch(deps: AssistantWatchDeps) {
@@ -116,6 +131,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   let calendarReadAt: number | undefined;
   let lastConnected: Record<AssistantService, boolean> | null = null;
   let todayPending = false;
+  let todayRefresh: TodayPost | undefined;
   let recovered = false;
   let flagged: EmailHeader[] = [];
   const cardEvents = new Map<string, CalendarEvent>();
@@ -145,23 +161,19 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   }
 
   function announce(bot: BotRecord, threadId: string, summary: string): void {
-    try {
-      deps.store.patchTask(bot.id, threadId, { unread: true });
-    } catch (error) {
-      console.warn(`assistant: could not mark MausBot's chat unread: ${failure(error)}`);
-    }
-    deps.notify(buildNotification("assistant", bot, threadId, summary));
+    quietly("could not mark MausBot's chat unread", () => deps.store.patchTask(bot.id, threadId, { unread: true }));
+    quietly("the notification was not sent", () => deps.notify(buildNotification("assistant", bot, threadId, summary)));
   }
 
-  function post(bot: BotRecord, threadId: string, built: BuiltCard): boolean {
+  function post(bot: BotRecord, threadId: string, built: BuiltCard): string | null {
     const posted = createAgentCard({ store: deps.store, bot, threadId, input: { tool: "show_widget", widget: built.card } });
     if (!posted.ok) {
       console.warn(`assistant: a card was refused: ${posted.error}`);
-      return false;
+      return null;
     }
     announce(bot, threadId, built.summary);
-    deps.noteCard({ botId: bot.id, threadId });
-    return true;
+    quietly("the card was not noted for the open rule", () => deps.noteCard({ botId: bot.id, threadId }));
+    return posted.messageId;
   }
 
   const say = (threadId: string, text: string): void => { deps.store.appendMessage(threadId, { role: "bot", kind: "text", text }); };
@@ -199,11 +211,18 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     if (threadId) state.patch({ workThreads: keepNewest([...(current().workThreads ?? []), { threadId, at: now() }], MAX_WORK_THREADS) });
   }
 
-  function takeTurn(): boolean {
-    const budget = turnsLeft({ now: now(), timeZone: deps.timeZone(), turnDay: current().turnDay, dayTurns: current().dayTurns });
-    if (budget.left <= 0) return false;
-    state.patch({ turnDay: budget.day, dayTurns: DAILY_TURN_CAP - budget.left + 1 });
-    return true;
+  const budget = () => turnsLeft({ now: now(), timeZone: deps.timeZone(), turnDay: current().turnDay, dayTurns: current().dayTurns });
+
+  function takeTurn(): string | null {
+    const { day, left } = budget();
+    if (left <= 0) return null;
+    state.patch({ turnDay: day, dayTurns: DAILY_TURN_CAP - left + 1 });
+    return day;
+  }
+
+  function refundTurn(day: string | undefined): void {
+    const { turnDay, dayTurns } = current();
+    if (day !== undefined && turnDay === day && dayTurns) state.patch({ dayTurns: dayTurns - 1 });
   }
 
   async function readService<T>(bot: BotRecord, threadId: string, service: AssistantService, load: () => Promise<T>): Promise<T | null> {
@@ -239,8 +258,8 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   function reopen(item: string): void {
     const kind = kindOf(item);
-    if (kind === "prep" || kind === "repeat") setMeeting(subjectOf(item), { failedAt: undefined, prepStartedAt: undefined, repeat: undefined });
-    else if (kind === "update") setMeeting(subjectOf(item), { updateStartedAt: undefined, updateFailedAt: undefined });
+    const clears = RETRY_CLEARS[kind];
+    if (clears) setMeeting(subjectOf(item), Object.fromEntries(clears.map((key) => [key, undefined])) as Partial<MeetingRecord>);
     else if (kind === "triage") {
       const { oldest, ids } = triageOf(item);
       const again = new Set(ids);
@@ -252,9 +271,24 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     }
   }
 
+  function abandon(job: Job, turn?: string): void {
+    endFlight(job.item);
+    reopen(job.item);
+    refundTurn(turn);
+  }
+
   function failed(bot: BotRecord, threadId: string, job: Job, reason: string): void {
     markFailed(job.item);
     failCard(bot, threadId, job.item, FAILED[job.kind](titleOf(job)), reason);
+  }
+
+  function threw(job: Job): void {
+    endFlight(job.item);
+    const here = context();
+    if (!here) return abandon(job, turnOf(job));
+    if (job.kind !== "triage") return failed(here.bot, here.threadId, job, "something went wrong on my side");
+    const uncarded = job.batch.filter((email) => !job.carded.has(email.id));
+    if (uncarded.length) reopen(triageItem(uncarded));
   }
 
   async function run(bot: BotRecord, title: string, prompt: string): Promise<JobResult> {
@@ -293,29 +327,33 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
         post(bot, threadId, cancelledCard({ title: job.title, start: job.start, allDay, timeZone: deps.timeZone(), now: at }));
       } else if (job.kind === "update") {
         const previous = meetings()[job.event.id]!;
-        if (!takeTurn()) {
+        const turn = takeTurn();
+        if (!turn) {
           setMeeting(job.event.id, { start: job.event.start, fingerprint: fingerprint(job.event) });
           continue;
         }
         setMeeting(job.event.id, { updateStartedAt: at });
-        enqueue({ kind: "update", item: `update:${job.event.id}`, event: job.event, previous });
+        enqueue({ kind: "update", item: `update:${job.event.id}`, event: job.event, previous, turn });
       } else if (job.kind === "repeat") {
         setMeeting(job.event.id, { prepStartedAt: at, repeat: true }, job.event);
         enqueue({ kind: "repeat", item: `repeat:${job.event.id}`, event: job.event, previousStart: job.previousStart });
-      } else if (takeTurn()) {
+      } else {
+        const turn = takeTurn();
+        if (!turn) continue;
         setMeeting(job.event.id, { prepStartedAt: at }, job.event);
-        enqueue({ kind: "prep", item: `prep:${job.event.id}`, event: job.event, short: job.short });
+        enqueue({ kind: "prep", item: `prep:${job.event.id}`, event: job.event, short: job.short, turn });
       }
     }
   }
 
-  function emailDue(mail: EmailHeader[], at: number): void {
+  function emailDue(mail: EmailHeader[], at: number, cursorAtRead: number | undefined): void {
     const before = current();
     const plan = planTriage({ now: at, emails: mail, judged: new Set(before.judged ?? []), lastTriageAt: before.lastTriageAt, spacingMs: deps.checkMs });
-    const cursor = plan.pending.length ? Math.min(...plan.pending.map((email) => email.at)) : at - CURSOR_OVERLAP_MS;
+    const read = Math.max(0, plan.pending.length ? Math.min(...plan.pending.map((email) => email.at)) : at - CURSOR_OVERLAP_MS);
+    const moved = before.emailCursor !== cursorAtRead;
     const judged = keepNewest([...(before.judged ?? []), ...plan.quiet, ...plan.batch.map((email) => email.id)], MAX_JUDGED);
-    state.patch({ judged, emailCursor: Math.max(0, cursor), ...(plan.batch.length ? { lastTriageAt: at } : {}) });
-    if (plan.batch.length) enqueue({ kind: "triage", item: triageItem(plan.batch), batch: plan.batch });
+    state.patch({ judged, emailCursor: moved ? Math.min(read, before.emailCursor ?? read) : read, ...(plan.batch.length ? { lastTriageAt: at } : {}) });
+    if (plan.batch.length) enqueue({ kind: "triage", item: triageItem(plan.batch), batch: plan.batch, carded: new Set() });
   }
 
   function meetingToday(): string[] {
@@ -329,6 +367,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const zone = deps.timeZone();
     const result = await run(bot, `Prep: ${job.event.title}`, prepPrompt({ event: job.event, short: job.short, timeZone: zone, now: now(), ...tools }));
     keepThread(result.threadId);
+    if (!context()) return abandon(job, job.turn);
     endFlight(job.item);
     const reply = result.ok ? prepReply(result.reply) : null;
     if (!reply) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
@@ -349,13 +388,16 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       console.warn(`assistant: could not look for new mail from a recurring meeting's people: ${failure(error)}`);
       return false;
     });
-    if (!wrote || !takeTurn()) {
+    if (!context()) return abandon(job);
+    const turn = wrote ? takeTurn() : null;
+    if (!turn) {
       endFlight(job.item);
       setMeeting(job.event.id, { preppedAt: now() });
       return;
     }
     const result = await run(bot, `Since last time: ${job.event.title}`, repeatPrompt({ event: job.event, previousStart: job.previousStart, timeZone: deps.timeZone(), now: now(), ...tools }));
     keepThread(result.threadId);
+    if (!context()) return abandon(job, turn);
     endFlight(job.item);
     const line = result.ok ? lineReply(result.reply, "line") : null;
     if (line === null) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
@@ -367,6 +409,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const zone = deps.timeZone();
     const result = await run(bot, `Update: ${job.event.title}`, updatePrompt({ event: job.event, previous: job.previous, timeZone: zone, now: now() }));
     keepThread(result.threadId);
+    if (!context()) return abandon(job, job.turn);
     endFlight(job.item);
     const text = result.ok ? lineReply(result.reply, "update") : null;
     if (!text) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
@@ -378,12 +421,14 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   async function triage(bot: BotRecord, threadId: string, job: Extract<Job, { kind: "triage" }>): Promise<void> {
     const result = await run(bot, "Email check", triagePrompt({ emails: job.batch, meetingToday: meetingToday() }));
     keepThread(result.threadId);
+    if (!context()) return abandon(job);
     endFlight(job.item);
     const picks = result.ok ? triageReply(result.reply, new Set(job.batch.map((email) => email.id))) : null;
     if (!picks) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
     for (const pick of picks) {
       const email = job.batch.find((candidate) => candidate.id === pick.id)!;
       if (!post(bot, threadId, emailCard({ email, why: pick.why, action: pick.action }))) continue;
+      job.carded.add(email.id);
       flagged = keepNewest([...flagged, email], MAX_REMEMBERED);
       remember(cardEmails, email.id, email);
     }
@@ -391,11 +436,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   async function perform(job: Job): Promise<void> {
     const here = context();
-    if (!here) {
-      endFlight(job.item);
-      reopen(job.item);
-      return;
-    }
+    if (!here) return abandon(job, turnOf(job));
     const { bot, threadId } = here;
     const tools = deps.capabilities(bot, threadId);
     if (!tools.mailTools && !current().notices?.noConnectorTools) {
@@ -409,14 +450,6 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     else await triage(bot, threadId, job);
   }
 
-  function quietly(what: string, step: () => void): void {
-    try {
-      step();
-    } catch (error) {
-      console.warn(`assistant: ${what}: ${failure(error)}`);
-    }
-  }
-
   function work(): Promise<void> {
     working ??= (async () => {
       while (queue.length) {
@@ -425,7 +458,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
           await perform(job);
         } catch (error) {
           console.warn(`assistant: ${job.kind} failed: ${failure(error)}`);
-          quietly(`${job.kind} was not marked failed`, () => { endFlight(job.item); markFailed(job.item); });
+          quietly(`a failed ${job.kind} was not settled`, () => threw(job));
         }
       }
     })().finally(() => {
@@ -462,6 +495,13 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     return "Reminder only";
   }
 
+  function todayMeetings(day: string, at: number, zone: string | undefined): TodayMeeting[] {
+    return events
+      .filter((event) => qualifies(event) && localDate(event.start, zone) === day && event.end > at)
+      .sort((a, b) => a.start - b.start)
+      .map((event) => ({ allDay: event.allDay, title: event.title, start: event.start, end: event.end, status: statusOf(event, at, zone), ...(event.joinUrl ? { joinUrl: event.joinUrl } : {}) }));
+  }
+
   function today(bot: BotRecord, threadId: string): void {
     todayPending = false;
     const at = now();
@@ -479,24 +519,36 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       todayPending = true;
       return;
     }
-    const meetingsToday: TodayMeeting[] = events
-      .filter((event) => qualifies(event) && localDate(event.start, zone) === day && event.end > at)
-      .sort((a, b) => a.start - b.start)
-      .map((event) => ({ allDay: event.allDay, title: event.title, start: event.start, end: event.end, status: statusOf(event, at, zone), ...(event.joinUrl ? { joinUrl: event.joinUrl } : {}) }));
-    const team = deps.team(at - 24 * HOUR);
+    const shown = todayMeetings(day, at, zone);
+    const team = deps.team(at - 24 * HOUR) ?? undefined;
     state.patch({ lastTodayDate: day });
     const emails = flagged.map((email) => ({ from: email.from, subject: email.subject }));
     flagged = [];
-    post(bot, threadId, todayCard({ now: at, timeZone: zone, meetings: meetingsToday, emails, ...(team ? { team } : {}) }));
+    const messageId = post(bot, threadId, todayCard({ now: at, timeZone: zone, meetings: shown, emails, ...(team ? { team } : {}) }));
+    const stale = calendar && calendarReadAt !== undefined && at - calendarReadAt > deps.checkMs;
+    if (messageId && stale) todayRefresh = { messageId, threadId, day, key: meetingsKey(shown), emails, ...(team ? { team } : {}) };
+  }
+
+  function refreshToday(bot: BotRecord): void {
+    const posted = todayRefresh;
+    todayRefresh = undefined;
+    const at = now();
+    const zone = deps.timeZone();
+    if (!posted || localDate(at, zone) !== posted.day) return;
+    const shown = todayMeetings(posted.day, at, zone);
+    if (meetingsKey(shown) === posted.key) return;
+    const widget = todayCard({ now: at, timeZone: zone, meetings: shown, emails: posted.emails, ...(posted.team ? { team: posted.team } : {}) }).card;
+    const updated = createAgentCard({ store: deps.store, bot, threadId: posted.threadId, input: { tool: "update_widget", widget_id: posted.messageId, widget } });
+    if (!updated.ok) console.warn(`assistant: Today was not updated: ${updated.error}`);
   }
 
   function recover(bot: BotRecord, threadId: string): void {
     const flights = current().inFlight ?? [];
     if (!flights.length) return;
     state.patch({ inFlight: [] });
+    for (const flight of flights) quietly(`a cut-short ${kindOf(flight.item)} was not marked failed`, () => markFailed(flight.item));
     for (const flight of flights) {
-      markFailed(flight.item);
-      failCard(bot, threadId, flight.item, CUT_SHORT[kindOf(flight.item)] ?? "Something I was preparing was cut short", "the app closed before it finished");
+      quietly(`a cut-short ${kindOf(flight.item)} card was not posted`, () => failCard(bot, threadId, flight.item, CUT_SHORT[kindOf(flight.item)] ?? "Something I was preparing was cut short", "the app closed before it finished"));
     }
   }
 
@@ -506,31 +558,38 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const { bot, threadId } = here;
     if (!recovered) {
       recovered = true;
-      recover(bot, threadId);
+      quietly("jobs cut short by a restart were not settled", () => recover(bot, threadId));
     }
-    lastConnected = await deps.sources.connected();
-    if (!lastConnected || !context()) return;
-    const at = now();
-    if (lastConnected.googlecalendar && mausbotMayUse(bot, "googlecalendar")) {
-      const fresh = await readService(bot, threadId, "googlecalendar", () => deps.sources.events(at - HOUR, at + LOOKAHEAD_MS));
-      if (!context()) return;
-      if (fresh) {
-        events = fresh.filter((event) => storable(event.id) && storable(event.seriesId));
-        calendarReadAt = at;
-        meetingsDue(bot, threadId, false);
+    try {
+      lastConnected = await deps.sources.connected();
+      if (!lastConnected || !context()) return;
+      const at = now();
+      if (lastConnected.googlecalendar && mausbotMayUse(bot, "googlecalendar")) {
+        const fresh = await readService(bot, threadId, "googlecalendar", () => deps.sources.events(at - HOUR, at + LOOKAHEAD_MS));
+        if (!context()) return;
+        if (fresh) {
+          events = fresh.filter((event) => storable(event.id) && storable(event.seriesId));
+          calendarReadAt = at;
+          meetingsDue(bot, threadId, false);
+          quietly("Today was not updated", () => refreshToday(bot));
+        }
       }
+      if (lastConnected.gmail && mausbotMayUse(bot, "gmail")) {
+        const cursor = current().emailCursor;
+        const since = emailSince({ now: at, emailCursor: cursor, checkMs: deps.checkMs });
+        const mail = await readService(bot, threadId, "gmail", () => deps.sources.emails(since, EMAIL_FETCH_LIMIT));
+        if (!context()) return;
+        if (mail) emailDue(mail.filter((email) => storable(email.id)), at, cursor);
+      }
+      quietly("old meetings were not forgotten", () => {
+        const kept = pruneMeetings(meetings(), at);
+        if (Object.keys(kept).length !== Object.keys(meetings()).length) state.patch({ meetings: kept });
+      });
+      quietly("old work threads were not swept", () => sweep(bot, at));
+      if (todayPending) quietly("Today was not posted", () => today(bot, threadId));
+    } finally {
+      void work();
     }
-    if (lastConnected.gmail && mausbotMayUse(bot, "gmail")) {
-      const since = emailSince({ now: at, emailCursor: current().emailCursor, checkMs: deps.checkMs });
-      const mail = await readService(bot, threadId, "gmail", () => deps.sources.emails(since, EMAIL_FETCH_LIMIT));
-      if (!context()) return;
-      if (mail) emailDue(mail.filter((email) => storable(email.id)), at);
-    }
-    const kept = pruneMeetings(meetings(), at);
-    if (Object.keys(kept).length !== Object.keys(meetings()).length) state.patch({ meetings: kept });
-    sweep(bot, at);
-    if (todayPending) today(bot, threadId);
-    void work();
   }
 
   function check(): Promise<void> {
@@ -555,6 +614,29 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     });
   }
 
+  function retryable(item: string): "yes" | "no" | "unknown" {
+    const here = context();
+    if (!here) return "no";
+    const kind = kindOf(item);
+    if (kind === "triage") return mausbotMayUse(here.bot, "gmail") && lastConnected?.gmail !== false ? "yes" : "no";
+    if (!RETRY_CLEARS[kind] || !mausbotMayUse(here.bot, "googlecalendar") || lastConnected?.googlecalendar === false) return "no";
+    if (calendarReadAt === undefined) return "unknown";
+    const id = subjectOf(item);
+    const event = events.find((candidate) => candidate.id === id);
+    const record = meetings()[id];
+    if (!event || !record || budget().left <= 0) return "no";
+    const reopened: Record<string, unknown> = { ...record };
+    for (const key of RETRY_CLEARS[kind]!) delete reopened[key];
+    const planned = planMeetings({ now: now(), events: [event], meetings: { ...meetings(), [id]: reopened as MeetingRecord }, checkMs: deps.checkMs });
+    return planned.some((job) => (kind === "update" ? job.kind === "update" : job.kind === "prep" || job.kind === "repeat")) ? "yes" : "no";
+  }
+
+  function settleCard(threadId: string, row: Message, outcome: Outcome): void {
+    const { answeredText: _answeredText, ...card } = row.card!;
+    const answered = outcome === "unavailable" ? { answered: "unavailable" } : { answered: "answer", answeredText: outcome === "answered" ? RETRY : "Dismissed" };
+    deps.store.patchMessage(threadId, row.id, { card: { ...card, ...answered } });
+  }
+
   /** Security invariant: only the owner or an admin may retry, as with every card MausBot raises; a refused press
    * leaves the card open and records nothing. */
   function answerCard(threadId: string, requestId: string, behavior: "allow" | "deny" | "answer", message: unknown, auth: RequestAuth): RequestOutcome | undefined {
@@ -565,14 +647,18 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       const row = deps.store.messagesFor(threadId).find((line: Message) => line.id === card.messageId);
       if (!row?.card) return undefined;
       if (!presenceOwner(auth)) return "unavailable";
-      if (card.answered) return "answered";
+      if (card.outcome) return card.outcome;
       const again = behavior === "answer" && message === RETRY;
-      deps.store.patchMessage(threadId, row.id, { card: { ...row.card, answered: "answer", answeredText: again ? RETRY : "Dismissed" } });
-      state.patch({ retryCards: { ...current().retryCards, [requestId]: { ...card, answered: true } } });
-      if (!again) return "rejected";
-      reopen(card.item);
-      void check();
-      return "answered";
+      const verdict = again ? retryable(card.item) : "no";
+      if (verdict === "unknown") return "unavailable";
+      const outcome: Outcome = !again ? "rejected" : verdict === "yes" ? "answered" : "unavailable";
+      settleCard(threadId, row, outcome);
+      state.patch({ retryCards: { ...current().retryCards, [requestId]: { ...card, outcome } } });
+      if (outcome === "answered") {
+        reopen(card.item);
+        void check();
+      }
+      return outcome;
     } catch (error) {
       console.warn(`assistant: a Retry card was not settled: ${failure(error)}`);
       return "unavailable";
@@ -598,10 +684,8 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   function onPresence(event: { source: string; returned: boolean }): void {
     const here = context();
     if (!here) return;
-    const stale = calendarReadAt !== undefined && now() - calendarReadAt > deps.checkMs;
-    if (event.returned && stale) todayPending = true;
-    else today(here.bot, here.threadId);
-    if (event.returned) void check();
+    quietly("Today was not posted", () => today(here.bot, here.threadId));
+    if (event.returned || todayRefresh) void check();
   }
 
   function start(): void {

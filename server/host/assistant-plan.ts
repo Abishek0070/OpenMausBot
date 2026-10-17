@@ -17,7 +17,6 @@ export const EMAIL_MAX_AGE_MS = 24 * HOUR;
 export const RECONNECT_AFTER = 3;
 export const KEEP_MEETINGS_MS = 35 * 24 * HOUR;
 export const DEFAULT_CHECK_MS = 15 * MINUTE;
-export const MAX_WORK_THREADS = 1_000;
 
 export type MeetingJob =
   | { kind: "prep"; event: CalendarEvent; short: boolean }
@@ -88,14 +87,21 @@ export function planTriage(input: { now: number; emails: EmailHeader[]; judged: 
   return { batch, quiet, pending: recent.slice(batch.length) };
 }
 
+// Travel moves the local date back by at most one day; a stored day further ahead came from a clock jump.
+function sameOrNextDay(local: string, stored: string | undefined): stored is string {
+  if (stored === undefined) return false;
+  const ahead = (Date.parse(stored) - Date.parse(local)) / (24 * HOUR);
+  return ahead >= 0 && ahead <= 1;
+}
+
 export function todayDue(input: { now: number; timeZone?: string; lastTodayDate?: string }): string | null {
   const today = localDate(input.now, input.timeZone);
-  return input.lastTodayDate !== undefined && today <= input.lastTodayDate ? null : today;
+  return sameOrNextDay(today, input.lastTodayDate) ? null : today;
 }
 
 export function turnsLeft(input: { now: number; timeZone?: string; turnDay?: string; dayTurns?: number }): { day: string; left: number } {
   const local = localDate(input.now, input.timeZone);
-  const day = input.turnDay !== undefined && local <= input.turnDay ? input.turnDay : local;
+  const day = sameOrNextDay(local, input.turnDay) ? input.turnDay : local;
   const used = day === input.turnDay ? input.dayTurns ?? 0 : 0;
   return { day, left: Math.max(0, DAILY_TURN_CAP - used) };
 }
