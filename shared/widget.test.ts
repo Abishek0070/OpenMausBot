@@ -186,6 +186,14 @@ describe("widget actions", () => {
       .toBe("widget.children[0].onClickAction.payload: open_thread needs {botId, threadId} or {groupId, threadId}.");
   });
 
+  it("refuses a thread target naming both a bot and a room, and ids past 128 characters", () => {
+    expect(threadActionTarget({ type: "open_thread", payload: { botId: "b", groupId: "g", threadId: "t" } })).toBeUndefined();
+    expect(threadActionTarget({ type: "open_thread", payload: { botId: "b", threadId: "t".repeat(128) } })).toEqual({ botId: "b", threadId: "t".repeat(128) });
+    expect(threadActionTarget({ type: "open_thread", payload: { botId: "b".repeat(128), threadId: "t" } })).toEqual({ botId: "b".repeat(128), threadId: "t" });
+    expect(threadActionTarget({ type: "open_thread", payload: { botId: "b", threadId: "t".repeat(129) } })).toBeUndefined();
+    expect(threadActionTarget({ type: "open_thread", payload: { groupId: "g".repeat(129), threadId: "t" } })).toBeUndefined();
+  });
+
   it("lets many Open buttons share a label, as open_url rows do", () => {
     const rows = parsed({ type: "Card", children: [1, 2].map((n) => ({ type: "Row", children: [{ type: "Text", value: `Thread ${n}` }, { type: "Button", label: "Open", onClickAction: { type: "open_thread", payload: { botId: "b", threadId: `t${n}` } } }] })) });
     expect(widgetActions(rows).map((entry) => entry.client)).toEqual([true, true]);

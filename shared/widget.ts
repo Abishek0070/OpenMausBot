@@ -48,10 +48,7 @@ export interface WidgetAction {
 
 const THREAD_ID = /^[\w-]{1,128}$/;
 
-/** `open_thread` is handled on the device, like `open_url`. Only the shape is checked here: the ids are untrusted. A
- * renderer resolves the target in the viewer's own store. It does nothing for a bot or room the viewer does not have, or
- * for a thread that belongs to another bot or room. A thread missing from the store, named with a bot the viewer has,
- * opens under that bot, which shows it as deleted. */
+/** `open_thread` is handled on the device. The ids are written by a bot: untrusted, and only their shape is checked here. */
 export function threadActionTarget(action: WidgetAction): { botId?: string; groupId?: string; threadId: string } | undefined {
   if (action.type !== "open_thread" || !isRecord(action.payload)) return undefined;
   const { botId, groupId, threadId } = action.payload;

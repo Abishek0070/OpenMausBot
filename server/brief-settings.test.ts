@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import { parseConfigPatch, parseStoredConfig } from "./config.ts";
 import { briefAwayMs, briefRecapEnabled, briefSettings, DEFAULT_BRIEF_AWAY_HOURS } from "./brief-settings.ts";
 
 describe("briefSettings", () => {
-  // as server/config.ts takes them: added to the `features` group
   const features = z.object({ browser: z.boolean().optional() }).extend(briefSettings);
 
   it("is the brief's two settings, each optional, beside whatever else the group holds", () => {
@@ -39,5 +39,18 @@ describe("briefAwayMs", () => {
     expect(briefAwayMs(undefined)).toBe(3 * 60 * 60_000);
     expect(briefAwayMs({ briefAwayHours: 0.5 })).toBe(30 * 60_000);
     expect(briefAwayMs({ briefAwayHours: Number.NaN })).toBe(3 * 60 * 60_000);
+  });
+});
+
+describe("the features group in server/config.ts", () => {
+  const features = { briefRecap: false, briefAwayHours: 5 };
+
+  it("keeps both settings through a PATCH and a stored config", () => {
+    expect(parseConfigPatch({ features })).toEqual({ features });
+    expect(parseStoredConfig({ features }).features).toEqual(features);
+  });
+
+  it("refuses an away time that is not positive", () => {
+    expect(() => parseConfigPatch({ features: { briefAwayHours: 0 } })).toThrow("features.briefAwayHours");
   });
 });
