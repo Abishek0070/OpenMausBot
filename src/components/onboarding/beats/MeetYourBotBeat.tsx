@@ -24,6 +24,7 @@ export function MeetYourBotBeat({
   bot: Bot | null;
   onFinish: () => void;
 }) {
+  const locked = bot?.builtIn !== undefined;
   const [name, setName] = useState(bot?.name ?? "");
   const [color, setColor] = useState<MausColor>(bot?.color ?? "green");
   const [line, setLine] = useState("");
@@ -45,7 +46,7 @@ export function MeetYourBotBeat({
     }
     const patch: Record<string, unknown> = {};
     const trimmedName = name.trim();
-    if (trimmedName && trimmedName !== bot.name) patch.name = trimmedName;
+    if (!locked && trimmedName && trimmedName !== bot.name) patch.name = trimmedName;
     if (color !== bot.color) patch.color = color;
     const soul = soulWithLine(bot.soul, line);
     if (soul !== undefined) patch.soul = soul;
@@ -82,6 +83,7 @@ export function MeetYourBotBeat({
             autoFocus
             type="text"
             value={name}
+            disabled={locked}
             maxLength={100}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void save()}
