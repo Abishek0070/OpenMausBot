@@ -1,9 +1,8 @@
-// server/host/assistant-cards.test.ts
 import { describe, expect, it } from "vitest";
 
 import { parseWidgetInput, WIDGET_LIMITS, widgetActions } from "../../shared/widget.ts";
 import type { CalendarEvent } from "../assistant-sources.ts";
-import { attendeeNames, cancelledCard, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, todayCard, updateCard, type BuiltCard } from "./assistant-cards.ts";
+import { attendeeNames, BRIEF_MAX, clip, cancelledCard, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, todayCard, updateCard, type BuiltCard } from "./assistant-cards.ts";
 
 const MINUTE = 60_000;
 const DAY_MS = 24 * 60 * MINUTE;
@@ -58,7 +57,7 @@ describe("MausBot's cards", () => {
     expect(actions.map((entry) => entry.label)).toEqual(["Open in Gmail", "Draft a reply"]);
     expect(actions[0]!.action.payload).toEqual({ url: gmailUrl("thread/1") });
     expect(gmailUrl("thread/1")).toBe("https://mail.google.com/mail/#all/thread%2F1");
-    expect(built.summary).toBe("Important email from Ada <ada@example.test>: Q3 numbers due Friday");
+    expect(built.summary).toBe("Important email from Ada: Q3 numbers due Friday");
   });
 
   it("updates and cancels in a line, with no buttons a cancelled meeting cannot use", () => {
@@ -124,5 +123,90 @@ describe("untrusted links and all-day events", () => {
     }
     expect(valid(updateCard({ event: allDay, text: "Renamed.", timeZone: "America/Los_Angeles", now: NOW })).root.caption).toBe("Today, all day");
     expect(valid(cancelledCard({ title: "Offsite", start: allDay.start, allDay: true, timeZone: ZONE, now: NOW })).root.caption).toBe("Was Today, all day");
+  });
+});
+
+const noLoneSurrogate = (value: string) => expect(value).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+const strings = (node: unknown): string[] => (typeof node === "string" ? [node] : node && typeof node === "object" ? Object.values(node).flatMap(strings) : []);
+
+describe("clipping and plain text", () => {
+  it("clips by UTF-16 units and never splits a surrogate pair", () => {
+    expect(clip("😀".repeat(10), 5)).toBe("😀😀…");
+    expect(clip("abcdef", 4)).toBe("abc…");
+    expect(clip("abc", 4)).toBe("abc");
+    for (let max = 1; max < 12; max++) {
+      const out = clip("a😀b😀c😀d😀e", max);
+      expect(out.length).toBeLessThanOrEqual(max);
+      noLoneSurrogate(out);
+    }
+  });
+
+  it("keeps a card valid when emoji fill the subject, why and title", () => {
+    const emoji = "😀".repeat(200);
+    const email = valid(emailCard({ email: { id: "m", threadId: "t", at: NOW, from: emoji, subject: emoji, preview: "" }, why: "🚀".repeat(2_500), action: `a${"😀".repeat(2_500)}` }));
+    const prep = valid(prepCard({ event: { ...demo, title: emoji, location: emoji }, brief: `x${"😀".repeat(7_000)}`, timeZone: ZONE, now: NOW }));
+    const mixed = valid(updateCard({ event: { ...demo, title: `é${emoji}日本` }, text: `日本${"😀a".repeat(1_500)}`, timeZone: ZONE, now: NOW }));
+    for (const built of [email, prep, mixed]) strings(built.root).forEach(noLoneSurrogate);
+  });
+
+  it("shows no Join for an over-long link or one with a username or password", () => {
+    const long = `https://meet.example.test/${"a".repeat(2_000)}`;
+    for (const joinUrl of [long, "https://user:pw@meet.example.test/a", "https://user@meet.example.test/a"]) {
+      expect(valid(prepCard({ event: { ...demo, joinUrl }, brief: "x", timeZone: ZONE, now: NOW })).actions.map((entry) => entry.label), joinUrl).toEqual(["Draft a follow-up"]);
+    }
+    const edge = `https://meet.example.test/${"a".repeat(1_900)}`;
+    expect(valid(prepCard({ event: { ...demo, joinUrl: edge }, brief: "x", timeZone: ZONE, now: NOW })).actions[0]!.label).toBe("Join");
+    expect(valid(emailCard({ email: { id: "m", threadId: "t".repeat(3_000), at: NOW, from: "a", subject: "s", preview: "" }, why: "w", action: "a" })).actions.map((entry) => entry.label)).toEqual(["Draft a reply"]);
+  });
+
+  it("renders the brief as literal text, with no link, image or HTML node", () => {
+    const brief = "## Who\n![x](https://evil.example/p.png)\n[click](javascript:alert(1))\n<img src=x>\n- a bullet";
+    const { root } = valid(prepCard({ event: demo, brief, timeZone: ZONE, now: NOW }));
+    const types = JSON.stringify(root).match(/"type":"([^"]+)"/g)!.map((entry) => entry.slice(8, -1));
+    for (const forbidden of ["Markdown", "Image", "Link"]) expect(types).not.toContain(forbidden);
+    const values = root.children.filter((node: any) => node.type === "Text").map((node: any) => node.value);
+    expect(values).toEqual(["## Who", "![x](https://evil.example/p.png)", "[click](javascript:alert(1))", "<img src=x>", "- a bullet"]);
+    const many = valid(prepCard({ event: demo, brief: "a\n".repeat(3_000), timeZone: ZONE, now: NOW }));
+    expect(many.root.children.length).toBeLessThan(130);
+    expect(BRIEF_MAX).toBe(WIDGET_LIMITS.markdown);
+  });
+
+  it("writes every summary as one short line, and the email's without the preview", () => {
+    const nasty = `Title\nwith\n\nlines ${"😀".repeat(300)}`;
+    const email = emailCard({ email: { id: "m", threadId: "t", at: NOW, from: `"Ada Lovelace" <ada@example.test>`, subject: nasty, preview: "SECRET PREVIEW" }, why: "w", action: "a" });
+    const bare = emailCard({ email: { id: "m", threadId: "t", at: NOW, from: "<ada@example.test>", subject: "Hi", preview: "SECRET PREVIEW" }, why: "w", action: "a" });
+    const built = [
+      email, bare,
+      prepCard({ event: { ...demo, title: nasty }, brief: "x", timeZone: ZONE, now: NOW }),
+      updateCard({ event: demo, text: `Moved.\n${"long ".repeat(200)}`, timeZone: ZONE, now: NOW }),
+      reminderCard({ event: { ...demo, title: nasty }, timeZone: ZONE, now: demo.start - 10 * MINUTE }),
+      cancelledCard({ title: nasty, start: demo.start, timeZone: ZONE, now: NOW }),
+    ];
+    for (const entry of built) {
+      expect(entry.summary).not.toMatch(/\s{2}|\n/);
+      expect(entry.summary.length).toBeLessThanOrEqual(140);
+      noLoneSurrogate(entry.summary);
+      expect(entry.summary).not.toContain("SECRET PREVIEW");
+    }
+    expect(bare.summary).toBe("Important email from ada@example.test: Hi");
+    expect(email.summary.startsWith("Important email from Ada Lovelace: Title with lines")).toBe(true);
+  });
+
+  it("reads an all-day event by its UTC date at a UTC midnight, for people at UTC-8 and UTC+5:30", () => {
+    const start = Date.UTC(2026, 9, 17);
+    const cases: Array<[string, number, string]> = [
+      ["Etc/GMT+8", start - 60_000, "Tomorrow, all day"],
+      ["Etc/GMT+8", start + 60_000, "Tomorrow, all day"],
+      ["Etc/GMT+8", start + 8 * 60 * MINUTE - 60_000, "Tomorrow, all day"],
+      ["Etc/GMT+8", start + 8 * 60 * MINUTE + 60_000, "Today, all day"],
+      ["Asia/Kolkata", start - 60_000, "Today, all day"],
+      ["Asia/Kolkata", start + 60_000, "Today, all day"],
+      ["Asia/Kolkata", start - 5.5 * 60 * MINUTE - 60_000, "Tomorrow, all day"],
+      ["Asia/Kolkata", start + DAY_MS - 5.5 * 60 * MINUTE + 60_000, "Sat, Oct 17, all day"],
+    ];
+    for (const [zone, now, expected] of cases) {
+      // the last row is the day after: the event is then in the past and reads as its own date
+      expect(meetingWhen(start, start + DAY_MS, zone, now, true), `${zone} ${new Date(now).toISOString()}`).toBe(expected);
+    }
   });
 });
