@@ -5,6 +5,7 @@ import {
   DEFAULT_APPROVAL_MODE,
   approvalModeFor,
   setDefaultApprovalMode,
+  exceedsBuiltInCeiling,
   withinBuiltInCeiling,
   supportsApprovalMode,
   modelSwitchNeedsAsk,
@@ -110,6 +111,15 @@ describe("approval modes", () => {
     expect(approvalModeFor({ approvalMode: "full" })).toBe("full");
     expect(withinBuiltInCeiling({ builtIn: "mausbot" }, "full")).toBe("auto");
     expect(withinBuiltInCeiling({}, "full")).toBe("full");
+  });
+
+  it("never runs a built-in bot at Custom either, since a Codex config can be as permissive as Full", () => {
+    expect(approvalModeFor({ builtIn: "mausbot", approvalMode: "custom" })).toBe("auto");
+    expect(approvalModeFor({ builtIn: "mausbot", approvalMode: "custom", autoApprove: true })).toBe("auto");
+    expect(approvalModeFor({ approvalMode: "custom" })).toBe("custom");
+    expect(withinBuiltInCeiling({ builtIn: "mausbot" }, "custom")).toBe("auto");
+    expect(withinBuiltInCeiling({}, "custom")).toBe("custom");
+    expect(["ask", "edits", "auto", "full", "custom"].filter(exceedsBuiltInCeiling)).toEqual(["full", "custom"]);
   });
 
   it("prefers a valid explicit mode and fails closed around corrupt values", () => {

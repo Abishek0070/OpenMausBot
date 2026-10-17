@@ -59,9 +59,14 @@ export function setDefaultApprovalMode(mode: ApprovalMode): void {
 }
 
 /** A built-in bot (MausBot) reads untrusted mail and invites, so it never runs
- * at Full access: Approve for me is its highest level, whatever its record says. */
+ * at Full access or Custom, which a Codex config can make as permissive as Full. */
+export function exceedsBuiltInCeiling(mode: unknown): boolean {
+  return mode === "full" || mode === "custom";
+}
+
+/** Approve for me is a built-in bot's highest level, whatever its record says. */
 export function withinBuiltInCeiling(bot: { builtIn?: unknown }, mode: ApprovalMode): ApprovalMode {
-  return mode === "full" && bot.builtIn !== undefined ? "auto" : mode;
+  return exceedsBuiltInCeiling(mode) && bot.builtIn !== undefined ? "auto" : mode;
 }
 
 /** An unset level runs at the default, the pre-approvalMode Auto bit reads as

@@ -11787,7 +11787,7 @@ describe("harness HTTP API", () => {
     expect((await api("GET", `/api/bots/${mausbot.id}/outbound`)).body.today).toBe(0);
   });
 
-  it("refuses MausBot Full access and teammates on every route, and runs its turns below Full whatever its record says", async () => {
+  it("refuses MausBot Full access, Custom and teammates on every route, and runs its turns below Full whatever its record says", async () => {
     const mausbot = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
     const selection = { instanceId: "claude", model: "claude-sonnet-5" };
     const refusals = [
@@ -11796,6 +11796,9 @@ describe("harness HTTP API", () => {
       await api("PATCH", `/api/bots/${mausbot.id}`, { approvalMode: "full", threadId: mausbot.threadId, modelSelection: selection }),
       await api("PATCH", `/api/bots/${mausbot.id}/tasks/${mausbot.threadId}`, { approvalMode: "full" }),
       await api("POST", `/api/bots/${mausbot.id}/tasks`, { approvalMode: "full" }),
+      await api("PATCH", `/api/bots/${mausbot.id}`, { approvalMode: "custom" }),
+      await api("PATCH", `/api/bots/${mausbot.id}`, { approvalMode: "custom", threadId: mausbot.threadId, modelSelection: selection }),
+      await api("PATCH", `/api/bots/${mausbot.id}/tasks/${mausbot.threadId}`, { approvalMode: "custom" }),
       await api("PATCH", `/api/bots/${mausbot.id}`, { peers: null }),
       await api("PATCH", `/api/bots/${mausbot.id}`, { peers: ["test-bot-a"] }),
     ];

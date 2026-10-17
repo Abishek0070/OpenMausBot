@@ -36,7 +36,7 @@ import {
   approvalModeFor,
   modelSwitchNeedsAsk,
   isEmergencyApprovalDowngrade,
-  isApprovalMode, setDefaultApprovalMode, withinBuiltInCeiling,
+  isApprovalMode, setDefaultApprovalMode, exceedsBuiltInCeiling, withinBuiltInCeiling,
   type ApprovalMode,
 } from "../shared/approval-mode.ts";
 import { createApprovalModeSupport } from "./harness-capabilities.ts";
@@ -3706,7 +3706,7 @@ function handleDesktopTrustedApprovalMessage(raw: unknown): boolean {
     return true;
   }
   const existing = store.bot(botId);
-  if (!existing || (mode === "full" && isMausBot(existing))) {
+  if (!existing || (exceedsBuiltInCeiling(mode) && isMausBot(existing))) {
     respond({ ok: false, error: existing ? MAUSBOT_FIXED : "No such bot" });
     return true;
   }

@@ -59,6 +59,18 @@ describe("seedBots", () => {
     expect(approvalModeFor(store.projectBotForTask(mausbot!.id, mausbot!.threadId)!)).toBe("auto");
   });
 
+  it("runs a MausBot whose record says Full or Custom at Approve for me, bot-wide and in its thread", () => {
+    const store = new Store(selection);
+    seedBots(store, { hosted: false });
+    const mausbot = findMausBot(store.bots)!;
+    for (const mode of ["full", "custom"] as const) {
+      store.patchBot(mausbot.id, { approvalMode: mode, autoApprove: false });
+      store.patchTask(mausbot.id, mausbot.threadId, { approvalMode: mode, autoApprove: false });
+      expect(approvalModeFor(store.bot(mausbot.id)!), mode).toBe("auto");
+      expect(approvalModeFor(store.projectBotForTask(mausbot.id, mausbot.threadId)!), mode).toBe("auto");
+    }
+  });
+
   it("keeps a hosted team workspace to one random starter and no MausBot", () => {
     const store = new Store(selection);
     expect(seedBots(store, { hosted: true })).toBeNull();
@@ -102,13 +114,15 @@ describe("mausbotPatchRefusal", () => {
   });
 
   it("keeps MausBot's teammates empty and its level below Full access", () => {
-    for (const body of [{ peers: null }, { peers: ["o"] }, { peers: "o" }, { approvalMode: "full" }, { approvalMode: "full", applyToAllThreads: true }]) {
+    for (const body of [{ peers: null }, { peers: ["o"] }, { peers: "o" }, { approvalMode: "full" }, { approvalMode: "full", applyToAllThreads: true },
+      { approvalMode: "custom" }, { approvalMode: "custom", threadId: "t", modelSelection: selection() }]) {
       expect(mausbotPatchRefusal(mausbot, body), JSON.stringify(body)).toBe(MAUSBOT_FIXED);
     }
     for (const body of [{ peers: [] }, { approvalMode: "auto" }, { approvalMode: "ask" }, { autoApprove: true }]) {
       expect(mausbotPatchRefusal(mausbot, body), JSON.stringify(body)).toBeNull();
     }
     expect(mausbotPatchRefusal(other, { peers: null, approvalMode: "full" })).toBeNull();
+    expect(mausbotPatchRefusal(other, { approvalMode: "custom" })).toBeNull();
   });
 
   it("refuses a truthy hidden that is not true", () => {
