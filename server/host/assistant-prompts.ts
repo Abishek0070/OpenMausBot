@@ -1,13 +1,18 @@
-// server/host/assistant-prompts.ts
 import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
-import { meetingWhen } from "./assistant-cards.ts";
+import { BRIEF_MAX, clip, meetingWhen } from "./assistant-cards.ts";
 import { CARDS_PER_TRIAGE } from "./assistant-plan.ts";
 import type { MeetingRecord } from "./assistant-state.ts";
 
 export const RECORDS_END = "[end of records]";
+// Characters with no width: dropped, so a marker split by one is whole again before it is checked.
+const INVISIBLE = /[\u00ad\u200b-\u200f\u2060-\u2064\ufeff\u{e0000}-\u{e007f}]/gu;
+// Controls and bidi overrides: a space, so they never glue two words together.
 // eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069]/g;
 const FORGED_END = /\[\s*end\s+of\s+records\s*\]/gi;
+// An opening bracket that would start a job marker or a records block.
+const FORGED_START = /\[(?=\s*(?:maus\s*bot\b|records\s+from\b))/gi;
+const PEOPLE_MAX = 30;
 const THREAD_ID = /^[\w-]{1,128}$/;
 const NEVER_ACT = "Never send, book, accept, decline, delete or change anything; you may read, and you may only draft.";
 
@@ -17,7 +22,7 @@ export interface TurnTools {
 }
 
 export function clean(text: string, max: number): string {
-  const flat = text.replace(CONTROL, " ").replace(/\s+/g, " ").trim().replace(FORGED_END, "(end of records)");
+  const flat = text.replace(INVISIBLE, "").replace(CONTROL, " ").replace(/\s+/g, " ").trim().replace(FORGED_END, "(end of records)").replace(FORGED_START, "(");
   const points = Array.from(flat);
   return points.length <= max ? flat : `${points.slice(0, max - 1).join("").trimEnd()}…`;
 }
@@ -64,7 +69,7 @@ export function prepPrompt(input: { event: CalendarEvent; short: boolean; timeZo
     "- what is still open, and one suggested next step.",
     NEVER_ACT,
     "Answer with one JSON object and nothing else:",
-    `{"brief": "<Markdown, at most ${words} words, with the sections Who, Why, History, Open questions, Next step>", "relatedThreadId": "<the thread id of the conversation most about this meeting, from a search hit, or an empty string>", "noWebSearch": <true if you had no web search tool, else false>}`,
+    `{"brief": "<plain text, at most ${words} words, with the sections Who, Why, History, Open questions, Next step>", ${input.searchTools ? '"relatedThreadId": "<the thread id of the conversation most about this meeting, from a search hit, or an empty string>", ' : ""}"noWebSearch": <true if you had no web search tool, else false>}`,
   ].join("\n");
 }
 
@@ -73,7 +78,9 @@ export function repeatPrompt(input: { event: CalendarEvent; previousStart: numbe
     jobMarker("since last time", input.event.id),
     `This meeting repeats. The person last met the same people ${meetingWhen(input.previousStart, input.previousStart, input.timeZone, input.now, input.event.allDay).replace(/ to .*$/, "")}, and one of them has emailed since.`,
     calendarRecords(input.event, input.timeZone, input.now),
-    `Write one sentence on what changed since last time${input.mailTools ? ", from their recent email" : ""}${input.searchTools ? " and earlier conversations" : ""}. No web research.`,
+    input.mailTools || input.searchTools
+      ? `Write one sentence on what changed since last time${input.mailTools ? ", from their recent email" : ""}${input.searchTools ? `${input.mailTools ? " and" : ", from"} earlier conversations` : ""}. No web research.`
+      : "You have no mail or search tools: work only from the meeting and any previous notes in the records. Write one sentence on what changed since last time. No web research.",
     NEVER_ACT,
     'Answer with one JSON object and nothing else: {"line": "<one sentence, or an empty string if nothing changed>"}',
   ].join("\n");
@@ -96,7 +103,13 @@ export function triagePrompt(input: { emails: EmailHeader[]; meetingToday: strin
     jobMarker("email check"),
     "Decide which of these new emails the person must not miss: one that needs a reply from them, one from someone they meet today, or one that carries a deadline. Everything else is not important. Judge from the sender, the subject and the preview only.",
     recordsBlock("Gmail", input.emails.map((email) => `id ${clean(email.id, 120)} · from ${clean(email.from, 120)} · subject ${clean(email.subject, 200)} · preview ${clean(email.preview, 300)}`)),
-    `People the person meets today: ${input.meetingToday.length ? input.meetingToday.map((person) => clean(person, 120)).join(", ") : "nobody"}.`,
+    ...(input.meetingToday.length
+      ? [
+        "The people the person meets today, from their calendar:",
+        recordsBlock("Google Calendar", input.meetingToday.slice(0, PEOPLE_MAX).map((person) => clean(person, 120))),
+        ...(input.meetingToday.length > PEOPLE_MAX ? [`(${input.meetingToday.length - PEOPLE_MAX} more people are not listed.)`] : []),
+      ]
+      : ["The person meets nobody today."]),
     "Do not open, send, label, archive or change any email.",
     `Answer with one JSON object and nothing else: {"important": [{"id": "<an id from the records>", "why": "<one sentence>", "action": "<one suggested action>"}]} — at most ${CARDS_PER_TRIAGE}, and an empty list when nothing matters.`,
   ].join("\n");
@@ -118,19 +131,23 @@ export function prepReply(text: string): { brief: string; relatedThreadId?: stri
   const json = jsonReply(text);
   if (json && typeof json.brief === "string" && json.brief.trim()) {
     const related = typeof json.relatedThreadId === "string" && THREAD_ID.test(json.relatedThreadId) ? json.relatedThreadId : undefined;
-    return { brief: json.brief.trim(), ...(related ? { relatedThreadId: related } : {}), noWebSearch: json.noWebSearch === true };
+    return { brief: clip(json.brief, BRIEF_MAX), ...(related ? { relatedThreadId: related } : {}), noWebSearch: json.noWebSearch === true };
   }
-  const plain = text.trim();
+  // A reply that is a JSON object we could not use is unreadable, never a brief of raw JSON.
+  if (/^\s*(?:```[\w-]*\s*)?\{/.test(text)) return null;
+  const plain = clip(text, BRIEF_MAX);
   return plain ? { brief: plain, noWebSearch: false } : null;
 }
 
 export function triageReply(text: string, ids: ReadonlySet<string>): Array<{ id: string; why: string; action: string }> | null {
   const json = jsonReply(text);
   if (!json || !Array.isArray(json.important)) return null;
+  const seen = new Set<string>();
   return json.important.flatMap((raw) => {
     const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-    return typeof item.id === "string" && ids.has(item.id) && typeof item.why === "string" && typeof item.action === "string"
-      ? [{ id: item.id, why: clean(item.why, 240), action: clean(item.action, 240) }] : [];
+    if (typeof item.id !== "string" || seen.has(item.id) || !ids.has(item.id) || typeof item.why !== "string" || typeof item.action !== "string") return [];
+    seen.add(item.id);
+    return [{ id: item.id, why: clean(item.why, 240), action: clean(item.action, 240) }];
   }).slice(0, CARDS_PER_TRIAGE);
 }
 
