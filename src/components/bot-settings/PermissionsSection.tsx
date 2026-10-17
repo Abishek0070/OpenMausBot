@@ -214,7 +214,7 @@ function OutboundControl({ bot, onChange }: { bot: Bot; onChange: (policy: Outbo
             ["ask", "Ask every time", "Every send waits for your tap."],
             ["allow", "Allow a daily amount", "Sends go out on their own, up to the cap below."],
           ] as const
-        ).map(([value, label, hint]) => (
+        ).filter(([value]) => value === "ask" || bot.builtIn === undefined).map(([value, label, hint]) => (
           <button
             key={value}
             title={hint}

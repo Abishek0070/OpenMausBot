@@ -83,3 +83,15 @@ describe("Full access in bot settings", () => {
     expect(dialogs()).toBe(1);
   });
 });
+
+describe("sending policy in bot settings", () => {
+  const labels = () => [...host.querySelectorAll("button[aria-pressed]")].map((button) => button.textContent);
+
+  it("offers a daily allowance to an ordinary bot but not to a built-in one, which always asks", () => {
+    render({ ...base, outbound: { policy: "ask", dailyCap: 25 } });
+    expect(labels()).toEqual(["Ask every time", "Allow a daily amount"]);
+    render({ ...base, builtIn: "mausbot", outbound: { policy: "ask", dailyCap: 25 } });
+    expect(labels()).toEqual(["Ask every time"]);
+  });
+});
+

@@ -1,4 +1,4 @@
-import { exceedsBuiltInCeiling, withinBuiltInCeiling, type ApprovalMode } from "../shared/approval-mode.ts";
+import { approvalModeFor, exceedsBuiltInCeiling, withinBuiltInCeiling, type ApprovalMode } from "../shared/approval-mode.ts";
 import { DEFAULT_OUTBOUND_POLICY } from "../shared/outbound.ts";
 import { MAUSBOT_COLOR } from "../shared/maus-colors.ts";
 import type { BotRecord, Store } from "./store.ts";
@@ -38,6 +38,13 @@ export const isMausBot = (bot: MaybeBuiltIn): boolean => bot?.builtIn === MAUSBO
 /** A thread of a built-in bot is shown at the level it runs at, not the Full or Custom its record may still hold. */
 export function builtInWireTask<T extends { approvalMode?: ApprovalMode }>(bot: MaybeBuiltIn, task: T): T {
   return task.approvalMode && bot?.builtIn !== undefined ? { ...task, approvalMode: withinBuiltInCeiling(bot, task.approvalMode) } : task;
+}
+
+/** A built-in bot's level and its older autoApprove bit as clients are shown them, whatever its record holds. */
+export function builtInWireLevel(bot: { builtIn?: string; approvalMode?: unknown; autoApprove?: unknown; threadId?: string }): { approvalMode?: ApprovalMode; autoApprove?: boolean } {
+  if (bot.builtIn === undefined) return {};
+  const approvalMode = withinBuiltInCeiling(bot, approvalModeFor(bot));
+  return { approvalMode, autoApprove: approvalMode === "auto" };
 }
 
 /** The server treats a built-in bot's send policy as ask, so that is what clients are shown. */

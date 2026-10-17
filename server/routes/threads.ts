@@ -48,7 +48,7 @@ export interface ThreadRouteDeps {
   publicBotQueuedMessages(): ReturnType<typeof queuedSteerSnapshot>;
   publicGroupState(record: GroupRecord): WireGroup;
   wireBot(bot: BotRecord): WireBot;
-  wireTask(task: TaskRecord, botModel: ModelSelection): WireTask;
+  wireTask(task: TaskRecord, bot: { builtIn?: string; modelSelection: ModelSelection }): WireTask;
   botComputerControlSnapshot(botId: string): ReturnType<ComputerControl["snapshot"]>;
   messageFileRootsForThread(senderId: string, threadId: string): string[];
   viewerFor(auth: RequestAuth): Viewer;
@@ -80,7 +80,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
       return json(res, 200, {
         bots: shownBots.map((bot) => memberBot({
           ...wireBot(bot),
-          tasks: store.tasks(bot.id).map((task) => wireTask(task, bot.modelSelection)),
+          tasks: store.tasks(bot.id).map((task) => wireTask(task, bot)),
           ...messagePage(bot.threadId, limit),
         }, visible)),
         botQueuedMessages: visible.everything ? queued : Object.fromEntries(Object.entries(queued).filter(([threadId]) => visible.thread(threadId))),

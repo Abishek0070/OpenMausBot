@@ -11740,7 +11740,7 @@ describe("harness HTTP API", () => {
   it("holds every MausBot send, booking and delete on the Approve card, whatever level and allowance its record holds", async () => {
     expect((await api("PUT", "/api/config", { composio: { apiKey: "" } })).status).toBe(200);
     const mausbot = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
-    expect(mausbot.outbound).toEqual({ policy: "allow", dailyCap: 100 });
+    expect(mausbot.outbound).toEqual({ policy: "ask", dailyCap: 25 });
     expect(mausbot.approvalMode).toBe("auto");
     expect((await api("GET", `/api/bots/${mausbot.id}/outbound`)).body).toEqual({ policy: { policy: "ask", dailyCap: 25 }, today: 0 });
     connectorRelayCalls.length = 0;
@@ -11785,6 +11785,17 @@ describe("harness HTTP API", () => {
     expect((await booking).result.content[0].text).toBe("relay-ok");
     expect(connectorRelayCalls).toHaveLength(4);
     expect((await api("GET", `/api/bots/${mausbot.id}/outbound`)).body.today).toBe(0);
+  });
+
+  it("shows a MausBot record stored at Full with an allowance as Approve for me that always asks, in every payload", async () => {
+    const listed = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
+    const patched = await api("PATCH", `/api/bots/${listed.id}/tasks/${listed.threadId}`, { pinned: false });
+    expect(patched.status).toBe(200);
+    for (const shown of [listed, patched.body.bot]) {
+      expect(shown).toMatchObject({ approvalMode: "auto", autoApprove: true, outbound: { policy: "ask", dailyCap: 25 } });
+      expect(shown.tasks.map((task: { approvalMode?: string }) => task.approvalMode)).toEqual(["auto"]);
+    }
+    expect(patched.body.task.approvalMode).toBe("auto");
   });
 
   it("refuses MausBot Full access, Custom and teammates on every route, and runs its turns below Full whatever its record says", async () => {

@@ -50,7 +50,7 @@ export interface TaskRouteDeps {
   threadBusy(botId: string, threadId: string): boolean;
   publicBot(bot: BotRecord): WireBot;
   wireBot(bot: BotRecord): WireBot;
-  wireTask(task: TaskRecord, botModel: ModelSelection): WireTask;
+  wireTask(task: TaskRecord, bot: { builtIn?: string; modelSelection: ModelSelection }): WireTask;
   pageSize(raw: string | null): number | null | undefined;
   messagePage(threadId: string, limit: number | undefined): MessagePage;
   checkedModelSelection(raw: unknown, current?: { selection: ModelSelection; busy: boolean }, requireAvailableModel?: boolean):
@@ -191,7 +191,7 @@ export function createTaskRoutes(deps: TaskRouteDeps): RouteHandler {
       if (!task) return json(res, 500, { error: "couldn't create that task" });
       // Who opened it decides who may answer its cards on a shared workspace.
       if (auth.kind === "session") threadStarters.set(task.threadId, actorKey(auth));
-      return json(res, 201, { bot: publicBot(store.bot(bot.id)!), task: wireTask(task, store.bot(bot.id)!.modelSelection) });
+      return json(res, 201, { bot: publicBot(store.bot(bot.id)!), task: wireTask(task, store.bot(bot.id)!) });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/tasks\/delete$/);
     if (m && method === "POST") {
@@ -224,7 +224,7 @@ export function createTaskRoutes(deps: TaskRouteDeps): RouteHandler {
       if (switchLimit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const switched = store.switchTask(bot.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such task" });
-      const switchedSettings = { ...wireBot(switched), tasks: store.tasks(switched.id).map((task) => wireTask(task, switched.modelSelection)) };
+      const switchedSettings = { ...wireBot(switched), tasks: store.tasks(switched.id).map((task) => wireTask(task, switched)) };
       // "0": settings only; a positive page: that tail; omitted: the whole thread (search hits can be older than a page).
       const responseBot = requestedMessages === "0"
         ? switchedSettings
@@ -291,7 +291,7 @@ export function createTaskRoutes(deps: TaskRouteDeps): RouteHandler {
         }
         const task = store.refreshTaskPermissions(profile.id, m[2]);
         if (!task) return json(res, 404, { error: "no such task" });
-        return json(res, 200, { task: wireTask(task, store.bot(profile.id)!.modelSelection), bot: publicBot(store.bot(profile.id)!) });
+        return json(res, 200, { task: wireTask(task, store.bot(profile.id)!), bot: publicBot(store.bot(profile.id)!) });
       }
       const patch: Parameters<typeof store.patchTask>[2] = {};
       if (body.projectId !== undefined) {
@@ -378,7 +378,7 @@ export function createTaskRoutes(deps: TaskRouteDeps): RouteHandler {
         ? store.switchTaskModel(m[1], m[2], patch.modelSelection, body.updateBotDefault === true, body.resetApprovalToAsk === true,
           { ...patch, ...hostedModels?.resetTask(current.modelSelection, patch.modelSelection) })!
         : store.patchTask(m[1], m[2], patch)!;
-      return json(res, 200, { task: wireTask(task, store.bot(m[1])!.modelSelection), bot: publicBot(store.bot(m[1])!) });
+      return json(res, 200, { task: wireTask(task, store.bot(m[1])!), bot: publicBot(store.bot(m[1])!) });
     }
     if (m && method === "DELETE") {
       const bot = store.bot(m[1]);
@@ -408,7 +408,7 @@ export function createTaskRoutes(deps: TaskRouteDeps): RouteHandler {
         if (!title) return json(res, 502, { error: "couldn't generate a title — try again, or rename the thread" });
         const task = store.retitleTask(m[1], m[2], startedFrom, title) ?? store.taskByThread(m[1], m[2]);
         if (!task) return json(res, 404, { error: "no such task" });
-        return json(res, 200, { task: wireTask(task, store.bot(m[1])!.modelSelection) });
+        return json(res, 200, { task: wireTask(task, store.bot(m[1])!) });
       } finally {
         titleRegenerations.delete(m[2]);
       }

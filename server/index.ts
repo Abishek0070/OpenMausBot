@@ -246,7 +246,7 @@ import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine }
 import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GATE } from "./escalations.ts";
 import { createChiefNotices } from "./host/chief-notices.ts";
 import { createChiefBrief } from "./host/chief-brief.ts";
-import { builtInWireOutbound, builtInWireTask, findMausBot, isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
+import { builtInWireLevel, builtInWireOutbound, builtInWireTask, findMausBot, isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
 import { createMausBotIntro } from "./host/mausbot-intro.ts";
 import { briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
 import { needsInputQuestion } from "./runtime-coordinator.ts";
@@ -3237,9 +3237,9 @@ if (browserCleanupReferencesReconciled) browserCleanup.startPending();
 
 let activeCoordinationForThread = (_threadId: string): boolean => false;
 let cacheKeepWarmStatus = (_threadId: string): KeepWarmStatus | undefined => undefined;
-const wireTask = (task: TaskRecord, botModel: ModelSelection): WireTask => {
+const wireTask = (task: TaskRecord, bot: { builtIn?: string; modelSelection: ModelSelection }): WireTask => {
   // Snoozes heal on read against the server clock; the 0 sentinel ("until new activity") survives reads.
-  const { snoozedUntil, ...base } = toWireTask(task, botModel);
+  const { snoozedUntil, ...base } = toWireTask(builtInWireTask(bot, task), bot.modelSelection);
   const keepWarm = cacheKeepWarmStatus(task.threadId);
   const coordinated = { ...base, waitingForTeammates: activeCoordinationForThread(task.threadId) && !task.busy, ...(keepWarm ? { cacheKeepWarm: keepWarm } : {}) };
   const asleep = snoozedUntil === 0 || (snoozedUntil !== undefined && snoozedUntil > Date.now());
@@ -3252,10 +3252,10 @@ const wireBot = (bot: BotRecord): WireBot => {
   // Clients see Ask while an elevated grant awaits the desktop's confirmation, never a grant that may still roll back.
   const visible = approvalGrant && !approvalGrant.threadOnly
     ? { ...rest, approvalMode: "ask" as const, autoApprove: false }
-    : { ...rest, approvalMode: approvalModeFor(rest), ...builtInWireOutbound(bot) };
-  return { ...visible, waitingForTeammates: activeCoordinationForThread(bot.threadId) && !threadBusy(bot.id, bot.threadId),
+    : { ...rest, approvalMode: approvalModeFor(rest), ...builtInWireLevel(bot) };
+  return { ...visible, ...builtInWireOutbound(bot), waitingForTeammates: activeCoordinationForThread(bot.threadId) && !threadBusy(bot.id, bot.threadId),
     mainThreadId: botMainThread(bot.id),
-    avatarUrl: visible.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map((task) => wireTask(builtInWireTask(bot, task), bot.modelSelection)) } : {}) };
+    avatarUrl: visible.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map((task) => wireTask(task, bot)) } : {}) };
 };
 
 function toolScopeForTurn(botId: string) {
@@ -3268,7 +3268,7 @@ function toolScopeForTurn(botId: string) {
 
 const wireTrustedApprovalBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors: _resumeCursors, tasks, approvalGrant: _approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, packageBase: _packageBase, assignedSkills: _assignedSkills, ...rest } = bot;
-  return { ...rest, approvalMode: approvalModeFor(rest), mainThreadId: botMainThread(bot.id), avatarUrl: rest.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map((task) => wireTask(task, bot.modelSelection)) } : {}) };
+  return { ...rest, approvalMode: approvalModeFor(rest), ...builtInWireLevel(bot), ...builtInWireOutbound(bot), mainThreadId: botMainThread(bot.id), avatarUrl: rest.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map((task) => wireTask(task, bot)) } : {}) };
 };
 
 function previewSystemPrompt(bot: BotRecord) {
@@ -3825,7 +3825,7 @@ function handleDesktopTrustedApprovalMessage(raw: unknown): boolean {
     try {
       store.switchTaskModel(botId, threadId as string, checked.selection, message.updateBotDefault, true,
         hostedModels?.resetTask(target.modelSelection, checked.selection));
-      const fresh = { ...wireBot(store.bot(botId)!), approvalMode: approvalModeFor(store.bot(botId)!) };
+      const fresh = { ...wireBot(store.bot(botId)!), approvalMode: approvalModeFor(store.bot(botId)!), ...builtInWireLevel(store.bot(botId)!) };
       broadcast({ kind: "bot", bot: fresh });
       respond({ ok: true, bot: fresh });
     } catch {
@@ -3899,7 +3899,7 @@ const storedAvatarExists = (avatarUrl: string): boolean =>
 const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
   ...wireBot(bot),
   ...messagePage(bot.threadId, DEFAULT_PAGE),
-  tasks: store.tasks(bot.id).map((task) => wireTask(task, bot.modelSelection)),
+  tasks: store.tasks(bot.id).map((task) => wireTask(task, bot)),
 });
 const publicBotQueuedMessages = () => queuedSteerSnapshot((botId, threadId) => Boolean(store.taskByThread(botId, threadId)));
 
