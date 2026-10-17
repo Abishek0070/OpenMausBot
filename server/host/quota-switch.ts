@@ -5,8 +5,12 @@ import type { ProviderRegistry } from "../harness/registry.ts";
 import type { hostedModelPolicy } from "../hosted-models.ts";
 import { resolvePeerComms, type ApprovalBus } from "../peer-approval.ts";
 import { createQuotaSwitch, type QuotaRequest, type QuotaSwitchDeps } from "../quota-switch.ts";
+import type { RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Message } from "../store.ts";
 import type { UsageTrigger } from "../usage-ledger.ts";
+
+/** A card another host module raised and answers itself; undefined when the card is not its own. */
+export type HarnessCard = (threadId: string, requestId: string, behavior: "allow" | "deny" | "answer", message: unknown, auth: RequestAuth) => string | undefined;
 
 export interface QuotaSwitchHostDeps extends Pick<QuotaSwitchDeps, "store" | "coordinator" | "turnStops"> {
   registry: Pick<ProviderRegistry, "instances" | "access">;
@@ -23,6 +27,8 @@ export interface QuotaSwitchHostDeps extends Pick<QuotaSwitchDeps, "store" | "co
     botId: string, threadId: string, text: string, replyTo?: Message, sendId?: string, sender?: ResolvedSender,
     trigger?: UsageTrigger, via?: "call", callId?: string, dataContext?: DataContext,
   ): Promise<unknown>;
+  /** Asked in order before the quota switch; the first answer wins. */
+  harnessCards?: HarnessCard[];
 }
 
 export function createQuotaSwitchHost(deps: QuotaSwitchHostDeps) {
@@ -42,10 +48,14 @@ export function createQuotaSwitchHost(deps: QuotaSwitchHostDeps) {
     resend: (botId, threadId, message, replyTo, spoken) => startOrQueueDirectMessage(botId, threadId, message.text ?? "", replyTo, undefined, message.sender, undefined, spoken.via, spoken.callId, message.dataContext),
   });
 
-  /** Settles a card the harness raised itself (a peer approval or a quota-switch offer); undefined for any other card. */
-  async function harnessCardOutcome(threadId: string, requestId: string, behavior: "allow" | "deny" | "answer", message: unknown): Promise<string | undefined> {
+  /** Settles a card the harness raised itself (a peer approval, a host module's card or a quota-switch offer); undefined for any other card. */
+  async function harnessCardOutcome(threadId: string, requestId: string, behavior: "allow" | "deny" | "answer", message: unknown, auth: RequestAuth): Promise<string | undefined> {
     if (!store.messagesFor(threadId).some(candidate => candidate.card?.requestId === requestId)) return undefined;
     if (resolvePeerComms(approvalBus, requestId, behavior)) return behavior === "allow" ? "allowed-once" : "rejected";
+    for (const card of deps.harnessCards ?? []) {
+      const own = card(threadId, requestId, behavior, message, auth);
+      if (own) return own;
+    }
     return await quotaSwitch.answer(threadId, requestId, behavior, message) ?? undefined;
   }
 
