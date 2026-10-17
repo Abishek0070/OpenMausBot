@@ -15,6 +15,7 @@ It is built from records only and runs no model. Design:
 - The card lists only bots, rooms and routine runs that everyone who can see the
   Chief may also see.
 - `OMB_BRIEF_RECAP=0` turns the recap off; `features.briefRecap: false` does too.
+- With no Chief, MausBot posts the recap in its own chat.
 - A hosted team workspace has no recap.
 
 ## Server

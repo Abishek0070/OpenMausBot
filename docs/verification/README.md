@@ -63,6 +63,7 @@ Use only mapped, tested commands:
 - [Chat widgets](widgets.md)
 - [Chat widgets: prompts to try with a real bot](widget-prompts.md)
 - [The Chief's recap after an absence](chief-recap.md)
+- [MausBot: seed, intro and the Chief offer](mausbot.md)
 - [Phone web app installation and safe areas](phone-web-app.md)
 - [Welcome flow and guided tour](onboarding.md)
 - [Channels](channels.md)
