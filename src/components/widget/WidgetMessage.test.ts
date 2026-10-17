@@ -29,7 +29,18 @@ const reply = (status: number, body: unknown) => new Response(JSON.stringify(bod
 const fetchMock = vi.fn<(path: string, init?: RequestInit) => Promise<Response>>();
 const openExternal = vi.fn(async (_url: string) => {});
 const flushBotPatches = vi.fn<(botId: string) => Promise<null>>();
-const store = { state: {}, dispatch: vi.fn(), flushBotPatches } as unknown as ReturnType<typeof useStore>;
+vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => true }));
+
+const dispatch = vi.fn<(action: { type: string }) => void>();
+const store = {
+  state: {
+    bots: [
+      { id: "scout", name: "Scout", threadId: "scout-main", tasks: [{ threadId: "scout-main" }, { threadId: "t-9" }] },
+      { id: "other", name: "Other", threadId: "other-main", tasks: [{ threadId: "other-main" }] },
+    ],
+    groups: [{ id: "room-1", name: "Room", threadId: "room-main", tasks: [] }],
+  },
+  dispatch, flushBotPatches } as unknown as ReturnType<typeof useStore>;
 const inStore = (message: Message) => createElement(BotEditorStore, { value: store, children: createElement(WidgetMessage, { botId: "scout", threadId: "t1", message }) });
 
 let host: HTMLDivElement;
@@ -527,6 +538,65 @@ describe("pressing", () => {
     await press(button("Open the docs")!);
     expect(openExternal).toHaveBeenLastCalledWith("https://mausbot.com/docs");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("open_thread buttons", () => {
+    const open = (payload: unknown): WidgetRoot => {
+      const parsed = parseWidgetInput({ type: "Card", title: "Since you last looked", children: [{ type: "Row", children: [{ type: "Text", value: "Scout" }, { type: "Button", label: "Open", onClickAction: { type: "open_thread", payload } }] }] });
+      if (!parsed.ok) throw new Error(parsed.error);
+      return parsed.value;
+    };
+    const dispatched = () => dispatch.mock.calls.map(([action]) => action);
+
+    beforeEach(() => dispatch.mockClear());
+
+    it("opens a thread on this device and posts nothing", async () => {
+      mount(row(open({ botId: "scout", threadId: "t-9" })));
+      await press(button("Open")!);
+      expect(dispatched()).toEqual([
+        { type: "select", id: "scout" },
+        { type: "switchTask", botId: "scout", threadId: "t-9" },
+        { type: "revealThread", threadId: "t-9" },
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(openExternal).not.toHaveBeenCalled();
+      expect(button("Open")!.title).toBe("Open");
+    });
+
+    it("opens a room's thread", async () => {
+      mount(row(open({ groupId: "room-1", threadId: "room-main" })));
+      await press(button("Open")!);
+      expect(dispatched()).toEqual([
+        { type: "select", id: "room-1" },
+        { type: "revealThread", threadId: "room-main" },
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("opens the bot and says the thread is gone when it was deleted", async () => {
+      mount(row(open({ botId: "scout", threadId: "gone" })));
+      await press(button("Open")!);
+      expect(dispatched()).toEqual([
+        { type: "select", id: "scout" },
+        { type: "notice", notice: { kind: "thread-gone", botName: "Scout" } },
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["an unknown bot", { botId: "nobody", threadId: "t-9" }],
+      ["a thread that belongs to another bot", { botId: "other", threadId: "t-9" }],
+      ["a bot named for a room's thread", { botId: "scout", threadId: "room-main" }],
+      ["an unknown room", { groupId: "room-9", threadId: "room-main" }],
+      ["a room that does not own the thread", { groupId: "room-1", threadId: "t-9" }],
+      ["a room and a thread nobody has", { groupId: "room-1", threadId: "gone" }],
+    ])("does nothing for %s", async (_name, payload) => {
+      mount(row(open(payload)));
+      await press(button("Open")!);
+      expect(dispatched()).toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(openExternal).not.toHaveBeenCalled();
+    });
   });
 
   it("shows the server's sentence in the card when a press is refused, and stays live", async () => {
