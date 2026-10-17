@@ -4,7 +4,7 @@ OpenMausBot treats **proactivity as an explicit trigger**, not as a hidden
 heartbeat. A bot may continue within an active task through Auto mode, may be
 started by a Routine or Webhook, and may coordinate peers when its engine and
 profile allow that. This change does not add background polling that invents
-work or sends messages without one of those configured paths.
+work or sends messages without one of those configured paths. The Chief of Staff's "Since you last looked" recap only reads records that already exist and never runs a model.
 
 ## Notification policy
 
@@ -37,6 +37,8 @@ alone cannot provide closed-app delivery.
 | Real failed routine emits one `routine-failed` notification and no duplicate `done` | `server/notification-wiring.test.ts` |
 | iOS target parsing and detached-task decision | `ios/Tests/CompanionCoreTests/DecodingTests.swift` |
 | Paired-device route policy remains default-deny | `companion/test/routes.test.ts` |
+| One recap per return; a guest or service never moves presence | `server/host/presence.test.ts`, `server/host/chief-brief.test.ts`, `server/routes/presence.test.ts`, `server/chief-recap.e2e.test.ts` |
+| A member never sees a restricted bot in the recap | `server/chief-recap-members.e2e.test.ts` |
 
 ## Manual release pass
 
@@ -56,6 +58,9 @@ other:
 6. Exercise Auto mode, a Routine, and a Webhook independently. Verify each has
    a visible initiating user/configured trigger and that no unconfigured
    heartbeat starts work.
+7. Close the app for three hours or more while a bot finishes something, open it,
+   and confirm one "Since you last looked" card in the Chief's chat and that the
+   app opens on it.
 
 Live provider, OS-permission, backgrounding, and APNs behavior cannot be proven
 by unit tests alone and remains part of the signed desktop/iPhone release pass.
