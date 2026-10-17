@@ -46,6 +46,25 @@ export interface WidgetAction {
   payload?: JsonValue;
 }
 
+const THREAD_ID = /^[\w-]{1,128}$/;
+
+/** `open_thread` is handled on the device, like `open_url`. Only the shape is checked here: the ids are untrusted. A
+ * renderer resolves the target in the viewer's own store. It does nothing for a bot or room the viewer does not have, or
+ * for a thread that belongs to another bot or room. A thread missing from the store, named with a bot the viewer has,
+ * opens under that bot, which shows it as deleted. */
+export function threadActionTarget(action: WidgetAction): { botId?: string; groupId?: string; threadId: string } | undefined {
+  if (action.type !== "open_thread" || !isRecord(action.payload)) return undefined;
+  const { botId, groupId, threadId } = action.payload;
+  if (typeof threadId !== "string" || !THREAD_ID.test(threadId)) return undefined;
+  if (typeof botId === "string" && THREAD_ID.test(botId) && groupId === undefined) return { botId, threadId };
+  if (typeof groupId === "string" && THREAD_ID.test(groupId) && botId === undefined) return { groupId, threadId };
+  return undefined;
+}
+
+export const isThreadAction = (action: WidgetAction): boolean => threadActionTarget(action) !== undefined;
+
+const CLIENT_ACTION = (action: WidgetAction): boolean => action.type === "open_url" || action.type === "open_thread";
+
 /** `confirm` and `cancel` on a root: the buttons under the card. */
 export interface WidgetButtonSpec {
   label: string;
@@ -291,6 +310,9 @@ const action: Reader = (raw, path) => {
   }
   if (out.type === "open_url" && !isWebUrl(isRecord(out.payload) ? out.payload.url : undefined, ["http:", "https:"])) {
     return fail(`${path}.payload.url`, "open_url needs an http or https url");
+  }
+  if (out.type === "open_thread" && !threadActionTarget(out)) {
+    return fail(`${path}.payload`, "open_thread needs {botId, threadId} or {groupId, threadId}");
   }
   return out;
 };
@@ -656,7 +678,7 @@ export interface WidgetActionEntry {
   action: WidgetAction;
   /** Present when the press settles the widget. */
   tone?: "confirm" | "cancel" | "submit";
-  /** Handled on the device and never sent (open_url). */
+  /** Handled on the device and never sent (open_url, open_thread). */
   client?: true;
   kind: "button" | "item" | "confirm" | "cancel";
 }
@@ -689,7 +711,7 @@ function collectActions(root: WidgetRoot, strict: boolean): WidgetActionEntry[] 
   for (const entry of found) counts.set(entry.label, (counts.get(entry.label) ?? 0) + 1);
   return found.map(({ row, ...entry }) => ({
     ...entry,
-    ...(entry.action.type === "open_url" ? { client: true as const } : {}),
+    ...(CLIENT_ACTION(entry.action) ? { client: true as const } : {}),
     label: row && entry.label && (counts.get(entry.label) ?? 0) > 1 ? `${entry.label}: ${row}`.slice(0, WIDGET_LIMITS.label * 2) : entry.label,
   }));
 }

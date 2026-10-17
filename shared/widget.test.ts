@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { WIDGET_SAMPLES } from "./widget-samples.ts";
 import {
-  dayList, parseWidgetInput, resolveWidgetAction, widgetAdvice, widgetActionByLabel, widgetActions, widgetFieldOptions, widgetFields, widgetInitialValues, widgetScope, widgetToText,
+  dayList, parseWidgetInput, resolveWidgetAction, widgetAdvice, widgetActionByLabel, widgetActions, widgetFieldOptions, widgetFields, widgetInitialValues, widgetScope, widgetToText, threadActionTarget,
   WIDGET_LIMITS, WIDGET_NODE_TYPES, type WidgetNode, type WidgetPayload, type WidgetRoot,
 } from "./widget.ts";
 
@@ -170,6 +170,27 @@ describe("widgetToText", () => {
 });
 
 describe("widget actions", () => {
+  it("opens a thread on the device: never sent, refused without a target", () => {
+    const open = (payload: unknown) => parsed({ type: "Card", children: [{ type: "Button", label: "Open", onClickAction: { type: "open_thread", payload } }] });
+    const entries = widgetActions(open({ botId: "scout", threadId: "t-9" }));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.client).toBe(true);
+    expect(threadActionTarget(entries[0]!.action)).toEqual({ botId: "scout", threadId: "t-9" });
+    expect(threadActionTarget({ type: "open_thread", payload: { groupId: "room-1", threadId: "t-2" } })).toEqual({ groupId: "room-1", threadId: "t-2" });
+    expect(threadActionTarget({ type: "open_url", payload: { url: "https://x" } })).toBeUndefined();
+    expect(resolveWidgetAction({ v: 1, root: open({ botId: "scout", threadId: "t-9" }) }, "n2", undefined))
+      .toEqual({ ok: false, status: 400, error: "That action opens on the device and is not sent." });
+    expect(refusal({ type: "Card", children: [{ type: "Button", label: "Open", onClickAction: { type: "open_thread", payload: { botId: "scout" } } }] }))
+      .toBe("widget.children[0].onClickAction.payload: open_thread needs {botId, threadId} or {groupId, threadId}.");
+    expect(refusal({ type: "Card", children: [{ type: "Button", label: "Open", onClickAction: { type: "open_thread", payload: { botId: "../x", threadId: "t" } } }] }))
+      .toBe("widget.children[0].onClickAction.payload: open_thread needs {botId, threadId} or {groupId, threadId}.");
+  });
+
+  it("lets many Open buttons share a label, as open_url rows do", () => {
+    const rows = parsed({ type: "Card", children: [1, 2].map((n) => ({ type: "Row", children: [{ type: "Text", value: `Thread ${n}` }, { type: "Button", label: "Open", onClickAction: { type: "open_thread", payload: { botId: "b", threadId: `t${n}` } } }] })) });
+    expect(widgetActions(rows).map((entry) => entry.client)).toEqual([true, true]);
+  });
+
   it("lists what can be pressed, with what settles and what stays on the device", () => {
     expect(widgetActions(sample("pullRequests")).map(({ ref, label, tone, kind }) => ({ ref, label, tone, kind }))).toEqual([
       { ref: "n2", label: "iOS: mid-turn steer", tone: undefined, kind: "item" },
