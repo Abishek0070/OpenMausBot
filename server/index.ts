@@ -7617,7 +7617,7 @@ function runtimeWorkPending(threadId: string): boolean {
 }
 
 const { reportIncident, reportEscalation, incidentRefused, incidentLastAt } = createChiefNotices({
-  store, notify, threadBusy, botAtThreadCapacity, startTurn,
+  store, notify, threadBusy, botAtThreadCapacity, startTurn, quietThread: jobGate.isJobThread,
   assignerOf: (threadId) => coordinator.assignerOf(threadId),
   groupTurnActive: (botId) => Boolean(activeGroupTurnForBot(botId)),
   escalationsEnabled: () => chiefEscalationsEnabled(cfg),
@@ -8658,7 +8658,7 @@ async function startTurn(
       const selectedSkills = selectBundledSkills(
         providerText,
         [
-          ...(instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : []),
+          ...(instance.adapter.capabilities.phoneMcp === true && !jobGate.isJobThread(bot.id, threadId) ? ["phoneMcp"] : []),
           ...(skillAuthoring ? ["skillAuthoring"] : []),
         ],
         availableSkills(),
@@ -8692,13 +8692,13 @@ async function startTurn(
       const cwd = pinnedCwd ?? undefined;
       const checkpointCwd = cwd && cwd !== privateWorkspace ? cwd : undefined;
       const dwebUrl = process.env.DWEB_URL?.trim();
-      if (dwebUrl) integrations.dweb = { url: dwebUrl };
-      let teamComputer = computerSkipped ? undefined : inheritedTeamComputer(bot);
+      if (dwebUrl && !jobGate.isJobThread(bot.id, threadId)) integrations.dweb = { url: dwebUrl };
+      let teamComputer = computerSkipped || jobGate.isJobThread(bot.id, threadId) ? undefined : inheritedTeamComputer(bot);
       const cloudBackend = teamComputer || opts?.runOn === "cloud" || bot.cloudBackend !== "vps" ? "box" : "vps";
       const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true;
       const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true;
       const dispatchTask = store.taskByThread(bot.id, threadId);
-      let wants: ComputerWant = computerSkipped ? "off" : plan.computer;
+      let wants: ComputerWant = computerSkipped || jobGate.isJobThread(bot.id, threadId) ? "off" : plan.computer;
       const skipComputer = (error: unknown) => {
         if (!answer.incident || error instanceof DirectTurnSetupCancelled || error instanceof ComputerWaitParked) throw error;
         computerSkipped ??= error instanceof Error ? error.message : String(error);
@@ -9056,7 +9056,7 @@ async function startTurn(
       const mountedComputer = surfaceOfComputerKind(computerKind);
       if (
         liveBot &&
-        plan.browser &&
+        plan.browser && !jobGate.isJobThread(bot.id, threadId) &&
         !(plan.computer === undefined && mountedComputer) &&
         builtInBrowserEnabled(cfg) &&
         liveBot.browser !== false &&

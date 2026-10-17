@@ -126,6 +126,7 @@ describe("opt-in", () => {
   const notices = (enabled: boolean, assigner?: unknown) => createChiefNotices({
     store: untouched as never, notify: () => { throw new Error("notified"); }, threadBusy: () => false, botAtThreadCapacity: () => false,
     groupTurnActive: () => false, startTurn: async () => undefined, assignerOf: () => assigner, escalationsEnabled: () => enabled,
+    quietThread: () => false,
   });
   const input = { kind: "needs-input" as const, bot: { id: "b-mira", name: "Mira", threadId: "th_mira" } as never, threadId: "th_mira", gate: NEEDS_INPUT_GATE, reason: "which repo?", alreadyNotified: false };
 
@@ -143,5 +144,48 @@ describe("opt-in", () => {
     const team = [{ id: "chief", name: "Clive", section: "Ops", chiefOfStaff: true }, { id: "mira", name: "Mira", section: "Ops" }];
     expect(chiefOfStaffSystemPrompt("chief", team, true)).not.toContain("Team escalations");
     expect(chiefOfStaffSystemPrompt("chief", team, true, true)).toContain("Team escalations");
+  });
+});
+
+describe("a MausBot job thread", () => {
+  const chief = { id: "b-clive", name: "Clive", chiefOfStaff: true, threadId: "th_clive" };
+  const mausbot = { id: "b-mausbot", name: "MausBot", builtIn: "mausbot", threadId: "th_mausbot" };
+  function harness() {
+    const writes: string[] = [];
+    const turns: unknown[] = [];
+    const notified: unknown[] = [];
+    const store = {
+      bots: [chief, mausbot],
+      bot: (id: string) => [chief, mausbot].find((candidate) => candidate.id === id),
+      tasks: () => [],
+      taskByThread: (_botId: string, threadId: string) => ({ threadId, title: "Prep: Board call" }),
+      groupByThread: () => undefined,
+      messagesFor: () => [],
+      createTask: (botId: string, title: string) => { writes.push(`task ${botId} ${title}`); return { threadId: "th_incidents", title }; },
+      appendMessage: (threadId: string) => { writes.push(`message ${threadId}`); return { id: "m1" }; },
+    };
+    const notices = createChiefNotices({
+      store: store as never, notify: (notification) => { notified.push(notification); }, threadBusy: () => false, botAtThreadCapacity: () => false,
+      groupTurnActive: () => false, startTurn: async (...args) => { turns.push(args); }, assignerOf: () => undefined, escalationsEnabled: () => true,
+      quietThread: (botId, threadId) => botId === mausbot.id && threadId === "th_job",
+    });
+    return { notices, writes, turns, notified };
+  }
+
+  it("files no incident and raises no escalation, so the Chief's thread is untouched and no Chief turn starts", () => {
+    const h = harness();
+    h.notices.reportIncident({ kind: "failed", bot: mausbot as never, threadId: "th_job", detail: "the run ended without a result" });
+    h.notices.reportIncident({ kind: "stalled", bot: mausbot as never, threadId: "th_job", detail: "no progress" });
+    expect(h.notices.reportEscalation({ kind: "needs-input", bot: mausbot as never, threadId: "th_job", gate: NEEDS_INPUT_GATE, reason: "Forward the invite?", alreadyNotified: false })).toBe("skipped");
+    expect(h.writes).toEqual([]);
+    expect(h.turns).toEqual([]);
+    expect(h.notified).toEqual([]);
+  });
+
+  it("still files an ordinary failed turn's incident with the Chief", () => {
+    const h = harness();
+    h.notices.reportIncident({ kind: "failed", bot: mausbot as never, threadId: "th_mausbot", detail: "the run ended without a result" });
+    expect(h.writes).toEqual(["task b-clive Team incidents", "message th_incidents"]);
+    expect(h.turns).toHaveLength(1);
   });
 });

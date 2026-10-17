@@ -1,7 +1,7 @@
 // Security invariant: a MausBot job thread is hidden, nobody watches it, and its prompt carries mail and invite text. No
 // card may wait there and no saved grant applies: the server answers every request in it. A web search is allowed; every
-// other request, every question and every OpenMausBot or connected-app call that is not a read is declined with a reason
-// the turn reads.
+// other request, every question, every OpenMausBot call that is not a read and every connected-app call but a Gmail or
+// Calendar read is declined with a reason the turn reads.
 import { connectorCallsIn, isReadOnlyTool } from "../../shared/outbound.ts";
 import type { RuntimeEvent } from "../../shared/runtime-events.ts";
 import { isWebSearchTool } from "../auto-approve.ts";
@@ -15,12 +15,12 @@ type JobAdapter = Pick<ProviderAdapter, "respondToRequest" | "interruptTurn">;
 type JobSay = (message: { role: "bot"; kind: "activity"; tool: { name: string; ok: boolean } }) => unknown;
 type JobBot = { id: string; name: string };
 
-export const JOB_DECLINE = "MausBot's background work only reads: it may search the web and read its connected apps and conversations, and it asks nobody anything. Finish with what you have.";
+export const JOB_DECLINE = "This background job can only search the web and read; this request was declined.";
 
 const JOB_RULE = "mausbot-job";
 
 /** OpenMausBot's own routes a job turn may reach: its conversation reads, the paging of its own long results, the engine's
- * hooks, and the connected-apps relay, where each call must be a read. */
+ * hooks, and the connected-apps relay, where each call must be a Gmail or Calendar read. */
 const JOB_ROUTES: ReadonlySet<string> = new Set([
   "GET /api/internal/session-search",
   "GET /api/internal/session-read",
@@ -32,13 +32,18 @@ const JOB_ROUTES: ReadonlySet<string> = new Set([
 
 /** Composio's meta tools that only describe tools; connecting an account waits for a person. */
 const TOOL_DISCOVERY: ReadonlySet<string> = new Set(["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS"]);
+/** A read verb does not make a tool safe here: a read on another app can take a URL and carry the prompt's text to it. */
+const JOB_READ_APPS = ["GMAIL_", "GOOGLECALENDAR_"] as const;
+
+const jobMayRead = (slug: string): boolean => JOB_READ_APPS.some((app) => slug.startsWith(app)) && isReadOnlyTool(slug);
 
 export function jobMayAllow(event: Pick<JobRequest, "requestType" | "tool" | "questions" | "requiresExplicitApproval">): boolean {
   return event.requestType === "permission" && !event.questions?.length && !event.requiresExplicitApproval && isWebSearchTool(event.tool);
 }
 
-/** The tool a connected-apps frame would run that is not a read, or null when it runs only reads or nothing at all. */
-export function jobConnectorWrite(frame: unknown): string | null {
+/** The tool a connected-apps frame would run that a job turn may not, or null when it runs only Gmail and Calendar reads,
+ * tool discovery or nothing at all. */
+export function jobConnectorRefused(frame: unknown): string | null {
   if (!frame || typeof frame !== "object" || Array.isArray(frame)) return null;
   const { method, params } = frame as { method?: unknown; params?: unknown };
   if (method !== "tools/call") return null;
@@ -47,7 +52,7 @@ export function jobConnectorWrite(frame: unknown): string | null {
   if (TOOL_DISCOVERY.has(call.name)) return null;
   const calls = connectorCallsIn(call.name, call.arguments);
   if (!calls.length) return call.name;
-  return calls.find((one) => !isReadOnlyTool(one.slug))?.slug ?? null;
+  return calls.find((one) => !jobMayRead(one.slug))?.slug ?? null;
 }
 
 export function answerJobRequest(input: {
@@ -63,10 +68,12 @@ export function answerJobRequest(input: {
   const allow = requestId !== undefined && jobMayAllow(event);
   input.say({ role: "bot", kind: "activity", tool: { name: `${allow ? "MausBot allowed" : "MausBot declined"}: ${event.summary.slice(0, 120)}`, ok: allow } });
   input.log({ decision: allow ? "auto-approved" : "auto-denied", tool: event.tool, summary: event.summary });
+  const decision = allow ? { behavior: "allow" as const }
+    : { behavior: event.requestType === "question" ? "answer" as const : "deny" as const, message: JOB_DECLINE };
   void (async () => {
     try {
-      if (requestId === undefined) throw new Error("no request id to answer");
-      await adapter?.respondToRequest(event.threadId, requestId, allow ? { behavior: "allow" } : { behavior: "deny", message: JOB_DECLINE });
+      if (requestId === undefined || !adapter) throw new Error("no request to answer");
+      if (await adapter.respondToRequest(event.threadId, requestId, decision) === "unavailable") throw new Error("nobody took the answer");
     } catch {
       if (event.turnId && input.isCurrent()) await adapter?.interruptTurn(event.threadId, event.turnId).catch(() => {});
     }
@@ -111,8 +118,8 @@ export function createAssistantJobGate(deps: AssistantJobGateDeps) {
 
   function refusesConnectorCall(bot: JobBot, threadId: string, frame: unknown): boolean {
     if (!isJobThread(bot.id, threadId)) return false;
-    const write = jobConnectorWrite(frame);
-    return write !== null && refuse(bot, threadId, write);
+    const refused = jobConnectorRefused(frame);
+    return refused !== null && refuse(bot, threadId, refused);
   }
 
   return { isJobThread, answers, refusesRoute, refusesConnectorCall };
