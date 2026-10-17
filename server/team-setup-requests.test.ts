@@ -153,6 +153,13 @@ describe("reviewed Chief team setup", () => {
     expect(h.store.bots).toEqual(before);
     expect(h.apply).not.toHaveBeenCalled();
   });
+  it("leaves built-in bots out of the workspace bot limit", () => {
+    const h = harness();
+    for (let index = h.store.bots.length; index < 99; index++) h.bot(`Plain ${index}`);
+    h.bot("MausBot", { builtIn: "mausbot" });
+    expect(h.propose([specialist("Mira", "Research")], ["Research"]).requestId).toEqual(expect.any(String));
+    expect(() => h.propose([specialist("Mira", "Research"), specialist("Noor", "Research")], ["Research"])).toThrow(/workspace bot limit/);
+  });
   it("rejects malformed leadership and promotion outside team or peer scope", () => {
     const h = harness();
     expect(() => h.propose([{ action: "update", botId: h.peer.id, fields: { chiefOfStaff: "true" } }])).toThrow();
