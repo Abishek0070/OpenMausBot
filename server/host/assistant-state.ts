@@ -5,9 +5,11 @@ import { writeFileAtomic } from "../atomic.ts";
 
 export const ASSISTANT_STATE_FILE = "assistant.json";
 export const MAX_JUDGED = 500;
+export const MAX_IN_FLIGHT = 100;
+export const MAX_ID_LENGTH = 256;
 
 const at = z.number().finite().nonnegative();
-const id = z.string().min(1).max(256);
+const id = z.string().min(1).max(MAX_ID_LENGTH);
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const item = z.string().min(1).max(8_000);
 
@@ -43,7 +45,7 @@ export const assistantStateSchema = z.object({
   reconnectShown: perService(z.boolean()).optional(),
   notices: z.object({ noWebSearch: z.boolean().optional(), noConnectorTools: z.boolean().optional() }).strict().optional(),
   /** AI jobs started and not finished; after a restart each becomes one error card with Retry. */
-  inFlight: z.array(z.object({ item, at }).strict()).max(100).optional(),
+  inFlight: z.array(z.object({ item, at }).strict()).max(MAX_IN_FLIGHT).optional(),
   retryCards: z.record(id, z.object({ item, threadId: id, messageId: id, answered: z.boolean().optional() }).strict()).optional(),
   /** Hidden job threads, deleted a day after they started. */
   workThreads: z.array(z.object({ threadId: id, at }).strict()).max(1_000).optional(),
