@@ -1479,6 +1479,8 @@ export class Store {
     > = {},
     opts: {
       seedMessages?: boolean;
+      append?: boolean;
+      builtIn?: "mausbot";
     } = {},
   ): BotRecord {
     const toolScope = parseToolScope(profile.toolScope);
@@ -1501,6 +1503,7 @@ export class Store {
       // Restricted from its first frame: no one else is ever told it exists.
       ...(profile.visibility && profile.visibility !== "everyone" ? { visibility: structuredClone(profile.visibility) } : {}),
       ...(toolScope.scope ? { toolScope: toolScope.scope } : {}),
+      ...(opts.builtIn ? { builtIn: opts.builtIn, peers: [] } : {}),
       unread: false,
       modelSelection: this.newBotSelection(profile.modelSelection),
       resumeCursors: {},
@@ -1519,8 +1522,8 @@ export class Store {
       busy: false,
     }];
     // Persist before publishing or greeting, so an interrupted creation cannot inherit tools.
-    this.saveBots([bot, ...this.bots]);
-    this.bots.unshift(bot);
+    this.saveBots(opts.append ? [...this.bots, bot] : [bot, ...this.bots]);
+    if (opts.append) this.bots.push(bot); else this.bots.unshift(bot);
     try {
       writeSoulMirror(bot.id, bot.soul ?? "");
     } catch (e) {
@@ -2469,10 +2472,5 @@ export class Store {
 
   needsSeed() {
     return this.bots.length === 0;
-  }
-
-  seedIfEmpty() {
-    if (!this.needsSeed()) return;
-    this.createBot();
   }
 }

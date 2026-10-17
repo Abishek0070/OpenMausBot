@@ -52,7 +52,9 @@ export type Surface = "cloud" | "vm" | "local" | "browser";
 
 export type MausColor =
   | "green" | "blue" | "red" | "orange" | "purple" | "cyan" | "pink"
-  | "yellow" | "teal" | "coral";
+  | "yellow" | "teal" | "coral"
+  /** MausBot's own (#A8ADB4). No other bot is given it or may choose it. A client that does not know a colour draws its default. */
+  | "silver";
 
 /** The face a bot rests on, as one of the engine's state names. */
 export type MausExpression = string;
@@ -317,6 +319,9 @@ export interface WireBot {
   pinnedMessageId?: string;
   /** The coordinator for this bot's sidebar section. */
   chiefOfStaff?: boolean;
+  /** A bot the app provides: "mausbot" is the owner's personal assistant. It cannot be deleted, hidden, renamed or
+   * restyled, and it is never a Chief. Absent for every other bot. */
+  builtIn?: "mausbot";
   /** Owner-selected additional teams this Chief may coordinate. */
   managedSections?: string[];
   /** Pause for human approval before this bot talks to a peer. */

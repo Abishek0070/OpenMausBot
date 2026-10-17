@@ -57,7 +57,8 @@ export const MAUS_COLOR_NAMES = [
   "coral",
 ] as const;
 
-export type MausColor = (typeof MAUS_COLOR_NAMES)[number];
+/** The ten colours a person can pick. MausBot's silver is drawn but never offered. */
+export type MausColor = (typeof MAUS_COLOR_NAMES)[number] | "silver";
 
 export const MAUS_COLORS = {
   green: "#009957",
@@ -70,6 +71,7 @@ export const MAUS_COLORS = {
   yellow: "#D8A729",
   teal: "#01A492",
   coral: "#E5634E",
+  silver: "#A8ADB4",
 } satisfies Record<MausColor, string>;
 
 export const MAUS_MOTIONS = [

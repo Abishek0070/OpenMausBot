@@ -17,6 +17,14 @@ describe("team manifests", () => {
     delete manifest.team.members[0].soul;
     expect(importedMemberProfile(parseTeamManifest(manifest).team.members[0], new Set())).not.toHaveProperty("soul");
   });
+  it("leaves a built-in bot out of a team manifest", () => {
+    const manifest = createTeamManifest({ name: "Crew", memberIds: ["maus", "one"] }, [
+      { id: "maus", name: "MausBot", title: "", description: "", color: "silver", builtIn: "mausbot" },
+      { id: "one", name: "One", title: "", description: "", color: "blue" },
+    ]);
+    expect(manifest.team.members.map((member) => member.name)).toEqual(["One"]);
+    expect(JSON.stringify(manifest)).not.toContain("silver");
+  });
   it("exports portable member keys without room or runtime state", () => {
     const manifest = createTeamManifest(
       {

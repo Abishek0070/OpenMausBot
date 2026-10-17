@@ -3196,7 +3196,7 @@ for (const pending of startupCatalogs) {
     broadcast({ kind: "config", ...configStatus() });
   }, () => {});
 }
-store.seedIfEmpty();
+if (store.needsSeed()) store.createBot();
 hostedModels?.reconcile(store);
 if (skillsLibraryEnabled(cfg)) {
   try {

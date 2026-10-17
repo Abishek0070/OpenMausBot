@@ -1516,16 +1516,17 @@ describe("Store", () => {
     expect(reloaded.bot(bot.id)?.resumeCursors).toEqual({ claude: "sess-abc", codex: "thread-xyz" });
   });
 
-  it("seedIfEmpty creates exactly one starter bot, once", () => {
+  it("adds a built-in bot after the others, without a greeting and reaching no peers, and keeps it across a restart", () => {
     const store = new Store(selection);
-    store.seedIfEmpty();
-    expect(store.bots).toHaveLength(1);
-    store.seedIfEmpty();
-    expect(store.bots).toHaveLength(1);
-
+    const first = store.createBot({ name: "First" });
+    const builtIn = store.createBot({ name: "MausBot", color: "silver", visibility: "admins" }, { seedMessages: false, append: true, builtIn: "mausbot" });
+    expect(store.bots.map((bot) => bot.id)).toEqual([first.id, builtIn.id]);
+    expect(builtIn).toMatchObject({ builtIn: "mausbot", peers: [], color: "silver", visibility: "admins" });
+    expect(store.messagesFor(builtIn.threadId)).toEqual([]);
     const reloaded = new Store(selection);
-    reloaded.seedIfEmpty();
-    expect(reloaded.bots).toHaveLength(1);
+    expect(reloaded.bots.map((bot) => bot.id)).toEqual([first.id, builtIn.id]);
+    expect(reloaded.bot(builtIn.id)).toMatchObject({ builtIn: "mausbot", color: "silver", peers: [] });
+    expect(reloaded.bot(first.id)).not.toHaveProperty("builtIn");
   });
 
   it("chains appended messages and keeps the newest as active leaf", () => {

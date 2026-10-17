@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { approvalModeFor, isApprovalMode, type ApprovalMode } from "../../shared/approval-mode.ts";
 import { normalizeConnectorScopes } from "../../shared/connector-scopes.ts";
+import { isPickableColor, MAUSBOT_COLOR } from "../../shared/maus-colors.ts";
 import { normalizeOutboundPolicy } from "../../shared/outbound.ts";
 import { parseToolScope, toolScopeWidens } from "../../shared/tool-scope.ts";
 import type { WireBot, WireGroup } from "../../shared/wire.ts";
@@ -154,6 +155,10 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           else if (trimmed.length > 60) return json(res, 400, { error: "section must be at most 60 characters" });
           else section = trimmed;
         }
+      }
+      if (body.color !== undefined && !isPickableColor(body.color) &&
+          !(body.color === MAUSBOT_COLOR && existingBot?.builtIn === "mausbot" && existingBot.color === MAUSBOT_COLOR)) {
+        return json(res, 400, { error: "color must be one of the mascot colours" });
       }
       for (const key of ["unread", "cloudBackend", "color", "mascotExpression", "mascotBody", "pinned", "hidden"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];

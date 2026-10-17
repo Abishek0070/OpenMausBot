@@ -1,3 +1,4 @@
+import type { PickableMausColor } from "../shared/maus-colors.ts";
 import { parseBotPackage, type BotPackageDefinition, type BotPackagePlaybook, type BotPackageSkill, type ParsedBotPackage } from "./bot-package.ts";
 import type { DefaultsPreset, PublishedLibrary } from "./presets.ts";
 import type { PublishedTeam } from "./published-teams.ts";
@@ -155,7 +156,7 @@ export function createBotPackageExport(input: {
   routines: Routine[];
   skillsByBot?: ReadonlyMap<string, readonly ExportablePackageSkill[]>;
 }): ParsedBotPackage {
-  const bots = input.bots.filter((bot) => !bot.hidden);
+  const bots = input.bots.filter((bot) => !bot.hidden && !bot.builtIn);
   if (!bots.length) throw new Error("Create a bot before exporting your package");
 
   const packageKeys = new Set<string>();
@@ -204,7 +205,7 @@ export function createBotPackageExport(input: {
 
   const id = portableKey(input.name, "openmaus-package", new Set());
   const agents: BotPackageDefinition["agents"] = bots.map((bot) => {
-    const appearance: BotPackageDefinition["agents"][number]["appearance"] = { color: bot.color };
+    const appearance: BotPackageDefinition["agents"][number]["appearance"] = { color: bot.color as PickableMausColor };
     if (bot.mascotExpression) appearance.mascotExpression = bot.mascotExpression;
     if (bot.mascotBody) appearance.mascotBody = bot.mascotBody;
     const agent: BotPackageDefinition["agents"][number] = {
@@ -483,7 +484,7 @@ function refuseSkillConflicts(bots: readonly BotRecord[], skillsByBot: ReadonlyM
 /** One team without its chat history; every text part is redacted and the result goes through the import parser. */
 export function createTeamPackageExport(input: TeamExportInput): TeamExportResult {
   const team = teamOf(input.team);
-  const bots = input.bots.filter((bot) => !bot.hidden && teamOf(bot.section) === team);
+  const bots = input.bots.filter((bot) => !bot.hidden && !bot.builtIn && teamOf(bot.section) === team);
   if (!bots.length) throw new TeamExportError("Add a bot to this team before sharing it.");
   const skipped: TeamExportSkip[] = [...(input.skipped ?? [])];
 
@@ -561,7 +562,7 @@ export function createTeamPackageExport(input: TeamExportInput): TeamExportResul
 
   const agents: PackageAgent[] = bots.map((bot) => {
     const key = botKeys.get(bot.id)!;
-    const appearance: PackageAgent["appearance"] = { color: bot.color };
+    const appearance: PackageAgent["appearance"] = { color: bot.color as PickableMausColor };
     if (bot.mascotExpression) appearance.mascotExpression = bot.mascotExpression;
     if (bot.mascotBody) appearance.mascotBody = bot.mascotBody;
     const offered = input.avatars?.[bot.id];

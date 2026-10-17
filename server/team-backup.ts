@@ -47,7 +47,8 @@ function messageText(message: Message): string {
 }
 
 export function createTeamBackup(store: Store, routines: Routine[], name: string): TeamBackup {
-  const botIds = new Set(store.bots.map((bot) => bot.id));
+  const backedUp = store.bots.filter((bot) => !bot.builtIn);
+  const botIds = new Set(backedUp.map((bot) => bot.id));
   const warnings: string[] = [];
   const history = (record: BotRecord | GroupRecord): BackupTask[] => {
     const tasks = record.tasks?.length ? record.tasks : [{ threadId: record.threadId, title: "Conversation", createdAt: record.createdAt }];
@@ -92,6 +93,7 @@ export function createTeamBackup(store: Store, routines: Routine[], name: string
     };
   });
   const validRoutines = routines.filter((routine) => {
+    if (store.bot(routine.botId)?.builtIn) return false;
     const room = groups.find((group) => group.key === routine.groupId);
     const valid = botIds.has(routine.botId) && (routine.target !== "room-goal" || (room && !room.dm && room.memberIds.includes(routine.botId)));
     if (!valid) warnings.push(`Routine “${routine.name}” is not included because its bot, room or coordinator was deleted.`);
@@ -100,7 +102,7 @@ export function createTeamBackup(store: Store, routines: Routine[], name: string
   const document = parseTeamBackup({
     format: "openmaus.backup", version: 1, name, exportedAt: Date.now(),
     warnings,
-    bots: store.bots.map((bot) => ({
+    bots: backedUp.map((bot) => ({
       key: bot.id, name: bot.name, title: bot.title, description: bot.description, soul: bot.soul,
       section: bot.section, color: bot.color,
       mascotExpression: bot.mascotExpression ?? undefined, mascotBody: bot.mascotBody ?? undefined,

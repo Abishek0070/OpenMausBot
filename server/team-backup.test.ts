@@ -76,6 +76,18 @@ describe("additive portable team backups", () => {
     expect(() => parseTeamBackup(invalid)).toThrow();
   });
 
+  it("leaves a built-in bot and its routines out of a backup, with no warning about them", () => {
+    const { store, routines, chief } = fixture();
+    const builtIn = store.createBot({ name: "MausBot", color: "silver", visibility: "admins" }, { seedMessages: false, append: true, builtIn: "mausbot" });
+    routines.create({ name: "Brief", prompt: "Recap", botId: builtIn.id, enabled: true, schedule: { type: "daily", time: "08:00", weekdays: [1] } });
+    const backup = createTeamBackup(store, routines.listRoutines(), "With MausBot");
+    expect(backup.bots.map((bot) => bot.key)).not.toContain(builtIn.id);
+    expect(backup.bots.map((bot) => bot.key)).toContain(chief.id);
+    expect(backup.routines.map((routine) => routine.name)).not.toContain("Brief");
+    expect(backup.warnings).toEqual([]);
+    expect(JSON.stringify(backup)).not.toContain("silver");
+  });
+
   it("carries a bot's never-use-the-helper switch through backup and import, so its restored notes and chats stay off the helper", () => {
     const { store, routines, chief, scout } = fixture();
     store.patchBot(chief.id, { helperModel: false });

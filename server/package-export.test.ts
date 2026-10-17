@@ -317,6 +317,16 @@ describe("whole-team export (package v2)", () => {
     expect(result.filename).toBe("sales-desk-1.0.0.openmaus.json");
   });
 
+  it("leaves a built-in bot out of a team export and a package export", () => {
+    const input = fixture();
+    const builtIn = { ...input.bots[0]!, id: "maus", name: "MausBot", color: "silver", builtIn: "mausbot" } as BotRecord;
+    const withBuiltIn = { ...input, bots: [...input.bots, builtIn] };
+    expect(createTeamPackageExport(withBuiltIn).document.package.agents.map((agent) => agent.name)).toEqual(["Morgan", "Scout"]);
+    const exported = createBotPackageExport({ name: "Crew", groups: [], routines: [], bots: [builtIn, input.bots[0]!] });
+    expect(exported.package.agents.map((agent) => agent.name)).toEqual(["Morgan"]);
+    expect(JSON.stringify(exported)).not.toContain("silver");
+  });
+
   it("carries Record browser steps for the bots that have it on, and nothing for the rest", () => {
     const input = fixture();
     input.bots[1] = { ...input.bots[1]!, recordBrowserSteps: true };
