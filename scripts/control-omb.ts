@@ -17,7 +17,9 @@ import { freePortBlock } from "../server/testing/ports.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 /** Outside the bot name pool, so no suite can plan a bot that collides with the
- * starter. */
+ * starter. The launcher gives it to the seeded Chief of Staff and un-appoints it,
+ * so a fixture starts with one plain bot, plus MausBot, which stays silent until a
+ * presence call. */
 export const FIXTURE_STARTER_BOT_NAME = "Fixture Starter";
 const FAKE_CLI = join(ROOT, "server", "testing", "fake-claude-cli.ts");
 
@@ -324,7 +326,6 @@ export async function launchVerificationServer(
     throw error;
   }
 
-  // Pinned: the random starter name shares a pool with names e2e suites plan.
   try {
     // First-run filesystem work can exceed a second on Windows.
     const timeout = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
@@ -332,19 +333,28 @@ export async function launchVerificationServer(
       headers: { origin: url },
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
-    const body = list.ok ? await list.json() as { bots?: Array<{ id: string }> } : null;
+    const body = list.ok ? await list.json() as { bots?: Array<{ id: string; builtIn?: string }> } : null;
     const seeded = body?.bots;
-    if (!Array.isArray(seeded) || seeded.length !== 1) {
-      throw new Error(`verification fixture did not seed exactly one starter bot; see ${logPath}`);
+    const starters = Array.isArray(seeded) ? seeded.filter((bot) => bot.builtIn === undefined) : [];
+    if (!Array.isArray(seeded) || starters.length !== 1 || seeded.length !== 2) {
+      throw new Error(`verification fixture did not seed one starter bot and MausBot; see ${logPath}`);
     }
     const renameTimeout = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
-    const rename = await fetch(`${url}/api/bots/${seeded[0].id}/profile`, {
+    const rename = await fetch(`${url}/api/bots/${starters[0]!.id}/profile`, {
       method: "PATCH",
       headers: { "content-type": "application/json", origin: url },
       body: JSON.stringify({ name: FIXTURE_STARTER_BOT_NAME }),
       signal: signal ? AbortSignal.any([signal, renameTimeout]) : renameTimeout,
     });
     if (!rename.ok) throw new Error(`verification starter rename failed (${rename.status}); see ${logPath}`);
+    const plainTimeout = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
+    const plain = await fetch(`${url}/api/bots/${starters[0]!.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", origin: url },
+      body: JSON.stringify({ chiefOfStaff: false }),
+      signal: signal ? AbortSignal.any([signal, plainTimeout]) : plainTimeout,
+    });
+    if (!plain.ok) throw new Error(`verification starter un-appoint failed (${plain.status}); see ${logPath}`);
   } catch (error) {
     await waitForExit(child, { signal: "SIGTERM" });
     await removeTempDir(dataDir);

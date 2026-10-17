@@ -170,6 +170,18 @@ describe("MausBot's intro", () => {
     expect(w.thread().map((line) => line.text)).toEqual([`${MAUSBOT_INTRO}\n\n${MAUSBOT_NO_APPS}`]);
   });
 
+  it("never rejects when the connect card fails after the connected-apps check, for presences that arrive together", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ bots: [{ id: "chief", name: "Chief of Staff", chiefOfStaff: true }] });
+    const post = w.store.appendMessage.getMockImplementation()!;
+    w.store.appendMessage.mockImplementationOnce(post).mockImplementationOnce(() => { throw new Error("disk full"); });
+    await expect(Promise.all([w.intro.introduce(), w.intro.introduce()])).resolves.toEqual([undefined, undefined]);
+    expect(warn.mock.calls.filter(([line]) => String(line).includes("disk full"))).toHaveLength(2);
+    expect(w.state.get().connectOffer).toBeUndefined();
+    await w.intro.introduce();
+    expect(w.thread().map((line) => line.text)).toEqual([MAUSBOT_INTRO, CONNECT_LINE, "Connect Gmail to continue.", "Connect Google Calendar to continue."]);
+  });
+
   it("logs a failed brief.json save and still posts each line once", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const w = world({ bots: [{ id: "tango", name: "Tango" }] });

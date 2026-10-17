@@ -246,7 +246,8 @@ import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine }
 import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GATE } from "./escalations.ts";
 import { createChiefNotices } from "./host/chief-notices.ts";
 import { createChiefBrief } from "./host/chief-brief.ts";
-import { isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
+import { findMausBot, isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
+import { createMausBotIntro } from "./host/mausbot-intro.ts";
 import { briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
 import { needsInputQuestion } from "./runtime-coordinator.ts";
 import { RETRY_BLOCKED } from "./incidents.ts";
@@ -9477,7 +9478,8 @@ async function stopBotForEmergencyApprovalDowngrade(botId: string): Promise<void
 }
 
 const chiefBrief = createChiefBrief({ store, dataDir: DATA_DIR, threadOwner, hosted: HOSTED_WORKSPACE, threadBusy, settings: () => ({ recap: briefRecapEnabled(cfg.features), awayMs: briefAwayMs(cfg.features) }),
-  routineRuns: (since) => (routines?.listRuns() ?? []).filter((run) => run.finishedAt === undefined ? run.status === "running" || run.status === "waiting" : run.finishedAt >= since) });
+  routineRuns: (since) => (routines?.listRuns() ?? []).filter((run) => run.finishedAt === undefined ? run.status === "running" || run.status === "waiting" : run.finishedAt >= since), mausbot: () => findMausBot(store.bots.filter((bot) => !bot.hidden)), onPresence: () => { void mausbotIntro.introduce(); } });
+const mausbotIntro = createMausBotIntro({ store, state: chiefBrief.state, hosted: HOSTED_WORKSPACE, maxBots: MAX_WORKSPACE_BOTS, mainThread: (bot) => chiefBrief.chiefThread(bot), turnsByBot: chiefBrief.turnsByBot, configured: () => composio.configured(cfg), connected: () => composio.connectedServices(cfg), newId });
 routines = new RoutineManager({
   emit: broadcast,
   launchId: DESKTOP_MANAGED && /^[\w-]{1,100}$/.test(process.env.OMB_DESKTOP_LAUNCH_ID ?? "")
@@ -10495,7 +10497,7 @@ const approvalBus: ApprovalBus = { store, broadcast, notify, autoApply: fullAcce
   onPeerApprovalPending: (from, target, action, sourceThreadId, message) => void reportEscalation({
     kind: "peer-approval", bot: from, threadId: sourceThreadId, gate: peerApprovalGate(action, target.name), reason: message, alreadyNotified: true }) };
 
-const { quotaSwitch, harnessCardOutcome } = createQuotaSwitchHost({ store, coordinator, registry, turnStops, approvalBus, hostedModels, providerConfigs, policyModelRefusal, checkedTaskModelSwitch, threadBusy, directRequestOwners, startOrQueueDirectMessage });
+const { quotaSwitch, harnessCardOutcome } = createQuotaSwitchHost({ store, coordinator, registry, turnStops, approvalBus, hostedModels, providerConfigs, policyModelRefusal, checkedTaskModelSwitch, threadBusy, directRequestOwners, startOrQueueDirectMessage, harnessCards: [mausbotIntro.answerCard] });
 
 // Peer approvals live only in memory: settle every peer card still open on disk, or it locks the composer forever.
 {

@@ -95,6 +95,11 @@ describe("surface pin provenance against the real server", () => {
       if (proc.exitCode !== null) throw new Error(`server exited during boot:\n${output}`);
       try { return (await fetch(base + "/api/health")).ok; } catch { return false; }
     }, Boolean);
+    // A fresh install's starter is the Chief: a failed turn here would wake it with an incident, and a restart resumes
+    // that turn on this fixture engine, which overwrites the turn dump these checks read.
+    for (const chief of (await apiOk("GET", "/api/bots?messages=0")).bots.filter((bot: any) => bot.chiefOfStaff)) {
+      await apiOk("PATCH", `/api/bots/${chief.id}`, { chiefOfStaff: false });
+    }
   }
   async function stop() {
     if (!child) return;

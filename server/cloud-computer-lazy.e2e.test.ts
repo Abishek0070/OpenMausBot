@@ -219,6 +219,10 @@ describe("a cloud computer starts only when the bot uses it", () => {
       if (child!.exitCode !== null) throw new Error(`the server exited:\n${output}`);
       try { return (await fetch(`${base}/api/health`)).ok; } catch { return false; }
     }, Boolean, 30_000);
+    // A fresh install's starter is the Chief, and a teammate's failed turn wakes it with an incident: these checks read the
+    // next engine call, so no Chief may take one.
+    const [starter] = (await apiOk("GET", "/api/bots?messages=0")).bots;
+    await apiOk("PATCH", `/api/bots/${starter.id}`, { chiefOfStaff: false });
     events = await openSse(`${base}/api/events`);
     await events.until(frame => frame.kind === "hello");
   }, 60_000);

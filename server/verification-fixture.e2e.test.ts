@@ -3,8 +3,7 @@ import { dirname, join } from "node:path";
 import { expect, it } from "vitest";
 import { FIXTURE_STARTER_BOT_NAME, launchVerificationServer } from "../scripts/control-omb.ts";
 
-it("pins the fixture starter bot's name deterministically (#1257)", async () => {
-  // The first-run seed draws a random name from server/names.ts, which includes "Quill": both launches must see the pinned name.
+it("pins the fixture starter bot's name deterministically (#1257), beside a silent MausBot", async () => {
   for (let launch = 0; launch < 2; launch++) {
     const fixture = await launchVerificationServer({});
     try {
@@ -13,9 +12,8 @@ it("pins the fixture starter bot's name deterministically (#1257)", async () => 
         signal: AbortSignal.timeout(10_000),
       });
       expect(response.ok).toBe(true);
-      const bots = ((await response.json()) as { bots: Array<{ name: string }> }).bots;
-      expect(bots).toHaveLength(1);
-      expect(bots[0].name).toBe(FIXTURE_STARTER_BOT_NAME);
+      const bots = ((await response.json()) as { bots: Array<{ name: string; builtIn?: string; chiefOfStaff?: boolean }> }).bots;
+      expect(bots.map((bot) => [bot.name, bot.builtIn, Boolean(bot.chiefOfStaff)])).toEqual([[FIXTURE_STARTER_BOT_NAME, undefined, false], ["MausBot", "mausbot", false]]);
     } finally {
       await fixture.close();
     }
