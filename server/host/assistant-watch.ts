@@ -52,9 +52,9 @@ const RETRY_CLEARS: Record<string, ReadonlyArray<keyof MeetingRecord>> = {
 };
 
 type Job =
-  | { kind: "prep"; item: string; event: CalendarEvent; short: boolean; turn: string }
-  | { kind: "repeat"; item: string; event: CalendarEvent; previousStart: number }
-  | { kind: "update"; item: string; event: CalendarEvent; previous: MeetingRecord; turn: string }
+  | { kind: "prep"; item: string; event: CalendarEvent; short: boolean; turn: string; delivered?: boolean }
+  | { kind: "repeat"; item: string; event: CalendarEvent; previousStart: number; turn?: string; delivered?: boolean }
+  | { kind: "update"; item: string; event: CalendarEvent; previous: MeetingRecord; turn: string; delivered?: boolean }
   | { kind: "triage"; item: string; batch: EmailHeader[]; carded: Set<string> };
 
 const FAILED: Record<Job["kind"], (title: string) => string> = {
@@ -95,7 +95,7 @@ const kindOf = (item: string): string => item.slice(0, item.indexOf(":"));
 const subjectOf = (item: string): string => item.slice(item.indexOf(":") + 1);
 const triageItem = (batch: readonly EmailHeader[]): string => `triage:${Math.min(...batch.map((email) => email.at))}:${batch.map((email) => email.id).join(",")}`;
 const titleOf = (job: Job): string => (job.kind === "triage" ? "" : clip(job.event.title, TITLE_MAX));
-const turnOf = (job: Job): string | undefined => (job.kind === "prep" || job.kind === "update" ? job.turn : undefined);
+const turnOf = (job: Job): string | undefined => (job.kind === "triage" ? undefined : job.turn);
 const storable = (value: string | undefined): boolean => value === undefined || (value.length >= 1 && value.length <= MAX_ID_LENGTH);
 const meetingsKey = (list: readonly TodayMeeting[]): string => JSON.stringify(list.map((meeting) => [meeting.title, meeting.start, meeting.end, meeting.joinUrl ?? "", meeting.allDay === true]));
 
@@ -284,11 +284,15 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   function threw(job: Job): void {
     endFlight(job.item);
+    if (job.kind === "triage") {
+      const uncarded = job.batch.filter((email) => !job.carded.has(email.id));
+      if (uncarded.length) reopen(triageItem(uncarded));
+      return;
+    }
+    if (job.delivered) return;
     const here = context();
     if (!here) return abandon(job, turnOf(job));
-    if (job.kind !== "triage") return failed(here.bot, here.threadId, job, "something went wrong on my side");
-    const uncarded = job.batch.filter((email) => !job.carded.has(email.id));
-    if (uncarded.length) reopen(triageItem(uncarded));
+    failed(here.bot, here.threadId, job, "something went wrong on my side");
   }
 
   async function run(bot: BotRecord, title: string, prompt: string): Promise<JobResult> {
@@ -373,7 +377,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     if (!reply) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
     const related = openTarget(bot, reply.relatedThreadId);
     remember(cardEvents, job.event.id, job.event);
-    post(bot, threadId, prepCard({ event: job.event, brief: reply.brief, ...(related ? { related } : {}), timeZone: zone, now: now() }));
+    if (post(bot, threadId, prepCard({ event: job.event, brief: reply.brief, ...(related ? { related } : {}), timeZone: zone, now: now() }))) job.delivered = true;
     setMeeting(job.event.id, { preppedAt: now() });
     if (reply.noWebSearch && !current().notices?.noWebSearch) {
       say(threadId, NO_WEB_SEARCH);
@@ -395,6 +399,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       setMeeting(job.event.id, { preppedAt: now() });
       return;
     }
+    job.turn = turn;
     const result = await run(bot, `Since last time: ${job.event.title}`, repeatPrompt({ event: job.event, previousStart: job.previousStart, timeZone: deps.timeZone(), now: now(), ...tools }));
     keepThread(result.threadId);
     if (!context()) return abandon(job, turn);
@@ -402,6 +407,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const line = result.ok ? lineReply(result.reply, "line") : null;
     if (line === null) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
     if (line) remember(sinceLastTime, job.event.id, line);
+    job.delivered = true;
     setMeeting(job.event.id, { preppedAt: now() });
   }
 
@@ -414,7 +420,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const text = result.ok ? lineReply(result.reply, "update") : null;
     if (!text) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
     remember(cardEvents, job.event.id, job.event);
-    post(bot, threadId, updateCard({ event: job.event, text, timeZone: zone, now: now() }));
+    if (post(bot, threadId, updateCard({ event: job.event, text, timeZone: zone, now: now() }))) job.delivered = true;
     setMeeting(job.event.id, { start: job.event.start, fingerprint: fingerprint(job.event), updateStartedAt: undefined });
   }
 
@@ -520,7 +526,12 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       return;
     }
     const shown = todayMeetings(day, at, zone);
-    const team = deps.team(at - 24 * HOUR) ?? undefined;
+    let team: TodayPost["team"];
+    try {
+      team = deps.team(at - 24 * HOUR) ?? undefined;
+    } catch (error) {
+      console.warn(`assistant: the team line was left out of Today: ${failure(error)}`);
+    }
     state.patch({ lastTodayDate: day });
     const emails = flagged.map((email) => ({ from: email.from, subject: email.subject }));
     flagged = [];

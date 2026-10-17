@@ -620,7 +620,8 @@ describe("a throw inside a job or a step", () => {
 
   it("still runs queued jobs when Today throws, and a return still reads", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], deps: { team: () => { throw new Error("the recap broke"); } } });
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
+    w.live.refuseAppend = (message) => message.kind === "widget" && JSON.stringify(message.widget).includes('"title":"Today"');
     w.watch.onPresence({ source: "desktop", returned: false });
     await w.settle();
     expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a"]);
@@ -629,6 +630,55 @@ describe("a throw inside a job or a step", () => {
     w.watch.onPresence({ source: "desktop", returned: true });
     await w.watch.idle();
     expect(w.sources.events).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a failing piece after delivery", () => {
+  it("still posts Today, without the team line, when the team line throws", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], deps: { team: () => { throw new Error("the recap broke"); } } });
+    w.watch.onPresence({ source: "desktop", returned: false });
+    await w.settle();
+    expect(w.todays()).toHaveLength(1);
+    const today = JSON.stringify(w.todays()[0]!.widget);
+    expect(today).toContain("Meeting a");
+    expect(today).not.toContain('"Team"');
+  });
+
+  it("adds no Retry card to a prep that posted its card and then threw, whether or not the switch went off", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const switchOff of [false, true]) {
+      const w = world({ events: [meeting("a", NOW + 2 * HOUR)], reply: () => ({ ok: true, threadId: "", reply: JSON.stringify({ brief: "Brief", noWebSearch: true }) }) });
+      w.live.refuseAppend = (message) => {
+        if (message.text !== NO_WEB_SEARCH) return false;
+        if (switchOff) w.switchOff();
+        return true;
+      };
+      await w.settle();
+      expect(w.titles()).toEqual(["Prep: Meeting a"]);
+      expect(w.retries()).toEqual([]);
+      expect(w.watch.state.get().meetings?.a?.preppedAt).toBe(NOW);
+      expect(w.watch.state.get().meetings?.a?.failedAt).toBeUndefined();
+      expect(w.watch.state.get().dayTurns).toBe(1);
+    }
+  });
+
+  it("gives back the turn of a since-last-time note that threw while the switch was off", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const earlier = meeting("w1", NOW - 7 * 24 * HOUR, { seriesId: "weekly" });
+    const w = world({ events: [meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" })], reply: (title, prompt) => { w.switchOff(); return defaultReply(title, prompt); } });
+    w.watch.state.patch({ meetings: { w1: { start: earlier.start, fingerprint: fingerprint(earlier), seriesId: "weekly", preppedAt: earlier.start - HOUR } } });
+    w.live.newMailFromAttendees = true;
+    const patch = w.watch.state.patch.bind(w.watch.state);
+    vi.spyOn(w.watch.state, "patch").mockImplementation((changes) => {
+      if (changes.workThreads) throw new Error("disk full");
+      return patch(changes);
+    });
+    await w.settle();
+    expect(w.jobs.map((job) => job.title)).toEqual(["Since last time: Meeting w2"]);
+    expect(w.watch.state.get().dayTurns).toBe(0);
+    expect(w.retries()).toEqual([]);
+    expect(w.watch.state.get().meetings?.w2?.prepStartedAt).toBeUndefined();
   });
 });
 
