@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, utime
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { builtInBrowserEnabled, routinesInConversationEnabled } from "./feature-toggles.ts";
 import type { JsonValue } from "./schema.ts";
 
 import { cacheUntilConfigChanges,
@@ -26,11 +27,9 @@ import { cacheUntilConfigChanges,
   threadEventLogMaxBytes,
   threadEventLogRetentionDays,
   showToolCallsEnabled,
-  routinesInConversationEnabled,
   saveConfig,
   skillAuthoringEnabled,
   sharedComputersEnabled,
-  builtInBrowserEnabled,
   browserProfilePartitionId,
   browserProfilePartitionTarget,
   browserProfileReplacementConflict,

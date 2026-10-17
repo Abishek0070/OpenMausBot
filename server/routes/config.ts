@@ -10,10 +10,10 @@ import type { BrowserRuntime } from "../browser-runtime.ts";
 import { boatAccountResourceChangeError, vpsAliasResourceChangeError } from "../cloud-backend.ts";
 import { CLOUD_PERSONAL_REFUSAL } from "../cloud-owner.ts";
 import * as composio from "../composio.ts";
+import { builtInBrowserEnabled } from "../feature-toggles.ts";
 import {
   browserProfilePartitionTarget,
   browserProfileReplacementConflict,
-  builtInBrowserEnabled,
   changedInstanceIds,
   engineLaunches,
   loadConfig,

@@ -4,7 +4,8 @@
 import { existsSync } from "node:fs";
 
 import type { AppConfig } from "../config.ts";
-import { browserEngineAttachCdpUrl, browserProfilePartitionTarget, builtInBrowserEnabled, DATA_DIR } from "../config.ts";
+import { browserEngineAttachCdpUrl, browserProfilePartitionTarget, DATA_DIR } from "../config.ts";
+import { builtInBrowserEnabled } from "../feature-toggles.ts";
 import { BrowserRuntime, TransportError, attachesToChrome, browserRuntimeEnv, formatBrowserTiming } from "../browser-runtime.ts";
 import { RelayTimeout, relayCommand, relayInput } from "../browser-relay.ts";
 import { browserSteps } from "../browser-steps.ts";

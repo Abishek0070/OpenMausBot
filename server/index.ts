@@ -165,7 +165,6 @@ import {
   threadEventLogRetentionDays,
   saveConfig,
   showToolCallsEnabled,
-  routinesInConversationEnabled,
   claudeUserMcpEnabled,
   skillAuthoringEnabled,
   skillReviewEnabled,
@@ -175,7 +174,6 @@ import {
   roomMemoryCaptureEnabled,
   tidyHour,
   sharedComputersEnabled,
-  builtInBrowserEnabled,
   llmThreadTitlesEnabled,
   browserProfilePartitionTarget,
   stripWorkspaceCredentialEnv,
@@ -454,6 +452,7 @@ import { createScreenFrameSource, type ScreenCapture } from "./screen-frame-sour
 import { screenFrameHash, screenSurfaceForTool, screenTouchingTool, settledFrameIsNews } from "./screen-frame-gate.ts";
 import { asSchedule, RoutineRequestService } from "./routine-requests.ts";
 import { routineRunCard, routineRunFallbackText } from "./routine-run-card.ts";
+import { builtInBrowserEnabled, routinesInConversationEnabled } from "./feature-toggles.ts";
 import { directApply, UNDO_STALE, type DirectApply } from "./direct-apply.ts";
 import { createAgentCard } from "./chat-widgets.ts";
 import { buildBotOverview, type BotOverview, connectedAppsFacts } from "./bot-overview.ts";
