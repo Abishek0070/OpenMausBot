@@ -8,6 +8,7 @@ import { boundRetentionDays, decisionsCsv, readDecisionRange, readDecisions } fr
 import { editionForMembers, editionStatus, entitled } from "../enterprise.ts";
 import { fleetAvailable, fleetRequest, fleetSocketPath } from "../fleet-client.ts";
 import { noteKeyAccepted, noteKeyRejected } from "../key-rejections.ts";
+import { isMausBot } from "../mausbot.ts";
 import type { OutboundCounts } from "../outbound-counts.ts";
 import { loadPlanUsage, planAccountsFromInstances } from "../plan-usage.ts";
 import { checkProviderKey, PROVIDER_KEY_KINDS, providerBaseUrl, type ProviderKeyKind } from "../provider-key-check.ts";
@@ -224,7 +225,7 @@ export function createStatusRoutes(deps: StatusRouteDeps): RouteHandler {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      return json(res, 200, { policy: bot.outbound ?? DEFAULT_OUTBOUND_POLICY, today: outboundCounts.today(bot.id) });
+      return json(res, 200, { policy: isMausBot(bot) ? DEFAULT_OUTBOUND_POLICY : bot.outbound ?? DEFAULT_OUTBOUND_POLICY, today: outboundCounts.today(bot.id) });
     }
     return PASS;
   };

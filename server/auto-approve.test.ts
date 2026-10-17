@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import englishCatalog from "../src/locales/en.json" with { type: "json" };
+import { approvalModeFor } from "../shared/approval-mode.ts";
 
 import {
   HELD_NOTE,
@@ -33,6 +34,13 @@ describe("Full access delivery", () => {
 });
 
 describe("autoVerdict", () => {
+  it("asks before a shell or user-MCP write by MausBot whose record says Full access", () => {
+    const storedFull = { builtIn: "mausbot", approvalMode: "full" };
+    for (const tool of ["Bash", "mcp__notes__write_file"]) {
+      expect(autoVerdict(approvalModeFor(storedFull), tool), tool).toEqual({ approve: null, source: "native-approval" });
+      expect(autoVerdict(approvalModeFor({ approvalMode: "full" }), tool).source, tool).toBe("full-access");
+    }
+  });
   it("never uses a saved command grant to silently send on the person's behalf", () => {
     for (const mode of ["ask", "edits", "auto", "custom"] as const) {
       expect(autoVerdict(mode, "mcp__composio__GMAIL_SEND_DRAFT", { commandAllowed: true })).toEqual({ approve: null, source: "outbound-guard" });

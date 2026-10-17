@@ -4,7 +4,9 @@ import { HIGHLEVEL_SLUG } from "../../shared/highlevel.ts";
 import { connectorAccessDecision, describeConnectorScopes, type ConnectorScopes } from "../../shared/connector-scopes.ts";
 import type { ConnectorToolGrant } from "../../shared/wire.ts";
 import { connectorRefusalText, connectorScopeRefusalText, evaluateConnectorTools } from "../connector-verdict.ts";
+import { isMausBot } from "../mausbot.ts";
 import { HIGHLEVEL_PROMPT } from "./instructions.ts";
+import { isHighLevelWrite } from "./tools.ts";
 
 export interface HighLevelBot {
   id: string;
@@ -12,7 +14,10 @@ export interface HighLevelBot {
   composio?: boolean;
   connectorTools?: Record<string, ConnectorToolGrant>;
   connectorScopes?: ConnectorScopes;
+  builtIn?: string;
 }
+
+export const HIGHLEVEL_MAUSBOT_READ_ONLY = " HighLevel is read only for you: its create, update, add and remove tools are refused.";
 
 export interface HighLevelDecisionRow {
   tool: string;
@@ -52,7 +57,10 @@ export function highlevelAccess(bot: HighLevelBot, name: string): HighLevelAcces
     }
     return { ok: false, text: connectorRefusalText(verdict.denials), rows };
   }
-  const access = connectorAccessDecision(bot.connectorScopes, [{ slug: name }], [HIGHLEVEL_SLUG]);
+  // MausBot never writes on its own here: a new contact or tag can start the CRM's own SMS and email automations.
+  const access = isMausBot(bot) && isHighLevelWrite(name)
+    ? { ok: false as const, reason: "write" as const }
+    : connectorAccessDecision(bot.connectorScopes, [{ slug: name }], [HIGHLEVEL_SLUG]);
   if (!access.ok) {
     rows.push({ tool: name, decision: "auto-denied", rule: `scope:${HIGHLEVEL_SLUG}:${access.reason}` });
     return { ok: false, text: connectorScopeRefusalText({ kind: "tools", invoked: name, names: [name] }, access.reason, bot.name, "HighLevel", describeAction(name)), rows };
@@ -68,9 +76,9 @@ export function describeAction(name: string): string {
 }
 
 /** The system prompt part: what the bot can do, that it never messages anyone, and its HighLevel scope. */
-export function highlevelSystemPrompt(bot: Pick<HighLevelBot, "connectorScopes" | "connectorTools">): string {
+export function highlevelSystemPrompt(bot: Pick<HighLevelBot, "connectorScopes" | "connectorTools" | "builtIn">): string {
   const scopes = bot.connectorScopes ? { apps: { [HIGHLEVEL_SLUG]: bot.connectorScopes.apps[HIGHLEVEL_SLUG]! } } : undefined;
   const grant = bot.connectorTools?.[HIGHLEVEL_SLUG];
   const granted = grant && grant.tools !== "*" ? ` Of the highlevel tools, this bot was granted only: ${grant.tools.join(", ")}.` : "";
-  return HIGHLEVEL_PROMPT + granted + describeConnectorScopes(scopes);
+  return HIGHLEVEL_PROMPT + granted + describeConnectorScopes(scopes) + (isMausBot(bot) ? HIGHLEVEL_MAUSBOT_READ_ONLY : "");
 }

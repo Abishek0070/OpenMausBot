@@ -5,6 +5,7 @@ import {
   DEFAULT_APPROVAL_MODE,
   approvalModeFor,
   setDefaultApprovalMode,
+  withinBuiltInCeiling,
   supportsApprovalMode,
   modelSwitchNeedsAsk,
   hasNativeAutoReview,
@@ -99,6 +100,16 @@ describe("approval modes", () => {
       setDefaultApprovalMode(DEFAULT_APPROVAL_MODE);
     }
     expect(approvalModeFor({})).toBe("full");
+  });
+
+  it("never runs a built-in bot at Full access, whatever its record or the default says", () => {
+    expect(approvalModeFor({ builtIn: "mausbot" })).toBe("auto");
+    expect(approvalModeFor({ builtIn: "mausbot", autoApprove: false })).toBe("auto");
+    expect(approvalModeFor({ builtIn: "mausbot", approvalMode: "full" })).toBe("auto");
+    for (const mode of ["ask", "edits", "auto"] as const) expect(approvalModeFor({ builtIn: "mausbot", approvalMode: mode })).toBe(mode);
+    expect(approvalModeFor({ approvalMode: "full" })).toBe("full");
+    expect(withinBuiltInCeiling({ builtIn: "mausbot" }, "full")).toBe("auto");
+    expect(withinBuiltInCeiling({}, "full")).toBe("full");
   });
 
   it("prefers a valid explicit mode and fails closed around corrupt values", () => {

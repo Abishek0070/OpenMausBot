@@ -5,7 +5,7 @@ export const MAUSBOT_BUILT_IN = "mausbot" as const;
 export const MAUSBOT_NAME = "MausBot";
 export const MAUSBOT_MASCOT_BODY = "cursor" as const;
 export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
-export const MAUSBOT_FIXED = "MausBot is built in: its name and look stay as they are, and it cannot be hidden, deleted, moved to a team, shown to more people or made a Chief.";
+export const MAUSBOT_FIXED = "MausBot is built in: its name and look stay as they are, and it cannot be hidden, deleted, moved to a team or a room, shown to more people, given teammates, made a Chief or given Full access.";
 export const SILVER_RESERVED = "Silver is MausBot's colour. Choose another one.";
 export const MAUSBOT_ASKS = "MausBot always asks before it sends anything, so it has no daily allowance.";
 
@@ -66,7 +66,8 @@ export function mausbotPatchRefusal(bot: BotRecord | null | undefined, body: obj
   const fields = body as Record<string, unknown>;
   if (!isMausBot(bot)) return fields.color === MAUSBOT_COLOR ? SILVER_RESERVED : null;
   const current = bot as unknown as Record<string, unknown>;
-  if (fields.hidden || fields.chiefOfStaff === true) return MAUSBOT_FIXED;
+  if (fields.hidden || fields.chiefOfStaff === true || fields.approvalMode === "full") return MAUSBOT_FIXED;
+  if (fields.peers !== undefined && !(Array.isArray(fields.peers) && fields.peers.length === 0)) return MAUSBOT_FIXED;
   if ((fields.outbound as { policy?: unknown } | null | undefined)?.policy === "allow") return MAUSBOT_ASKS;
   if (typeof fields.section === "string" && fields.section.trim()) return MAUSBOT_FIXED;
   if (fields.visibility !== undefined && fields.visibility !== "admins") return MAUSBOT_FIXED;
@@ -81,4 +82,8 @@ export function mausbotPatchRefusal(bot: BotRecord | null | undefined, body: obj
 export function mausbotTeamRefusal(bots: readonly (BotRecord | null | undefined)[], destination: string | undefined): string | null {
   if (!destination?.trim()) return null;
   return bots.some(isMausBot) ? MAUSBOT_FIXED : null;
+}
+
+export function mausbotRoomRefusal(members: readonly { id: string; builtIn?: string }[], existing: readonly string[]): string | null {
+  return members.some((bot) => isMausBot(bot) && !existing.includes(bot.id)) ? MAUSBOT_FIXED : null;
 }

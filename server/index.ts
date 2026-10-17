@@ -36,7 +36,7 @@ import {
   approvalModeFor,
   modelSwitchNeedsAsk,
   isEmergencyApprovalDowngrade,
-  isApprovalMode, setDefaultApprovalMode,
+  isApprovalMode, setDefaultApprovalMode, withinBuiltInCeiling,
   type ApprovalMode,
 } from "../shared/approval-mode.ts";
 import { createApprovalModeSupport } from "./harness-capabilities.ts";
@@ -246,7 +246,7 @@ import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine }
 import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GATE } from "./escalations.ts";
 import { createChiefNotices } from "./host/chief-notices.ts";
 import { createChiefBrief } from "./host/chief-brief.ts";
-import { isMausBot, MAUSBOT_FIXED, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
+import { isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
 import { briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
 import { needsInputQuestion } from "./runtime-coordinator.ts";
 import { RETRY_BLOCKED } from "./incidents.ts";
@@ -1331,6 +1331,7 @@ function roomAudienceConflict(memberIds: readonly string[], existing: readonly s
     const bot = store.bot(id);
     return bot ? [bot] : [];
   });
+  if (mausbotRoomRefusal(members, existing)) throw Object.assign(new Error(MAUSBOT_FIXED), { status: 409 });
   for (const added of members.filter((bot) => !existing.includes(bot.id))) {
     const other = members.find((bot) => bot.id !== added.id && !sameAudience(bot.visibility, added.visibility));
     if (other) {
@@ -3480,7 +3481,7 @@ function roomTurnLevel(bot: BotRecord, threadId: string, source: Pick<HandoffVie
   if (cloudGuestDriven(threadId)) return "ask";
   const from = source ? store.bot(source.botId) : undefined;
   const own = approvalModeForTurn(bot, source !== undefined, threadId);
-  return (from && source && delegatedLevel(from, source.threadId, bot, own)) || own;
+  return withinBuiltInCeiling(bot, (from && source && delegatedLevel(from, source.threadId, bot, own)) || own);
 }
 
 /** Custom transitions never go over loopback HTTP (a bot's shell could curl it); only Electron's private utility-process channel delivers them. */
@@ -3705,8 +3706,8 @@ function handleDesktopTrustedApprovalMessage(raw: unknown): boolean {
     return true;
   }
   const existing = store.bot(botId);
-  if (!existing) {
-    respond({ ok: false, error: "No such bot" });
+  if (!existing || (mode === "full" && isMausBot(existing))) {
+    respond({ ok: false, error: existing ? MAUSBOT_FIXED : "No such bot" });
     return true;
   }
   const currentMode = approvalModeFor(existing);
@@ -7069,7 +7070,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const guestDriven = cloudGuestDriven(event.threadId);
       const ownApprovalMode = (who: BotRecord) => approvalModeForTurn(who, isInternalTurn(event.threadId), event.threadId);
       const effectiveApprovalMode = !asker || guestDriven ? "ask"
-        : group && speaker?.botId === asker.id ? roomTurnLevels.forRequest(event.threadId, asker.id, () => ownApprovalMode(asker))
+        : group && speaker?.botId === asker.id ? withinBuiltInCeiling(asker, roomTurnLevels.forRequest(event.threadId, asker.id, () => ownApprovalMode(asker)))
           : ownApprovalMode(asker);
       // Shell descriptors are distinct from computer/MCP permissions: a local desktop must not disable an exact shell grant.
       const command = permission && asker && event.requestId && !event.requiresExplicitApproval && event.command && !guestDriven
@@ -15947,11 +15948,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (method === "POST" && path === "/api/internal/connectors/mcp") {
         const body = await readInternalBody();
+        if (Array.isArray(body)) return json(res, 400, { error: "send one JSON-RPC message per request" });
         // Re-read the live bot right before relay, so turning Connected Apps off wins over a request authenticated under the old value.
         let currentSender = store.bot(internalCapability.botId);
-        if (!currentSender || currentSender.composio === false || !composio.configured(cfg)) {
-          return json(res, 403, { error: "connected apps are not enabled for this bot" });
-        }
+        if (!currentSender || currentSender.composio === false || !composio.configured(cfg)) return json(res, 403, { error: "connected apps are not enabled for this bot" });
         // Verdict every tools/call frame against connectorTools; a grants record makes every unrecognized shape a deny.
         const call = connectorCallFromFrame(body);
         let serviceSlugs: readonly string[] = [];
@@ -16017,7 +16017,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             rule: verdict.rule,
           });
         }
-        // Below Full access, a tools/call that sends something waits on a card or spends the daily allowance.
+        // A send waits on a card or spends the daily allowance below Full access; every MausBot write waits on a card at every level.
         const rpc = body && typeof body === "object" && !Array.isArray(body)
           ? (body as { id?: unknown; method?: unknown; params?: unknown })
           : null;

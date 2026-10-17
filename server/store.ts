@@ -1503,7 +1503,7 @@ export class Store {
       // Restricted from its first frame: no one else is ever told it exists.
       ...(profile.visibility && profile.visibility !== "everyone" ? { visibility: structuredClone(profile.visibility) } : {}),
       ...(toolScope.scope ? { toolScope: toolScope.scope } : {}),
-      ...(opts.builtIn ? { builtIn: opts.builtIn, peers: [] } : {}),
+      ...(opts.builtIn ? { builtIn: opts.builtIn, peers: [], approvalMode: "auto" as const } : {}),
       unread: false,
       modelSelection: this.newBotSelection(profile.modelSelection),
       resumeCursors: {},

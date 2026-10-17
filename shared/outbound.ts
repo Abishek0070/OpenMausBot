@@ -42,7 +42,7 @@ const SENT_NOUNS = new Set(["MESSAGE", "COMMENT", "POST", "EMAIL", "MAIL", "INVO
 const READ_VERBS = new Set(["GET", "LIST", "FETCH", "SEARCH", "READ", "FIND", "RETRIEVE", "LOOKUP", "DOWNLOAD", "VIEW", "CHECK", "COUNT"]);
 
 /** Composio reads known by slug, since some put the noun first (GOOGLECALENDAR_EVENTS_LIST lists events). */
-const READ_SLUGS = new Set(["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET", "GOOGLECALENDAR_FIND_EVENT"]);
+export const KNOWN_READ_SLUGS: ReadonlySet<string> = new Set(["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET", "GOOGLECALENDAR_FIND_EVENT"]);
 
 /** Writing a draft leaves it for the person; sending or deleting one is not drafting. */
 const DRAFT_VERBS = new Set(["CREATE", "UPDATE", "SAVE", "EDIT"]);
@@ -70,7 +70,7 @@ function actionTokens(name: string): string[] {
  * narrower than "not outbound": updates, deletes and other writes do not
  * become reads merely because they send nothing to another person. */
 export function isReadOnlyTool(name: string): boolean {
-  if (READ_SLUGS.has(name.replace(/^mcp__composio__/, ""))) return true;
+  if (KNOWN_READ_SLUGS.has(name.replace(/^mcp__composio__/, ""))) return true;
   const tokens = actionTokens(name);
   return tokens.length > 0 && READ_VERBS.has(tokens[0]);
 }
@@ -146,7 +146,7 @@ export function outboundCallsIn(name: string, args: unknown): ConnectorCall[] {
 }
 
 /** For a bot that may only read and draft on its own: every app call that is neither, each waiting for the person's
- * Approve. Booking, accepting and deleting count, though they reach nobody, and so does every call that sends. */
+ * Approve. Booking, accepting and deleting count whether or not anyone is notified, and so does every call that sends. */
 export function approvalCallsIn(name: string, args: unknown): ConnectorCall[] {
   return connectorCallsIn(name, args).filter((call) => {
     if (isOutboundTool(call.slug)) return true;

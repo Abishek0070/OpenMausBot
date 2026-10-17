@@ -10,7 +10,7 @@ import { connectorScopeRefusalText } from "../connector-verdict.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { FAKE_LOCATION_ID, startFakeHighLevel, type FakeHighLevel } from "../testing/fake-highlevel.ts";
 import { describeTool } from "../activity.ts";
-import { highlevelAccess, highlevelAllowedFor, highlevelSystemPrompt, type HighLevelBot } from "./access.ts";
+import { HIGHLEVEL_MAUSBOT_READ_ONLY, highlevelAccess, highlevelAllowedFor, highlevelSystemPrompt, highlevelToolVisible, type HighLevelBot } from "./access.ts";
 import { HighLevelClient } from "./client.ts";
 import { HIGHLEVEL_INSTRUCTIONS, HIGHLEVEL_PROMPT, HIGHLEVEL_SIGNED_OUT_TEXT } from "./instructions.ts";
 import { createHighLevelHost, writeSummary } from "./host.ts";
@@ -48,6 +48,7 @@ function harness(bot: HighLevelBot, options: { connected?: boolean } = {}) {
 
 const legacy: HighLevelBot = { id: "b1", name: "Scout" };
 const readOnly: HighLevelBot = { id: "b2", name: "Reader", connectorScopes: { apps: { highlevel: "read", gmail: "write" } } };
+const mausbot: HighLevelBot = { id: "b4", name: "MausBot", builtIn: "mausbot" };
 const contactsOnly: HighLevelBot = { id: "b3", name: "Sales", connectorTools: { highlevel: { tools: highlevelToolsForGroups(["contacts"]) } }, connectorScopes: { apps: { highlevel: "write" } } };
 
 describe("read and write split", () => {
@@ -87,6 +88,22 @@ describe("per-bot access", () => {
     expect(verdict.text).toBe("OpenMausBot did not run this: HighLevel is read-only for Reader, and Add note would write to it. Ask the user before trying again.");
     expect(verdict.rows).toEqual([{ tool: "HIGHLEVEL_ADD_NOTE", decision: "auto-denied", rule: "scope:highlevel:write" }]);
     expect(highlevelAccess(readOnly, "HIGHLEVEL_GET_CONTACT")).toMatchObject({ ok: true, rows: [{ decision: "auto-approved", rule: "scope:highlevel" }] });
+  });
+
+  it("keeps HighLevel read-only for MausBot, whatever its grants, and leaves other bots' writes alone", () => {
+    for (const name of WRITE) {
+      const verdict = highlevelAccess(mausbot, name);
+      expect(verdict.ok, name).toBe(false);
+      if (verdict.ok) throw new Error("unreachable");
+      expect(verdict.text).toContain("HighLevel is read-only for MausBot");
+      expect(verdict.rows).toEqual([{ tool: name, decision: "auto-denied", rule: "scope:highlevel:write" }]);
+      expect(highlevelToolVisible(mausbot, name), name).toBe(false);
+      expect(highlevelAccess({ ...mausbot, connectorScopes: { apps: { highlevel: "write" } } }, name).ok, name).toBe(false);
+      expect(highlevelAccess(legacy, name).ok, name).toBe(true);
+    }
+    for (const name of READ) expect(highlevelToolVisible(mausbot, name), name).toBe(true);
+    expect(highlevelSystemPrompt(mausbot)).toBe(HIGHLEVEL_PROMPT + HIGHLEVEL_MAUSBOT_READ_ONLY);
+    expect(highlevelSystemPrompt(legacy)).not.toContain(HIGHLEVEL_MAUSBOT_READ_ONLY);
   });
 
   it("refuses a tool outside the bot's grant without naming the others", () => {
@@ -164,6 +181,19 @@ describe("highlevelRpc", () => {
     expect(JSON.stringify(writes)).not.toContain("Private note");
     await highlevelRpc(call("HIGHLEVEL_CREATE_OPPORTUNITY", { pipelineId: "pipe_1", contactId: "contact_1", name: "Deal", value: 9 }), deps);
     expect(writes.at(-1)).toEqual({ tool: "HIGHLEVEL_CREATE_OPPORTUNITY", kind: "opportunity", recordId: "opp_new", fields: ["contactId", "name", "pipelineId", "value"] });
+  });
+
+  it("lists only reads for MausBot, runs its read, and refuses its write before any request", async () => {
+    const { deps, writes } = harness(mausbot);
+    const listed = await highlevelRpc({ method: "tools/list" }, deps) as { tools: Array<{ name: string }> };
+    expect(listed.tools.map((tool) => tool.name)).toEqual(READ);
+    const refused = await highlevelRpc(call("HIGHLEVEL_ADD_TAGS", { contactId: "contact_1", tags: ["vip"] }), deps) as { isError?: boolean; content: Array<{ text: string }> };
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toBe("OpenMausBot did not run this: HighLevel is read-only for MausBot, and Add tags would write to it. Ask the user before trying again.");
+    expect(hl.calls).toEqual([]);
+    const read = await highlevelRpc(call("HIGHLEVEL_GET_CONTACT", { contactId: "contact_1" }), deps) as { isError?: boolean };
+    expect(read.isError).toBeUndefined();
+    expect(writes).toEqual([]);
   });
 
   it("refuses a read-only bot's write before any request and records nothing", async () => {

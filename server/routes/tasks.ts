@@ -6,6 +6,7 @@ import type { ModelSelection, ProviderInstance } from "../contracts.ts";
 import type { Coordinator } from "../coordinator.ts";
 import type { Handoffs } from "../delta-context.ts";
 import type { hostedModelPolicy } from "../hosted-models.ts";
+import { isMausBot, MAUSBOT_FIXED } from "../mausbot.ts";
 import type { PhoneSecretSubmissionRegistry } from "../phone-secret.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import type { RoutineManager } from "../routines.ts";
@@ -173,6 +174,7 @@ export function createTaskRoutes(deps: TaskRouteDeps): RouteHandler {
       if (body.approvalMode !== undefined && body.approvalMode !== "ask" && body.approvalMode !== "full") {
         return json(res, 400, { error: "new task approvalMode must be ask or full" });
       }
+      if (body.approvalMode === "full" && isMausBot(bot)) return json(res, 409, { error: MAUSBOT_FIXED });
       if (body.approvalMode === "full") {
         if (auth.kind !== "loopback" || !sharedWorkspaceFullAccessEnabled()) {
           return json(res, 403, { error: "New Full tasks require the operator's dedicated shared-workspace policy" });
@@ -347,6 +349,7 @@ export function createTaskRoutes(deps: TaskRouteDeps): RouteHandler {
         if (body.autoApprove !== undefined && typeof body.autoApprove !== "boolean") return json(res, 400, { error: "autoApprove must be a boolean" });
         const mode: unknown = body.approvalMode ?? (body.autoApprove ? "auto" : "ask");
         if (!isApprovalMode(mode)) return json(res, 400, { error: "approvalMode must be ask, edits, auto, full, or custom" });
+        if (mode === "full" && isMausBot(current)) return json(res, 409, { error: MAUSBOT_FIXED });
         // A thread PATCH cannot manufacture Custom: it needs the trusted desktop transition.
         if (mode === "custom") return json(res, 403, { error: "Custom access requires trusted desktop confirmation" });
         if (mode === "full" && HOSTED_WORKSPACE && approvalModeFor(current) !== "full") return json(res, 403, { error: HOSTED_FULL_ACCESS_REFUSAL });

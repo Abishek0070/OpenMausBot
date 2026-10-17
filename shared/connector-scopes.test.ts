@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { KNOWN_READ_SLUGS, isReadOnlyTool } from "./outbound.ts";
 import {
   connectorAccessDecision,
   describeConnectorScopes,
@@ -25,6 +26,18 @@ describe("isReadOnlyAction", () => {
     expect(isReadOnlyAction("GOOGLESHEETS_BATCH_UPDATE")).toBe(false);
     expect(isReadOnlyAction("GMAIL_CREATE_EMAIL_DRAFT")).toBe(false);
     expect(isReadOnlyAction("COMPOSIO_PROXY_EXECUTE")).toBe(false);
+  });
+
+  it("agrees with the outbound check on Composio reads known by slug, so a read-only Calendar can list events", () => {
+    for (const slug of KNOWN_READ_SLUGS) {
+      expect(isReadOnlyAction(slug), slug).toBe(true);
+      expect(isReadOnlyTool(slug), slug).toBe(true);
+    }
+    const calendarReadOnly = { apps: { googlecalendar: "read" as const } };
+    expect(connectorAccessDecision(calendarReadOnly, [{ slug: "GOOGLECALENDAR_EVENTS_LIST" }, { slug: "GOOGLECALENDAR_EVENTS_GET" }], ["googlecalendar"])).toEqual({ ok: true });
+    for (const slug of ["GOOGLECALENDAR_CREATE_EVENT", "GOOGLECALENDAR_EVENTS_DELETE"]) {
+      expect(connectorAccessDecision(calendarReadOnly, [{ slug }], ["googlecalendar"]), slug).toEqual({ ok: false, slug, toolkit: "googlecalendar", reason: "write" });
+    }
   });
 });
 

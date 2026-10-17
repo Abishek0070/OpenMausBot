@@ -2,10 +2,11 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { approvalModeFor } from "../shared/approval-mode.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import {
-  CHIEF_OF_STAFF_NAME, findMausBot, isMausBot, MAUSBOT_ASKS, MAUSBOT_FIXED, MAUSBOT_PERSONA, mausbotPatchRefusal, mausbotPersona, mausbotTeamRefusal, seedBots,
+  CHIEF_OF_STAFF_NAME, findMausBot, isMausBot, MAUSBOT_ASKS, MAUSBOT_FIXED, MAUSBOT_PERSONA, mausbotPatchRefusal, mausbotPersona, mausbotRoomRefusal, mausbotTeamRefusal, seedBots,
   SILVER_RESERVED,
 } from "./mausbot.ts";
 import { Store, type BotRecord } from "./store.ts";
@@ -46,6 +47,16 @@ describe("seedBots", () => {
     const restored = new Store(selection);
     expect(seedBots(restored, { hosted: false })).toBe("added");
     expect(restored.bots.filter(isMausBot)).toHaveLength(1);
+  });
+
+  it("never seeds MausBot at Full access while new bots start at Full", () => {
+    const store = new Store(selection);
+    seedBots(store, { hosted: false });
+    const [chief, mausbot] = store.bots;
+    expect(approvalModeFor(chief!)).toBe("full");
+    expect(mausbot!.approvalMode).toBe("auto");
+    expect(approvalModeFor(mausbot!)).toBe("auto");
+    expect(approvalModeFor(store.projectBotForTask(mausbot!.id, mausbot!.threadId)!)).toBe("auto");
   });
 
   it("keeps a hosted team workspace to one random starter and no MausBot", () => {
@@ -90,6 +101,16 @@ describe("mausbotPatchRefusal", () => {
     }
   });
 
+  it("keeps MausBot's teammates empty and its level below Full access", () => {
+    for (const body of [{ peers: null }, { peers: ["o"] }, { peers: "o" }, { approvalMode: "full" }, { approvalMode: "full", applyToAllThreads: true }]) {
+      expect(mausbotPatchRefusal(mausbot, body), JSON.stringify(body)).toBe(MAUSBOT_FIXED);
+    }
+    for (const body of [{ peers: [] }, { approvalMode: "auto" }, { approvalMode: "ask" }, { autoApprove: true }]) {
+      expect(mausbotPatchRefusal(mausbot, body), JSON.stringify(body)).toBeNull();
+    }
+    expect(mausbotPatchRefusal(other, { peers: null, approvalMode: "full" })).toBeNull();
+  });
+
   it("refuses a truthy hidden that is not true", () => {
     for (const hidden of [1, "yes", {}]) expect(mausbotPatchRefusal(mausbot, { hidden }), JSON.stringify(hidden)).toBe(MAUSBOT_FIXED);
   });
@@ -116,5 +137,18 @@ describe("mausbotTeamRefusal", () => {
     expect(mausbotTeamRefusal([mausbot], "")).toBeNull();
     expect(mausbotTeamRefusal([mausbot], undefined)).toBeNull();
     expect(mausbotTeamRefusal([other, undefined], "Sales")).toBeNull();
+  });
+});
+
+describe("mausbotRoomRefusal", () => {
+  const mausbot = { id: "m", builtIn: "mausbot" };
+  const other = { id: "o" };
+
+  it("refuses adding MausBot to a room but allows a room it is already in to keep or drop it", () => {
+    expect(mausbotRoomRefusal([other, mausbot], [])).toBe(MAUSBOT_FIXED);
+    expect(mausbotRoomRefusal([other, mausbot], ["o"])).toBe(MAUSBOT_FIXED);
+    expect(mausbotRoomRefusal([other, mausbot], ["o", "m"])).toBeNull();
+    expect(mausbotRoomRefusal([other], ["o", "m"])).toBeNull();
+    expect(mausbotRoomRefusal([other], [])).toBeNull();
   });
 });

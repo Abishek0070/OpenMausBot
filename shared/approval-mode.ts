@@ -58,6 +58,12 @@ export function setDefaultApprovalMode(mode: ApprovalMode): void {
   defaultApprovalMode = mode;
 }
 
+/** A built-in bot (MausBot) reads untrusted mail and invites, so it never runs
+ * at Full access: Approve for me is its highest level, whatever its record says. */
+export function withinBuiltInCeiling(bot: { builtIn?: unknown }, mode: ApprovalMode): ApprovalMode {
+  return mode === "full" && bot.builtIn !== undefined ? "auto" : mode;
+}
+
 /** An unset level runs at the default, the pre-approvalMode Auto bit reads as
  * safe Auto, and an unknown persisted value fails closed to Ask. */
 export function approvalModeFor(bot: {
@@ -67,14 +73,15 @@ export function approvalModeFor(bot: {
    * stored elevated selection is deliberately executable only as Ask. */
   approvalGrant?: unknown;
   threadId?: string;
+  builtIn?: unknown;
 }): ApprovalMode {
   const grant = bot.approvalGrant;
   const otherThread = grant && typeof grant === "object" && "threadOnly" in grant && grant.threadOnly === true &&
     "threadId" in grant && typeof grant.threadId === "string" && typeof bot.threadId === "string" && grant.threadId !== bot.threadId;
   if (grant && !otherThread) return "ask";
-  if (isApprovalMode(bot.approvalMode)) return bot.approvalMode;
+  if (isApprovalMode(bot.approvalMode)) return withinBuiltInCeiling(bot, bot.approvalMode);
   if (bot.autoApprove === true) return "auto";
-  return bot.approvalMode === undefined ? defaultApprovalMode : "ask";
+  return bot.approvalMode === undefined ? withinBuiltInCeiling(bot, defaultApprovalMode) : "ask";
 }
 
 /** A private late-grant recovery may revoke an elevated mode even after a
