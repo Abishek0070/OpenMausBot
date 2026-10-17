@@ -2340,11 +2340,11 @@ export class Store {
   }
 
   createTask(botId: string, title?: string, activate = true, projectId?: string, openedBy?: TaskOpenedBy, approvalMode?: "ask" | "full",
-    modelSelection?: ModelSelection, cwd?: string): TaskRecord | null {
+    modelSelection?: ModelSelection, cwd?: string, routineRunId?: string): TaskRecord | null {
     const bot = this.bot(botId);
     if (!bot) return null;
     if (projectId !== undefined && !this.project(botId, projectId)) return null;
-    const task = this.buildTask(bot, title, projectId, openedBy, approvalMode, modelSelection, cwd);
+    const task = this.buildTask(bot, title, projectId, openedBy, approvalMode, modelSelection, cwd, routineRunId);
     bot.tasks = [task, ...(bot.tasks ?? [])];
     if (activate) {
       this.mirrorActiveTask(bot, task);
@@ -2355,13 +2355,13 @@ export class Store {
   }
 
   private buildTask(bot: BotRecord, title?: string, projectId?: string, openedBy?: TaskOpenedBy, approvalMode?: "ask" | "full",
-    modelSelection?: ModelSelection, cwd?: string): TaskRecord {
+    modelSelection?: ModelSelection, cwd?: string, routineRunId?: string): TaskRecord {
     const createdAt = Date.now();
     return {
       threadId: newId(),
       title: threadTitleFrom(title),
-      createdAt,
-      updatedAt: createdAt,
+      createdAt, updatedAt: createdAt,
+      ...(routineRunId ? { routineRunId } : {}),
       ...(cwd !== undefined ? { cwd } : {}),
       ...(projectId ? { projectId } : {}),
       ...(openedBy ? { openedBy: structuredClone(openedBy) } : {}),

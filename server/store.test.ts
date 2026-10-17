@@ -777,6 +777,19 @@ describe("Store", () => {
     expect(bot).toMatchObject({ approvalMode: "full", autoApprove: false, alwaysAllow: ["old-tool"] });
   });
 
+  it("creates a task already hidden when given a routine-run marker, in one write", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const visibleThread = bot.threadId;
+    const save = vi.spyOn(store as unknown as { saveBots(): void }, "saveBots");
+    const job = store.createTask(bot.id, "Job", false, undefined, undefined, undefined, undefined, undefined, "mausbot-j1")!;
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(job).toMatchObject({ routineRunId: "mausbot-j1", unread: false });
+    expect(store.activeTask(bot.id)!.threadId).toBe(visibleThread);
+    expect(new Store(selection).taskByThread(bot.id, job.threadId)).toMatchObject({ routineRunId: "mausbot-j1", unread: false });
+    expect(store.createTask(bot.id, "Plain", false)).not.toHaveProperty("routineRunId");
+  });
+
   it("addTaskUsage accumulates settled-turn totals per task and survives a restart", () => {
     const store = new Store(selection);
     const bot = store.createBot();
