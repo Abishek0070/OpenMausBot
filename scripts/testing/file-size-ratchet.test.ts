@@ -26,7 +26,7 @@ const LINES: Record<string, number> = {
   "server/routines.ts": 1876,
   "src/components/ComputerPanel.tsx": 1918,
   "src/components/RoutineCalendarPage.tsx": 2099,
-  "server/config.ts": 1448,
+  "server/config.ts": 1449,
   "src/components/ChatView.tsx": 1598,
   "server/routine-requests.ts": 1680,
   "src/components/GroupView.tsx": 1616,
