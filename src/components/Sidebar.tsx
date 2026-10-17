@@ -1249,6 +1249,7 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
             <RenameTitle
               key={iconOnly ? "icons" : "expanded"}
               value={bot.name}
+              locked={bot.builtIn !== undefined}
               onCommit={(name) => {
                 if (remoteClient) {
                   void api(`/api/bots/${bot.id}/profile`, { method: "PATCH", body: JSON.stringify({ name }) })

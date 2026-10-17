@@ -316,6 +316,7 @@ export function SimpleBotPanel({
                         className={simpleInputCls}
                         maxLength={BOT_PROFILE_LIMITS.name}
                         value={bot.name}
+                        disabled={bot.builtIn !== undefined}
                         onChange={(e) => patch({ name: e.target.value })}
                       />
                     </div>

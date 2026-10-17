@@ -112,6 +112,14 @@ describe("header name", () => {
     expect(pill).toContain("Rename Pepper");
   });
 
+  it("offers no Rename control for a built-in bot in the header, but keeps its profile button", () => {
+    fixture.advanced = true;
+    const builtIn = { ...bot, name: "MausBot", builtIn: "mausbot" } as Bot;
+    const markup = renderToStaticMarkup(createElement(ChatView, { bot: builtIn }));
+    expect(markup).toContain("Open MausBot&#x27;s profile");
+    expect(markup).not.toContain("Rename MausBot");
+  });
+
   it("draws no working dots in the header pill, keeping one width, while a status still tells a screen reader", () => {
     for (const advanced of [true, false]) {
       fixture.advanced = advanced;

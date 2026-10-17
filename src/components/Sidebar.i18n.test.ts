@@ -57,6 +57,13 @@ describe("sidebar rows", () => {
   });
 });
 
+describe("a built-in bot's row", () => {
+  it("has no Rename control, while another bot keeps it", () => {
+    expect(renderRow(bot({ name: "MausBot", builtIn: "mausbot" }))).not.toContain("Rename MausBot");
+    expect(renderRow(bot())).toContain("Rename Atlas");
+  });
+});
+
 describe("archive / delete confirmation copy", () => {
   it("translates and keeps the bot's name out of the catalog", () => {
     setLocale("pt-br");

@@ -89,8 +89,9 @@ async function withRecoveryFixture(
       try { return (await fetch(url + "/api/health", { signal: AbortSignal.timeout(1_000) })).ok; } catch { return false; }
     }, { timeout: 20_000 }).toBe(true);
     // A fresh install's starter is the Chief, and a teammate's failed turn would wake it with an incident on the backup engine.
-    const [starter] = (await api("GET", "/api/bots?messages=0") as { bots: Array<{ id: string }> }).bots;
-    await api("PATCH", `/api/bots/${starter.id}`, { chiefOfStaff: false });
+    const starter = (await api("GET", "/api/bots?messages=0") as { bots: Array<{ id: string; chiefOfStaff?: boolean }> }).bots.find((candidate) => candidate.chiefOfStaff);
+    expect(starter, "the seeded Chief of Staff").toBeDefined();
+    await api("PATCH", `/api/bots/${starter!.id}`, { chiefOfStaff: false }, 200);
     // Armed once the server is up: the failure is the turns' to meet, not the
     // model discovery the server runs while it starts.
     writeFileSync(failureFile, JSON.stringify(options.error ?? transient));

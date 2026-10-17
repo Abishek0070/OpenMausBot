@@ -760,6 +760,7 @@ function EmptyChat({ bot }: { bot: Bot }) {
       <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />
       {!advanced ? <div className="text-[17px] font-semibold text-ink">{bot.name}</div> : <RenameTitle
         value={bot.name}
+        locked={bot.builtIn !== undefined}
         onCommit={(name) => {
           if (window.ogb?.remoteClient?.active) {
             void api(`/api/bots/${bot.id}/profile`, { method: "PATCH", body: JSON.stringify({ name }) })
@@ -1242,6 +1243,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
               </button>
               <RenameTitle
                 value={bot.name}
+                locked={bot.builtIn !== undefined}
                 onCommit={(name) => {
                   if (window.ogb?.remoteClient?.active) {
                     void api(`/api/bots/${bot.id}/profile`, { method: "PATCH", body: JSON.stringify({ name }) })

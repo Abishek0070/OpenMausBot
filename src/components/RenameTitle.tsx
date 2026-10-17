@@ -12,6 +12,7 @@ export function RenameTitle({
   onEditingChange,
   onActivate,
   showEditButton = false,
+  locked = false,
   className,
   editButtonClassName,
   inputClassName,
@@ -21,6 +22,7 @@ export function RenameTitle({
   onEditingChange?: (editing: boolean) => void;
   onActivate?: () => void;
   showEditButton?: boolean;
+  locked?: boolean;
   className?: string;
   editButtonClassName?: string;
   inputClassName?: string;
@@ -95,7 +97,7 @@ export function RenameTitle({
         ) : (
           <span className={cn("min-w-0 truncate", className)}>{value}</span>
         )}
-        <button
+        {!locked && <button
           type="button"
           onClick={startRename}
           aria-label={t("rename.named", { name: value })}
@@ -103,10 +105,12 @@ export function RenameTitle({
           className={cn("flex size-10 shrink-0 items-center justify-center rounded text-ink-secondary opacity-70 hover:bg-raised hover:text-ink hover:opacity-100", editButtonClassName)}
         >
           <Pencil size={12} />
-        </button>
+        </button>}
       </span>
     );
   }
+
+  if (locked) return <span className={className}>{value}</span>;
 
   return (
     <span

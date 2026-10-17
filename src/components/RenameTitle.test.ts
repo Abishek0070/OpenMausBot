@@ -26,4 +26,13 @@ describe("RenameTitle", () => {
 
     expect(markup).toContain("Open Maus&#x27;s profile");
   });
+
+  it("draws a locked title as plain text with no rename control", () => {
+    for (const showEditButton of [false, true]) {
+      const markup = renderToStaticMarkup(createElement(RenameTitle, { value: "MausBot", onCommit: vi.fn(), locked: true, showEditButton }));
+      expect(markup).toContain("MausBot");
+      expect(markup).not.toContain("Rename MausBot");
+      expect(markup).not.toContain("<button");
+    }
+  });
 });

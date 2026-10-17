@@ -55,6 +55,7 @@ export function IdentitySection({
           className={inputCls}
           maxLength={BOT_PROFILE_LIMITS.name}
           value={bot.name}
+          disabled={bot.builtIn !== undefined}
           placeholder={namePlaceholder}
           onChange={(e) => patch({ name: e.target.value })}
         />

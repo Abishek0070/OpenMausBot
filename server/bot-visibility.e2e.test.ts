@@ -220,9 +220,16 @@ posixOnly("per-bot visibility on a shared workspace", () => {
     expect(ada.bots.find((bot: any) => bot.id === ids.hr).visibility).toBeUndefined();
 
     const boss = (await api("GET", "/api/bots?messages=0", undefined, BOSS)).body;
-    expect(boss.bots.map((bot: any) => bot.id).sort()).toEqual([...bobBots, ids.hr, ids.board].sort());
+    // MausBot is for admins only: the admin and the owner list it, no member does.
+    const mausbotId = boss.bots.find((bot: any) => bot.builtIn === "mausbot")?.id;
+    expect(mausbotId).toBeDefined();
+    expect(bobBots).not.toContain(mausbotId);
+    expect(ada.bots.map((bot: any) => bot.id)).not.toContain(mausbotId);
+    expect(boss.bots.map((bot: any) => bot.id).sort()).toEqual([...bobBots, ids.hr, ids.board, mausbotId].sort());
     expect(boss.bots.find((bot: any) => bot.id === ids.board).visibility).toBe("admins");
-    expect((await api("GET", "/api/bots?messages=0")).body.bots).toHaveLength(bobBots.length + 2);
+    const owner = (await api("GET", "/api/bots?messages=0")).body.bots;
+    expect(owner).toHaveLength(bobBots.length + 3);
+    expect(owner.map((bot: any) => bot.id)).toContain(mausbotId);
   });
 
   it("answers a member's every route to a hidden bot, thread or room as not found", async () => {
