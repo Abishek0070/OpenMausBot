@@ -60,8 +60,10 @@ async function boot(home: string, knobs: Record<string, string> = {}) {
 it("makes a first run's starter bot on the engine a new bot gets", async () => {
   const server = await boot(freshHome());
   const { bots } = await server.get("/api/bots?messages=0");
-  expect(bots).toHaveLength(1);
-  expect(bots[0].modelSelection).toMatchObject({ instanceId: "claude", model: expect.stringMatching(/.+/) });
+  // A first run seeds the starter Chief of Staff and the built-in MausBot.
+  expect(bots.map((bot: any) => bot.builtIn ?? "starter").sort()).toEqual(["mausbot", "starter"]);
+  const starter = bots.find((bot: any) => bot.builtIn === undefined);
+  expect(starter.modelSelection).toMatchObject({ instanceId: "claude", model: expect.stringMatching(/.+/) });
 });
 
 it("answers on a later start while an engine CLI is still being probed, and runs turns once it has answered", async () => {

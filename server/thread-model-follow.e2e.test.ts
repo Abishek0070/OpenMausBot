@@ -132,9 +132,9 @@ it("keeps the sign-in failure when the bot's model is on the same signed-out eng
   await withEngines(async (fixture) => {
     const { bot, threadId, thread } = await botWithOwnModel(fixture, { instanceId: "claude", model: "claude-opus-5" });
     // A fresh install's starter is the Chief, and Ada's failed turn would wake it with an incident on the same engine.
-    const starter = (await fixture.api("GET", "/api/bots?messages=0")).bots.find((candidate: { chiefOfStaff?: boolean }) => candidate.chiefOfStaff);
-    expect(starter, "the seeded Chief of Staff").toBeDefined();
-    await fixture.api("PATCH", `/api/bots/${starter.id}`, { chiefOfStaff: false });
+    for (const chief of (await fixture.api("GET", "/api/bots?messages=0")).bots.filter((candidate: { chiefOfStaff?: boolean }) => candidate.chiefOfStaff)) {
+      await fixture.api("PATCH", `/api/bots/${chief.id}`, { chiefOfStaff: false });
+    }
     await fixture.restart({ claude: "signed-out" });
     const messages = await sendAndSettle(fixture, bot.id, threadId, "SAME_ENGINE_SIGN_IN_7N", "failed");
     expect(messages.filter(notice)).toHaveLength(0);

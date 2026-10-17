@@ -152,7 +152,9 @@ const mintCapability = async (botId: string, threadId: string): Promise<string> 
 const hideSeededBot = async () => {
   // Otherwise the seeded bot joins the unsectioned team and the roster assertions depend on install order. A fresh
   // install's starter is that team's Chief, and a Chief cannot be hidden.
-  const seeded = (await api("GET", "/api/bots?messages=0")).body.bots.find((candidate: { chiefOfStaff?: boolean }) => candidate.chiefOfStaff);
+  // The first test appoints and hides it; every later one finds it already hidden and un-appointed.
+  const seeded = (await api("GET", "/api/bots?messages=0")).body.bots.find((candidate: { chiefOfStaff?: boolean; hidden?: boolean; builtIn?: string }) =>
+    candidate.chiefOfStaff || (candidate.hidden && candidate.builtIn === undefined));
   expect(seeded, "the seeded Chief of Staff").toBeDefined();
   const hidden = await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true, chiefOfStaff: false });
   expect(hidden.status, JSON.stringify(hidden.body)).toBe(200);

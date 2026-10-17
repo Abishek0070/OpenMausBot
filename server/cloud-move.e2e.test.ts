@@ -247,7 +247,8 @@ beforeAll(async () => {
   const room = await api(source, "POST", "/api/groups", { body: { name: "Launch room", memberIds: [planner.id] } });
   expect(room.status, JSON.stringify(room.body)).toBe(201);
   desktopBots = (await botNames(source)).sort();
-  expect(desktopBots).toHaveLength(2);
+  // The seeded Chief of Staff and MausBot, and the planner.
+  expect(desktopBots).toEqual(["Chief of Staff", "MausBot", "Moved Planner"]);
   // The secrets really are in the desktop's files, so their absence is proof.
   const saved = readFileSync(join(source.dataDir, "config.json"), "utf8");
   for (const value of [SOURCE_SECRETS.anthropic, SOURCE_SECRETS.tts, SOURCE_SECRETS.box, SOURCE_SECRETS.env]) expect(saved).toContain(value);
