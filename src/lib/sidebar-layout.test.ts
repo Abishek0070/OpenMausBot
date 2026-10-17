@@ -45,6 +45,16 @@ describe("sidebar virtual sections", () => {
     }
   });
 
+  it("puts MausBot above everything, and in no section and not among the pinned", () => {
+    const parts = partitionSidebarBots([
+      { id: "a", section: "Sales" }, { id: "chief", chiefOfStaff: true }, { id: "m", builtIn: "mausbot", pinned: true }, { id: "b" },
+    ]);
+    expect(parts.topBots.map((bot) => bot.id)).toEqual(["m", "chief"]);
+    expect(parts.assistant?.id).toBe("m");
+    expect([...parts.pinnedBots, ...parts.sectionChiefs, ...parts.sectionedBots, ...parts.unsectionedBots].map((bot) => bot.id)).toEqual(["a", "b"]);
+    expect(partitionSidebarBots([{ id: "b" }]).topBots).toEqual([]);
+  });
+
   it("shows pinned bots once without erasing their saved context", () => {
     const bot = { id: "writer", section: "Work", pinned: true };
     const parts = partitionSidebarBots([

@@ -3,10 +3,11 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { approvalModeFor } from "../shared/approval-mode.ts";
+import { DEFAULT_OUTBOUND_POLICY } from "../shared/outbound.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import {
-  CHIEF_OF_STAFF_NAME, findMausBot, isMausBot, MAUSBOT_ASKS, MAUSBOT_FIXED, MAUSBOT_PERSONA, mausbotPatchRefusal, mausbotPersona, mausbotRoomRefusal, mausbotTeamRefusal, seedBots,
+  builtInWireOutbound, builtInWireTask, CHIEF_OF_STAFF_NAME, findMausBot, isMausBot, MAUSBOT_ASKS, MAUSBOT_FIXED, MAUSBOT_PERSONA, mausbotPatchRefusal, mausbotPersona, mausbotRoomRefusal, mausbotTeamRefusal, seedBots,
   SILVER_RESERVED,
 } from "./mausbot.ts";
 import { Store, type BotRecord } from "./store.ts";
@@ -55,6 +56,7 @@ describe("seedBots", () => {
     const [chief, mausbot] = store.bots;
     expect(approvalModeFor(chief!)).toBe("full");
     expect(mausbot!.approvalMode).toBe("auto");
+    expect(mausbot!.autoApprove).toBe(true);
     expect(approvalModeFor(mausbot!)).toBe("auto");
     expect(approvalModeFor(store.projectBotForTask(mausbot!.id, mausbot!.threadId)!)).toBe("auto");
   });
@@ -164,5 +166,24 @@ describe("mausbotRoomRefusal", () => {
     expect(mausbotRoomRefusal([other, mausbot], ["o", "m"])).toBeNull();
     expect(mausbotRoomRefusal([other], ["o", "m"])).toBeNull();
     expect(mausbotRoomRefusal([other], [])).toBeNull();
+  });
+});
+
+describe("what clients are shown for MausBot", () => {
+  const mausbot = { id: "m", builtIn: "mausbot" } as BotRecord;
+  const other = { id: "o" } as BotRecord;
+
+  it("shows a thread stored at Full or Custom at the level it runs at, and leaves other bots and levels alone", () => {
+    expect(builtInWireTask(mausbot, { approvalMode: "full" }).approvalMode).toBe("auto");
+    expect(builtInWireTask(mausbot, { approvalMode: "custom" }).approvalMode).toBe("auto");
+    expect(builtInWireTask(mausbot, { approvalMode: "edits" }).approvalMode).toBe("edits");
+    expect(builtInWireTask(mausbot, { approvalMode: undefined }).approvalMode).toBeUndefined();
+    expect(builtInWireTask(other, { approvalMode: "full" }).approvalMode).toBe("full");
+  });
+
+  it("shows MausBot's send policy as ask whatever its record says", () => {
+    const stored = { ...mausbot, outbound: { policy: "allow", dailyCap: 9 } } as BotRecord;
+    expect(builtInWireOutbound(stored)).toEqual({ outbound: DEFAULT_OUTBOUND_POLICY });
+    expect(builtInWireOutbound(other)).toEqual({});
   });
 });

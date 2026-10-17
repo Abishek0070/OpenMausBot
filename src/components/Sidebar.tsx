@@ -731,8 +731,8 @@ export function BotContextMenu({
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
   const canCoordinate = engine?.capabilities?.agentsMcp === true;
   const visibleBotCount = state.bots.filter((candidate) => !candidate.hidden).length;
-  const archiveBlocked = Boolean(bot.chiefOfStaff) || visibleBotCount <= 1;
-  const archiveHint = bot.chiefOfStaff
+  const archiveBlocked = Boolean(bot.chiefOfStaff) || bot.builtIn !== undefined || visibleBotCount <= 1;
+  const archiveHint = bot.builtIn ? t("sidebar.bot.builtInFixed") : bot.chiefOfStaff
     ? t("sidebar.bot.archiveBlockedChief")
     : visibleBotCount <= 1
       ? t("sidebar.bot.archiveBlockedLast")
@@ -809,7 +809,7 @@ export function BotContextMenu({
           bot.chiefOfStaff ? t("sidebar.bot.removeChief") : t("sidebar.bot.makeChief"),
           () => dispatch({ type: "updateBot", botId: bot.id, patch: { chiefOfStaff: !bot.chiefOfStaff } }),
           {
-            disabled: !bot.chiefOfStaff && !canCoordinate,
+            disabled: (!bot.chiefOfStaff && !canCoordinate) || bot.builtIn !== undefined,
             hint: !bot.chiefOfStaff && !canCoordinate ? t("sidebar.bot.chiefNeedsEngine") : undefined,
           },
         ),
@@ -848,7 +848,7 @@ export function BotContextMenu({
             hint: archiveHint,
           },
         ),
-        <BotDeleteMenuItem
+        bot.builtIn ? null : <BotDeleteMenuItem
           key="delete"
           deleting={deleting}
           onClick={() => {
@@ -1840,7 +1840,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
     );
   const visibleGroups = state.groups.filter((g) => !q || g.name.toLowerCase().includes(q) || g.tasks?.some((task) => task.title.toLowerCase().includes(q)));
   const {
-    unsectionedChief,
+    topBots,
     pinnedBots,
     sectionChiefs,
     sectionedBots,
@@ -2260,11 +2260,11 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
           {matchingBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">{t("sidebar.noMatch", { query })}</div>
           )}
-          {unsectionedChief && (
-            <div className="mb-1.5">
-              <BotListItem {...botRow(unsectionedChief)} />
+          {topBots.map((bot) => (
+            <div key={bot.id} className="mb-1.5">
+              <BotListItem {...botRow(bot)} />
             </div>
-          )}
+          ))}
           {sectionIds.map((id, index) => {
             const sectionName = userSectionName(id);
             const sectionChiefItems = sectionName

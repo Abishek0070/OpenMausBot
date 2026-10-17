@@ -246,7 +246,7 @@ import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine }
 import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GATE } from "./escalations.ts";
 import { createChiefNotices } from "./host/chief-notices.ts";
 import { createChiefBrief } from "./host/chief-brief.ts";
-import { findMausBot, isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
+import { builtInWireOutbound, builtInWireTask, findMausBot, isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
 import { createMausBotIntro } from "./host/mausbot-intro.ts";
 import { briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
 import { needsInputQuestion } from "./runtime-coordinator.ts";
@@ -3252,10 +3252,10 @@ const wireBot = (bot: BotRecord): WireBot => {
   // Clients see Ask while an elevated grant awaits the desktop's confirmation, never a grant that may still roll back.
   const visible = approvalGrant && !approvalGrant.threadOnly
     ? { ...rest, approvalMode: "ask" as const, autoApprove: false }
-    : { ...rest, approvalMode: approvalModeFor(rest) };
+    : { ...rest, approvalMode: approvalModeFor(rest), ...builtInWireOutbound(bot) };
   return { ...visible, waitingForTeammates: activeCoordinationForThread(bot.threadId) && !threadBusy(bot.id, bot.threadId),
     mainThreadId: botMainThread(bot.id),
-    avatarUrl: visible.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map((task) => wireTask(task, bot.modelSelection)) } : {}) };
+    avatarUrl: visible.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map((task) => wireTask(builtInWireTask(bot, task), bot.modelSelection)) } : {}) };
 };
 
 function toolScopeForTurn(botId: string) {

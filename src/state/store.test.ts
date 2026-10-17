@@ -2718,6 +2718,13 @@ describe("restoring the open conversation", () => {
     expect(hydrating({ ...initialState, selectedId: "room-1" }).selectedId).toBe("room-1");
   });
 
+  it("hydrate opens a new install on MausBot, and a remembered selection still wins", () => {
+    const chief = bot("chief", { chiefOfStaff: true });
+    const mausbot = bot("mausbot", { builtIn: "mausbot" });
+    expect(hydrating(initialState, undefined, [chief, mausbot], []).selectedId).toBe("mausbot");
+    expect(hydrating(initialState, "chief", [chief, mausbot], []).selectedId).toBe("chief");
+  });
+
   it("hydrate resumes the remembered bot", () => {
     expect(hydrating(initialState, "bot-2").selectedId).toBe("bot-2");
   });

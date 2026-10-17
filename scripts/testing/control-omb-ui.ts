@@ -471,7 +471,9 @@ export async function launchUi(
     const session: SessionEnv = { home: fixture.info.dataDir, session: `omb-ui-${new URL(fixture.info.url).port}`, chrome };
     const env = sessionEnv(session, parentEnv);
     opened = { binary, env };
-    await agentBrowser(binary, env, ["open", preview.previewUrl], 120_000);
+    const opening = new URL(preview.previewUrl);
+    opening.searchParams.set("resume", created.bot.id);
+    await agentBrowser(binary, env, ["open", opening.href], 120_000);
     checkpoint();
     const handle: UiHandle = {
       url: fixture.info.url,

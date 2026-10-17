@@ -1,4 +1,5 @@
-import { exceedsBuiltInCeiling } from "../shared/approval-mode.ts";
+import { exceedsBuiltInCeiling, withinBuiltInCeiling, type ApprovalMode } from "../shared/approval-mode.ts";
+import { DEFAULT_OUTBOUND_POLICY } from "../shared/outbound.ts";
 import { MAUSBOT_COLOR } from "../shared/maus-colors.ts";
 import type { BotRecord, Store } from "./store.ts";
 
@@ -33,6 +34,16 @@ export function mausbotPersona(connectedApps: boolean): string {
 type MaybeBuiltIn = { builtIn?: string } | null | undefined;
 
 export const isMausBot = (bot: MaybeBuiltIn): boolean => bot?.builtIn === MAUSBOT_BUILT_IN;
+
+/** A thread of a built-in bot is shown at the level it runs at, not the Full or Custom its record may still hold. */
+export function builtInWireTask<T extends { approvalMode?: ApprovalMode }>(bot: MaybeBuiltIn, task: T): T {
+  return task.approvalMode && bot?.builtIn !== undefined ? { ...task, approvalMode: withinBuiltInCeiling(bot, task.approvalMode) } : task;
+}
+
+/** The server treats a built-in bot's send policy as ask, so that is what clients are shown. */
+export function builtInWireOutbound(bot: MaybeBuiltIn): { outbound?: typeof DEFAULT_OUTBOUND_POLICY } {
+  return bot?.builtIn !== undefined ? { outbound: DEFAULT_OUTBOUND_POLICY } : {};
+}
 
 export function findMausBot<T extends { builtIn?: string }>(bots: readonly T[]): T | null {
   return bots.find(isMausBot) ?? null;

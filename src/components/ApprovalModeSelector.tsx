@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Check, FilePen, Hand, ListChecks, Settings, ShieldAlert, ShieldCheck } from "lucide-react";
 
-import { approvalModeFor, hasNativeAutoReview, supportsApprovalMode, type ApprovalMode } from "../../shared/approval-mode";
+import { approvalModeFor, exceedsBuiltInCeiling, hasNativeAutoReview, supportsApprovalMode, type ApprovalMode } from "../../shared/approval-mode";
 import { cn } from "@/lib/cn";
 import { useMenuMotion } from "./MenuMotion";
 import { APPROVAL_LEVELS_URL, openExternalLink } from "@/lib/app-links";
@@ -41,13 +41,14 @@ export function approvalModeOptions(): ApprovalModeOption[] {
   }));
 }
 
-export function approvalModeOptionsFor(driverKind: string, trustedModesAvailable = true) {
+export function approvalModeOptionsFor(driverKind: string, trustedModesAvailable = true, capAtAuto = false) {
   return approvalModeOptions()
     .filter((option) => supportsApprovalMode(driverKind, option.mode)
       // Antigravity has no native reviewer: its full-access grant is shown as Auto below, and the real Auto, which
       // behaves as Ask, is not offered.
       && (driverKind !== "antigravityAgent" || option.mode !== "auto")
-      && (trustedModesAvailable || option.mode !== "custom"))
+      && (trustedModesAvailable || option.mode !== "custom")
+      && !(capAtAuto && exceedsBuiltInCeiling(option.mode)))
     .map((option) => {
       if (driverKind === "antigravityAgent" && option.mode === "full") {
         return {
@@ -82,6 +83,7 @@ export function ApprovalModeSelector({
   wide = false,
   disabled = false,
   trustedModesAvailable = true,
+  capAtAuto = false,
   trustedModesNotice,
   onManageCommandAllowlist,
 }: {
@@ -95,6 +97,8 @@ export function ApprovalModeSelector({
   wide?: boolean;
   disabled?: boolean;
   trustedModesAvailable?: boolean;
+  /** A built-in bot never runs above Approve for me, so Full and Custom are not offered. */
+  capAtAuto?: boolean;
   trustedModesNotice?: string;
   onManageCommandAllowlist?: () => void;
 }) {
@@ -102,14 +106,15 @@ export function ApprovalModeSelector({
   const motion = useMenuMotion(open);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const savedMode = approvalModeFor({ approvalMode, autoApprove });
+  const stored = approvalModeFor({ approvalMode, autoApprove });
+  const savedMode = capAtAuto && exceedsBuiltInCeiling(stored) ? "auto" : stored;
   // Security: old Antigravity Auto settings still ask; never display or silently grant the new Auto until it is chosen.
   const mode = driverKind === "antigravityAgent" && savedMode === "auto" ? "ask" : savedMode;
   const allOptions = approvalModeOptions();
-  const current = approvalModeOptionsFor(driverKind).find((option) => option.mode === mode)
+  const current = approvalModeOptionsFor(driverKind, true, capAtAuto).find((option) => option.mode === mode)
     ?? allOptions.find((option) => option.mode === mode)
     ?? allOptions[0];
-  const visibleOptions = approvalModeOptionsFor(driverKind, trustedModesAvailable);
+  const visibleOptions = approvalModeOptionsFor(driverKind, trustedModesAvailable, capAtAuto);
   const requiresLocalDesktop = approvalModeSelectionRequiresLocalDesktop(
     mode,
     trustedModesAvailable,

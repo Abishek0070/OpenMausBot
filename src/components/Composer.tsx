@@ -941,7 +941,7 @@ export function Composer({
                   driverKind={approvalEngine.driverKind}
                   onSelect={setApprovalMode}
                   disabled={Boolean(modeBot.busy)}
-                  trustedModesAvailable={trustedThreadAccess}
+                  trustedModesAvailable={trustedThreadAccess} capAtAuto={modeBot.builtIn !== undefined}
                   onManageCommandAllowlist={ownerOrAdmin === true ? () => setCommandAllowlistTarget({ botId: modeBot.id, botName: modeBot.name, threadId: modeBot.threadId }) : undefined}
                 />
               )}

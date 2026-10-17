@@ -147,7 +147,7 @@ export function BotProfileAvatarCard({
   const crop = bot.avatarCrop ?? "mascot";
   const cropRef = useRef(crop);
   cropRef.current = crop;
-  const busy = uploading || generating || savingConnection;
+  const busy = uploading || generating || savingConnection || bot.builtIn !== undefined;
 
   const upload = async (file: File | undefined) => {
     if (!file || busy) return;

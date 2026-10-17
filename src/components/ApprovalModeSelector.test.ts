@@ -105,6 +105,15 @@ describe("approval mode selector", () => {
     expect(approvalModeOptionsFor("claudeAgent", false).map((option) => option.mode)).toEqual(["ask", "edits", "auto", "full"]);
   });
 
+  it("never offers Full or Custom for a built-in bot, and shows a stored Full as Approve for me", () => {
+    expect(approvalModeOptionsFor("codex", true, true).map((option) => option.mode)).toEqual(["ask", "auto"]);
+    expect(approvalModeOptionsFor("claudeAgent", true, true).map((option) => option.mode)).toEqual(["ask", "edits", "auto"]);
+    const html = renderToStaticMarkup(createElement(ApprovalModeSelector, {
+      approvalMode: "full", providerName: "Claude", driverKind: "claudeAgent", onSelect: () => {}, capAtAuto: true,
+    }));
+    expect(html).toContain('aria-label="Approve for me for Claude"');
+  });
+
   it("keeps the composer trigger icon-only and the settings trigger labeled", () => {
     const compact = renderToStaticMarkup(createElement(ApprovalModeSelector, {
       approvalMode: "full", providerName: "Grok", driverKind: "grokAgent", onSelect: () => {},

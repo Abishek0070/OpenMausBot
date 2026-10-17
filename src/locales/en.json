@@ -1397,6 +1397,7 @@
   "sidebar.bot.editProfile": "Edit Profile",
   "sidebar.bot.duplicate": "Duplicate",
   "sidebar.bot.archive": "Archive",
+  "sidebar.bot.builtInFixed": "MausBot is built in and stays at the top of your sidebar.",
   "sidebar.bot.archiveAria": "Archive {name}",
   "sidebar.bot.archiveBlockedChief": "Choose another Chief of Staff first",
   "sidebar.bot.archiveBlockedLast": "Keep at least one active bot",

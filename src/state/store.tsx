@@ -336,7 +336,7 @@ export interface Bot {
   hidden?: boolean;
   section?: string;
   pinnedMessageId?: string;
-  chiefOfStaff?: boolean;
+  chiefOfStaff?: boolean; builtIn?: import("../../shared/wire").WireBot["builtIn"];
   managedSections?: string[];
   approvePeerComms?: boolean;
   peers?: string[];
@@ -1028,7 +1028,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const resume = action.resumeId;
       const resumed =
         resume && (action.bots.some((b) => b.id === resume && !b.hidden) || action.groups.some((g) => g.id === resume)) ? resume : "";
-      const selectedId = state.selectedId && known(state.selectedId) ? state.selectedId : resumed || (action.bots[0]?.id ?? "");
+      const selectedId = state.selectedId && known(state.selectedId) ? state.selectedId : resumed || (action.bots.find((bot) => bot.builtIn === "mausbot")?.id ?? action.bots[0]?.id ?? "");
       const hydrated = {
         ...state,
         bots: action.bots.map((bot) => {
