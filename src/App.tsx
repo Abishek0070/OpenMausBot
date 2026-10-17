@@ -48,6 +48,7 @@ import { botShowsUnread } from "@/lib/bot-unread";
 import { phonePairingSettingsAction, takePhonePairingRequest } from "@/lib/phone-pairing";
 import { useExternalChatLinks } from "@/hooks/use-external-chat-links";
 import { useUsageSnapshot } from "@/hooks/use-usage-snapshot";
+import { useChiefPresence } from "@/hooks/use-presence";
 import { ChatNotice } from "@/components/ChatErrorBanner";
 
 function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
@@ -97,6 +98,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     dispatch(phonePairingSettingsAction());
   }, [dispatch]);
   useExternalChatLinks(state, dispatch);
+  useChiefPresence(state, dispatch);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const language = effectiveLanguage(useLanguageChoice(), state.config?.language);
   const [, setLocaleEpoch] = useState(0);
