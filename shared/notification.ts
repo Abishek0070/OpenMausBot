@@ -21,7 +21,9 @@ export type NotifyKind =
   | "mention"
   /** The workspace crossed its monthly spend warning or reached its cap.
    * Sent to admins only, at most once per month for each. */
-  | "spend";
+  | "spend"
+  /** A card MausBot posted in its own chat. The title names MausBot. */
+  | "assistant";
 
 export interface Notification {
   kind: NotifyKind;

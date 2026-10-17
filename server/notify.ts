@@ -53,9 +53,11 @@ export function buildNotification(
                   ? `${who} resumed with results`
                   : kind === "mention"
                     ? `${who} mentioned you`
-                    : `${who} finished`;
+                    : kind === "assistant"
+                      ? who
+                      : `${who} finished`;
 
-  if ((kind === "done" || kind === "mention") && !body) return null;
+  if ((kind === "done" || kind === "mention" || kind === "assistant") && !body) return null;
 
   const notification: Notification = { kind, botId: bot.id, botName: bot.name, threadId, title, body };
   if (extra?.avatarUrl) notification.avatarUrl = extra.avatarUrl;

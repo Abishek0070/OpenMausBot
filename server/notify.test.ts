@@ -5,6 +5,15 @@ import { buildNotification, buildSpendNotification, summarize } from "./notify.t
 const bot = { id: "bot-1", name: "Scout", threadId: "thread-1" };
 
 describe("buildNotification", () => {
+  it("titles MausBot's cards with its name, carries the card's line, and stays quiet when MausBot is muted", () => {
+    const mausbot = { id: "m", name: "MausBot", threadId: "m-main" };
+    expect(buildNotification("assistant", mausbot, "m-main", "Prep ready: Demo with Jake at 3:00 PM")).toEqual({
+      kind: "assistant", botId: "m", botName: "MausBot", threadId: "m-main", title: "MausBot", body: "Prep ready: Demo with Jake at 3:00 PM",
+    });
+    expect(buildNotification("assistant", { ...mausbot, notifications: false }, "m-main", "Prep ready")).toBeNull();
+    expect(buildNotification("assistant", mausbot, "m-main", "  ")).toBeNull();
+  });
+
   it("names the bot and carries the detail, per kind", () => {
     expect(buildNotification("approval", bot, "thread-1", "rm -rf ./build")).toMatchObject({
       kind: "approval",
