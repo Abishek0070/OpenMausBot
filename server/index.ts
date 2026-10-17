@@ -249,6 +249,7 @@ import { createChiefBrief } from "./host/chief-brief.ts";
 import { builtInWireLevel, builtInWireOutbound, builtInWireTask, findMausBot, isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
 import { createMausBotIntro } from "./host/mausbot-intro.ts";
 import { assistantHitTitle, assistantRecallThreads } from "./mausbot-recall.ts";
+import { createAssistantJobGate, JOB_DECLINE } from "./host/assistant-job-requests.ts";
 import { assistantActsEnabled, briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
 import { needsInputQuestion } from "./runtime-coordinator.ts";
 import { RETRY_BLOCKED } from "./incidents.ts";
@@ -3405,10 +3406,18 @@ async function botOverview(bot: BotRecord): Promise<BotOverview> {
   });
 }
 
+const jobGate = createAssistantJobGate({
+  routineRunId: (botId, threadId) => store.taskByThread(botId, threadId)?.routineRunId,
+  adapter: (instanceId) => registry.get(instanceId)?.adapter,
+  stale: shouldIgnoreProviderEvent,
+  decide: (row) => appendDecision(DATA_DIR, row),
+  release: (threadId) => watchdog.setWaitingOnHuman(threadId, false),
+});
+
 /** Defense in depth against hand-edited records. Delegation uses the receiving bot's grant, never the sender's, except a Chief's (delegatedLevel). */
 const approvalModeForTurn = (bot: BotRecord, peerInitiated = false, threadId = bot.threadId): ApprovalMode => {
   // Judged by the conversation the turn runs in, never whichever of the bot's conversations is active.
-  if (cloudGuestDriven(threadId)) return "ask";
+  if (cloudGuestDriven(threadId) || jobGate.isJobThread(bot.id, threadId)) return "ask";
   const mode = approvalModeForOrigin(approvalModeFor(bot), { peerInitiated });
   if (!supportsApprovalMode(bot.modelSelection, mode)) {
     return "ask";
@@ -7067,6 +7076,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const permission = event.requestType === "permission" && !event.questions?.length;
       // The provider's own mode already ran; only Full access, an exact saved command or an exact remembered MCP read tool answers here.
       const asker = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
+      if (asker && jobGate.answers(event, asker, pushMessage)) break;
       const unattended = permission && asker && event.requestId ? isUnattended(asker.id, event.threadId) : false;
       // No command the owner saved answers for a guest-driven turn.
       const guestDriven = cloudGuestDriven(event.threadId);
@@ -14367,6 +14377,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (internalCapability.generation === EXTERNAL_RUNTIME_GENERATION && !externalRuntimeMayCall(method, path)) {
         return json(res, 403, { error: "an external runtime can only list its peers, hand them work with coordinate_bots and read assignment_status" });
       }
+      if (jobGate.refusesRoute(internalSender, internalCapability.threadId, method, path)) return json(res, 403, { error: JOB_DECLINE });
       const requiredCapabilityKind = path === "/api/internal/hook"
         ? "hooks"
         : path === "/api/internal/browser/mcp"
@@ -15954,6 +15965,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         // Re-read the live bot right before relay, so turning Connected Apps off wins over a request authenticated under the old value.
         let currentSender = store.bot(internalCapability.botId);
         if (!currentSender || currentSender.composio === false || !composio.configured(cfg)) return json(res, 403, { error: "connected apps are not enabled for this bot" });
+        const rpc = body && typeof body === "object" && !Array.isArray(body)
+          ? (body as { id?: unknown; method?: unknown; params?: unknown })
+          : null;
+        const refuseOutbound = (text: string) => {
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          return res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc?.id ?? null, result: { content: [{ type: "text", text }], isError: true } }));
+        };
+        if (jobGate.refusesConnectorCall(currentSender, internalCapability.threadId, body)) return refuseOutbound(JOB_DECLINE);
         // Verdict every tools/call frame against connectorTools; a grants record makes every unrecognized shape a deny.
         const call = connectorCallFromFrame(body);
         let serviceSlugs: readonly string[] = [];
@@ -15968,13 +15987,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             source: "connector-scope",
             rule: "connectorTools",
           });
-          const refusal = connectorUnrecognizedText(call.invoked, call.reason);
-          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-          return res.end(JSON.stringify({
-            jsonrpc: "2.0",
-            id: (body as { id?: unknown }).id ?? null,
-            result: { content: [{ type: "text", text: refusal }], isError: true },
-          }));
+          return refuseOutbound(connectorUnrecognizedText(call.invoked, call.reason));
         }
         if (call.kind === "tools") {
           // Real connected-service slugs, so an underscored service (bland_ai) is not captured by a plain-prefix grant (bland).
@@ -16000,13 +16013,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
                 rule: denial.service ? "connectorTools." + denial.service : "connectorTools",
               });
             }
-            const refusal = connectorRefusalText(verdict.denials);
-            res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-            return res.end(JSON.stringify({
-              jsonrpc: "2.0",
-              id: (body as { id?: unknown }).id ?? null,
-              result: { content: [{ type: "text", text: refusal }], isError: true },
-            }));
+            return refuseOutbound(connectorRefusalText(verdict.denials));
           }
           appendDecision(DATA_DIR, {
             threadId: internalCapability.threadId,
@@ -16020,9 +16027,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           });
         }
         // A send waits on a card or spends the daily allowance below Full access; every MausBot write waits on a card at every level.
-        const rpc = body && typeof body === "object" && !Array.isArray(body)
-          ? (body as { id?: unknown; method?: unknown; params?: unknown })
-          : null;
         const rpcParams = rpc?.params && typeof rpc.params === "object" && !Array.isArray(rpc.params)
           ? (rpc.params as { name?: unknown; arguments?: unknown })
           : null;
@@ -16030,10 +16034,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ? (isMausBot(currentSender) ? approvalCallsIn : outboundCallsIn)(rpcParams.name, rpcParams.arguments)
           : [];
         const outboundTool = outboundCalls.length ? outboundCalls[0].slug : null;
-        const refuseOutbound = (text: string) => {
-          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-          return res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc?.id ?? null, result: { content: [{ type: "text", text }], isError: true } }));
-        };
         // An app this bot may not touch is refused outright, never turned into a question for the person.
         const connectorCalls = rpc?.method === "tools/call" && typeof rpcParams?.name === "string"
           ? connectorCallsIn(rpcParams.name, rpcParams.arguments)

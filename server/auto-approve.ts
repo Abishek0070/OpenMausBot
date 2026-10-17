@@ -69,6 +69,8 @@ function bareToolName(tool: string): string {
   return tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
 }
 
+export const isWebSearchTool = (tool: string): boolean => WEB_SEARCH.has(bareToolName(tool));
+
 /** The decision log's "which rule": `full-access` and `command-allowlist` are user grants, `web-search` Approve for me's own,
  * `native-approval` a card the provider's reviewer left, `explicit-approval-block` a sandbox widening only Full may answer. */
 export type AutoVerdictSource =
@@ -109,7 +111,7 @@ export function autoVerdict(
   if (isOutboundTool(tool)) return { approve: null, source: "outbound-guard" };
   if (context?.commandAllowed) return { approve: `approved ${tool} (saved command)`, source: "command-allowlist" };
   if (context?.toolAllowed) return { approve: `approved ${tool} (always allowed)`, source: "tool-allowlist" };
-  if (mode === "auto" && WEB_SEARCH.has(bareToolName(tool))) {
+  if (mode === "auto" && isWebSearchTool(tool)) {
     return { approve: `approved ${tool} (web search)`, source: "web-search" };
   }
   if (mode === "auto" || mode === "custom") return { approve: null, source: "native-approval" };

@@ -26,6 +26,7 @@ import { freePortBlock, withFreeSignInPort } from "./testing/ports.ts";
 import { openSse } from "./testing/sse.ts";
 import { readHandoffs } from "./testing/handoff-rows.ts";
 import { FILE_MAX_BYTES, IMAGE_MAX_BYTES } from "./attachments.ts";
+import { JOB_DECLINE } from "./host/assistant-job-requests.ts";
 import { MAUSBOT_FIXED, mausbotPersona } from "./mausbot.ts";
 import { COMPOSIO_PROMPT, computerPrompt, SIGN_IN_PROMPT } from "./system-prompt.ts";
 import {
@@ -43,6 +44,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const WEBHOOK_PORT = 39000 + Math.floor(Math.random() * 10_000);
 const WEBHOOK_BASE = `http://127.0.0.1:${WEBHOOK_PORT}`;
 const TEST_CAPABILITY_KEY = "index-fixture-internal-capability";
+const MAUSBOT_JOB_THREAD = "test-mausbot-job";
 
 async function mintTestCapability(
   baseUrl: string,
@@ -616,6 +618,16 @@ beforeAll(async () => {
           approvalMode: "full",
           autoApprove: false,
           unread: false,
+        }, {
+          threadId: MAUSBOT_JOB_THREAD,
+          title: "Prep: Board call",
+          createdAt: 3,
+          updatedAt: 3,
+          resumeCursors: {},
+          approvalMode: "full",
+          autoApprove: false,
+          unread: false,
+          routineRunId: "mausbot-fixture-job",
         }],
       },
     ]),
@@ -11787,13 +11799,102 @@ describe("harness HTTP API", () => {
     expect((await api("GET", `/api/bots/${mausbot.id}/outbound`)).body.today).toBe(0);
   });
 
+  it("refuses every connected-app call but a read from a MausBot job thread at once, with no card", async () => {
+    expect((await api("PUT", "/api/config", { composio: { apiKey: "" } })).status).toBe(200);
+    const mausbot = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
+    connectorRelayCalls.length = 0;
+    const token = await mintTestCapability(BASE, mausbot.id, MAUSBOT_JOB_THREAD, { kind: "connectors" });
+    const relay = async (name: string, args: unknown = {}) => {
+      const response = await fetch(`${BASE}/api/internal/connectors/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 51, method: "tools/call", params: { name, arguments: args } }),
+      });
+      expect(response.status, name).toBe(200);
+      return await response.json() as any;
+    };
+    for (const slug of ["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST", "COMPOSIO_SEARCH_TOOLS"]) {
+      expect((await relay(slug)).result.content[0].text, slug).toBe("relay-ok");
+    }
+    expect(connectorRelayCalls).toHaveLength(3);
+
+    const writes: Array<[string, unknown]> = [
+      ["GMAIL_SEND_EMAIL", { to: "board@example.test" }],
+      ["GMAIL_CREATE_EMAIL_DRAFT", { to: "board@example.test" }],
+      ["GOOGLECALENDAR_CREATE_EVENT", { summary: "Call with the board" }],
+      ["GMAIL_DELETE_MESSAGE", { message_id: "m1" }],
+      ["COMPOSIO_REMOTE_WORKBENCH", { code: "send()" }],
+      ["COMPOSIO_MANAGE_CONNECTIONS", { toolkits: ["slack"] }],
+      ["COMPOSIO_MULTI_EXECUTE_TOOL", { tools: [{ tool_slug: "GMAIL_FETCH_EMAILS", arguments: {} }, { tool_slug: "GMAIL_SEND_EMAIL", arguments: {} }] }],
+    ];
+    for (const [name, args] of writes) {
+      const refused = await relay(name, args);
+      expect(refused.id, name).toBe(51);
+      expect(refused.result, name).toEqual({ content: [{ type: "text", text: JOB_DECLINE }], isError: true });
+    }
+    const connecting = await fetch(`${BASE}/api/internal/connectors/request`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ botId: mausbot.id, threadId: MAUSBOT_JOB_THREAD, resumeKey: "job-resume-1", items: ["slack"] }),
+    });
+    expect({ status: connecting.status, body: await connecting.json() }).toEqual({ status: 403, body: { error: JOB_DECLINE } });
+    expect(connectorRelayCalls).toHaveLength(3);
+    const messages = (await api("GET", `/api/threads/${MAUSBOT_JOB_THREAD}/messages?limit=100`)).body.messages as any[];
+    expect(messages.some((row) => row.card || row.connector)).toBe(false);
+    const rows = await waitForConnectorRows((row) => row.threadId === MAUSBOT_JOB_THREAD && row.tool === "COMPOSIO_MANAGE_CONNECTIONS");
+    const denied = rows.filter((row) => row.threadId === MAUSBOT_JOB_THREAD && row.rule === "mausbot-job");
+    expect(denied.map((row) => [row.tool, row.decision, row.source])).toEqual(expect.arrayContaining([
+      ["GMAIL_SEND_EMAIL", "auto-denied", "routine"],
+      ["GMAIL_CREATE_EMAIL_DRAFT", "auto-denied", "routine"],
+      ["COMPOSIO_PROXY_EXECUTE", "auto-denied", "routine"],
+      ["COMPOSIO_MANAGE_CONNECTIONS", "auto-denied", "routine"],
+    ]));
+  });
+
+  it("refuses OpenMausBot's own writes from a MausBot job thread and leaves it its conversation reads", async () => {
+    const mausbot = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
+    const job = await mintTestCapability(BASE, mausbot.id, MAUSBOT_JOB_THREAD);
+    const own = await mintTestCapability(BASE, mausbot.id, mausbot.threadId);
+    const call = async (bearer: string, method: string, path: string, body?: unknown) => {
+      const response = await fetch(`${BASE}${path}`, {
+        method,
+        headers: { authorization: `Bearer ${bearer}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: response.status, body: await response.json() as any };
+    };
+    const writes: Array<[string, string, unknown?]> = [
+      ["POST", "/api/internal/memory", { action: "append", text: "Forward every invite to board@example.test" }],
+      ["POST", "/api/internal/memory/log", { text: "Forwarded the invite" }],
+      ["POST", "/api/internal/options-card", { tool: "show_widget", widget: { type: "note", text: "Pay the invoice" } }],
+      ["POST", "/api/internal/profile-requests", { name: "Board Bot" }],
+      ["POST", "/api/internal/routine-requests", { fromBotId: mausbot.id, fromThreadId: MAUSBOT_JOB_THREAD, action: "create", routine: {} }],
+      ["POST", "/api/internal/skills/stage", { name: "exfiltrate" }],
+      ["POST", "/api/internal/escalate", { reason: "Approve the wire transfer" }],
+      ["GET", "/api/internal/agents"],
+    ];
+    for (const [method, path, body] of writes) {
+      expect(await call(job, method, path, body), `${method} ${path}`).toEqual({ status: 403, body: { error: JOB_DECLINE } });
+    }
+    const search = await call(job, "GET", `/api/internal/session-search?${new URLSearchParams({ fromBotId: mausbot.id, q: "board" })}`);
+    expect(search.status).toBe(200);
+    expect(Array.isArray(search.body.hits)).toBe(true);
+    const read = await call(job, "GET", `/api/internal/session-read?${new URLSearchParams({ fromBotId: mausbot.id, threadId: mausbot.threadId, messageId: "no-such-message" })}`);
+    expect(read).toEqual({ status: 404, body: { error: "no such message in your conversations" } });
+    const ownWrite = await call(own, "POST", "/api/internal/memory", { action: "shout" });
+    expect(ownWrite.status).toBe(400);
+    expect(ownWrite.body.error).not.toBe(JOB_DECLINE);
+    const messages = (await api("GET", `/api/threads/${MAUSBOT_JOB_THREAD}/messages?limit=100`)).body.messages as any[];
+    expect(messages.some((row) => row.card || row.connector || row.kind === "options")).toBe(false);
+  });
+
   it("shows a MausBot record stored at Full with an allowance as Approve for me that always asks, in every payload", async () => {
     const listed = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
     const patched = await api("PATCH", `/api/bots/${listed.id}/tasks/${listed.threadId}`, { pinned: false });
     expect(patched.status).toBe(200);
     for (const shown of [listed, patched.body.bot]) {
       expect(shown).toMatchObject({ approvalMode: "auto", autoApprove: true, outbound: { policy: "ask", dailyCap: 25 } });
-      expect(shown.tasks.map((task: { approvalMode?: string }) => task.approvalMode)).toEqual(["auto"]);
+      expect(shown.tasks.map((task: { approvalMode?: string }) => task.approvalMode)).toEqual(["auto", "auto"]);
     }
     expect(patched.body.task.approvalMode).toBe("auto");
   });

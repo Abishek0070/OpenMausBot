@@ -11,6 +11,7 @@ import {
   autoVerdict,
   deliverFullAccessApproval,
   delegatedApprovalMode,
+  isWebSearchTool,
 } from "./auto-approve.ts";
 
 describe("Full access delivery", () => {
@@ -128,6 +129,15 @@ describe("autoVerdict", () => {
       approve: "approved WebSearch (saved command)",
       source: "command-allowlist",
     });
+  });
+});
+
+describe("isWebSearchTool", () => {
+  it("names a web search under any server prefix, and never a page fetch", () => {
+    expect(isWebSearchTool("WebSearch")).toBe(true);
+    expect(isWebSearchTool("mcp__web__web_search")).toBe(true);
+    expect(isWebSearchTool("WebFetch")).toBe(false);
+    expect(isWebSearchTool("Bash")).toBe(false);
   });
 });
 
