@@ -246,7 +246,7 @@ import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine }
 import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GATE } from "./escalations.ts";
 import { createChiefNotices } from "./host/chief-notices.ts";
 import { createChiefBrief } from "./host/chief-brief.ts";
-import { isMausBot, MAUSBOT_FIXED, seedBots } from "./mausbot.ts";
+import { isMausBot, MAUSBOT_FIXED, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
 import { briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
 import { needsInputQuestion } from "./runtime-coordinator.ts";
 import { RETRY_BLOCKED } from "./incidents.ts";
@@ -14979,7 +14979,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!chief.chiefOfStaff || chief.hidden) return json(res, 403, { error: "Only an active Chief may plan team setup" });
         return json(res, 200, {
           teams: teamSetupTeams().filter((name) => canAccessTeam(chief, name)),
-          bots: store.bots.filter((bot) => !bot.hidden && canAccessTeam(chief, bot.section) && (bot.id === chief.id || peerAllowed(chief, bot)))
+          bots: store.bots.filter((bot) => !bot.hidden && bot.builtIn === undefined && canAccessTeam(chief, bot.section) && (bot.id === chief.id || peerAllowed(chief, bot)))
             .map((bot) => ({ id: bot.id, name: bot.name, title: bot.title, section: bot.section ?? "", modelSelection: bot.modelSelection, chiefOfStaff: Boolean(bot.chiefOfStaff) })),
           instances: instances.map((instance) => ({ instanceId: instance.instanceId, driverKind: instance.driverKind, displayName: instance.displayName,
             state: instance.snapshot.state, models: instance.models, effortLevels: instance.capabilities?.effortLevels ?? [] })),
@@ -16602,6 +16602,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const ids = z.array(z.string().regex(/^[\w-]+$/)).max(MAX_WORKSPACE_BOTS);
       const parsed = z.object({ addBotIds: ids, removeBotIds: ids }).strict().safeParse(await readBody(req));
       if (!parsed.success) return json(res, 400, { error: "Provide addBotIds and removeBotIds" });
+      const teamRefusal = mausbotTeamRefusal(parsed.data.addBotIds.map((id) => store.bot(id)), section);
+      if (teamRefusal) return json(res, 409, { error: teamRefusal });
       for (const [botIds, destination] of [[parsed.data.addBotIds, section], [parsed.data.removeBotIds, undefined]] as const) {
         for (const id of botIds) {
           const bot = store.bot(id);
@@ -16626,6 +16628,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const botIds = [...new Set(parsed.data.botIds)];
       if (!name && !botIds.length) return json(res, 400, { error: "Team name is required" });
+      const teamRefusal = mausbotTeamRefusal(botIds.map((id) => store.bot(id)), name);
+      if (teamRefusal) return json(res, 409, { error: teamRefusal });
       for (const botId of botIds) {
         const bot = store.bot(botId);
         if (bot) assertTeamComputerChangeIdle(bot, { ...bot, section: name || undefined });

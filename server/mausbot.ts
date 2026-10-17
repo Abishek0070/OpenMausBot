@@ -65,7 +65,7 @@ export function mausbotPatchRefusal(bot: BotRecord | null | undefined, body: obj
   const fields = body as Record<string, unknown>;
   if (!isMausBot(bot)) return fields.color === MAUSBOT_COLOR ? SILVER_RESERVED : null;
   const current = bot as unknown as Record<string, unknown>;
-  if (fields.hidden === true || fields.chiefOfStaff === true) return MAUSBOT_FIXED;
+  if (fields.hidden || fields.chiefOfStaff === true) return MAUSBOT_FIXED;
   if ((fields.outbound as { policy?: unknown } | null | undefined)?.policy === "allow") return MAUSBOT_ASKS;
   if (typeof fields.section === "string" && fields.section.trim()) return MAUSBOT_FIXED;
   if (fields.visibility !== undefined && fields.visibility !== "admins") return MAUSBOT_FIXED;
@@ -75,4 +75,9 @@ export function mausbotPatchRefusal(bot: BotRecord | null | undefined, body: obj
     if (value !== undefined && value !== null && value !== current[field]) return MAUSBOT_FIXED;
   }
   return null;
+}
+
+export function mausbotTeamRefusal(bots: readonly (BotRecord | null | undefined)[], destination: string | undefined): string | null {
+  if (!destination?.trim()) return null;
+  return bots.some(isMausBot) ? MAUSBOT_FIXED : null;
 }

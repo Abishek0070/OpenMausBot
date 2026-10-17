@@ -5,8 +5,8 @@ import { PROFILE_REQUEST_FIELDS, type ProfileRequestCardData, type ProfileReques
 import { parseBotProfilePatch, type BotProfilePatchInput } from "./bot-profile.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { newId } from "./contracts.ts";
-import { isMausBot, MAUSBOT_FIXED } from "./mausbot.ts";
 import { UNDO_STALE, type DirectApply, type DirectApplyCheck } from "./direct-apply.ts";
+import { isMausBot, MAUSBOT_FIXED } from "./mausbot.ts";
 import { profileRevision, profileSnapshot } from "./profile-revision.ts";
 import { recordProfileChange } from "./profile-versions.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -426,6 +426,7 @@ export class ProfileRequestService {
         throw new ProfileRequestError(STALE, 409, { terminal: true });
       }
 
+      if (isMausBot(target) && payload.changes.name !== undefined) throw new ProfileRequestError(MAUSBOT_FIXED, 409, { terminal: true });
       const { cwd, ...rest } = payload.changes;
       const validated = Object.keys(rest).length ? parseChanges(rest) : {};
       const patch: Parameters<ProfileRequestStore["patchBotProfile"]>[1] = { ...validated, lastProfileRequestId: payload.requestId };

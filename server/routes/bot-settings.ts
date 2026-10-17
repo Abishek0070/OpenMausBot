@@ -1,6 +1,5 @@
 import { approvalModeFor, type ApprovalMode } from "../../shared/approval-mode.ts";
 import { botAvatarUrlFromStoredPath } from "../../shared/bot-avatar.ts";
-import { isMausBot, MAUSBOT_FIXED, mausbotPatchRefusal } from "../mausbot.ts";
 import type { CommandAllowlistResponse } from "../../shared/command-allowlist.ts";
 import type { WireBot } from "../../shared/wire.ts";
 import { deleteAttachment, saveImage } from "../attachments.ts";
@@ -12,6 +11,7 @@ import type { ModelSelection } from "../contracts.ts";
 import type { createApprovalModeSupport } from "../harness-capabilities.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
 import type { hostedModelPolicy } from "../hosted-models.ts";
+import { isMausBot, MAUSBOT_FIXED, mausbotPatchRefusal } from "../mausbot.ts";
 import { profileSnapshot } from "../profile-revision.ts";
 import { recordProfileChange } from "../profile-versions.ts";
 import type { RequestAuth } from "../request-auth.ts";
