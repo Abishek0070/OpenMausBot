@@ -20,7 +20,7 @@ const dirs: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) await removeTempDir(dir); });
 
 function world(options: { bots?: Array<Partial<BotRecord> & { id: string; name: string }>; mausbot?: Partial<BotRecord>; turns?: Array<[string, number]>;
-  configured?: boolean; connected?: Record<string, { connected: boolean }> | Error; hosted?: boolean } = {}) {
+  configured?: boolean; connected?: Record<string, { connected: boolean }> | Error; hosted?: boolean; maxBots?: number } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "omb-mausbot-intro-"));
   dirs.push(dataDir);
   const bots = [...(options.bots ?? []), { id: "m", name: "MausBot", builtIn: "mausbot", visibility: "admins", ...options.mausbot }]
@@ -38,26 +38,31 @@ function world(options: { bots?: Array<Partial<BotRecord> & { id: string; name: 
       return full;
     }),
     messagesFor: (threadId: string) => messages.get(threadId) ?? [],
-    patchMessage: (threadId: string, id: string, patch: Partial<Message>) => {
+    patchMessage: vi.fn((threadId: string, id: string, patch: Partial<Message>) => {
       const list = messages.get(threadId) ?? [];
       const index = list.findIndex((line) => line.id === id);
       if (index < 0) return null;
       list[index] = { ...list[index]!, ...patch } as Message;
       return list[index]!;
-    },
+    }),
     patchTask: vi.fn(() => null),
     createBot: vi.fn((profile?: { name?: string }) => {
       const bot = { id: `new${bots.length}`, name: profile?.name ?? "Random", threadId: `new${bots.length}-main` } as BotRecord;
       bots.unshift(bot);
       return bot;
     }),
-    setChiefOfStaff: vi.fn((id: string) => { for (const bot of bots) bot.chiefOfStaff = bot.id === id; return []; }),
+    setChiefOfStaff: vi.fn((id: string): BotRecord[] | null => { for (const bot of bots) bot.chiefOfStaff = bot.id === id; return []; }),
+    deleteBot: vi.fn((id: string) => {
+      const index = bots.findIndex((bot) => bot.id === id);
+      if (index >= 0) bots.splice(index, 1);
+      return index >= 0;
+    }),
   };
   const file = join(dataDir, "brief.json");
   const state = createBriefState(file);
   const checks = vi.fn(async () => { if (connected instanceof Error) throw connected; return connected; });
   const intro = createMausBotIntro({
-    store: store as unknown as MausBotIntroDeps["store"], state, hosted: options.hosted ?? false,
+    store: store as unknown as MausBotIntroDeps["store"], state, hosted: options.hosted ?? false, maxBots: options.maxBots ?? 100,
     mainThread: (bot) => bot.threadId, turnsByBot: () => new Map(options.turns ?? []),
     configured: () => options.configured ?? true,
     connected: checks,
@@ -180,6 +185,33 @@ describe("MausBot's intro", () => {
   });
 });
 
+describe("MausBot's records", () => {
+  it("posts the Chief offer on a later presence when posting it failed, and the intro only once", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ bots: [{ id: "tango", name: "Tango" }], configured: false });
+    const append = w.store.appendMessage.getMockImplementation()!;
+    w.store.appendMessage.mockImplementationOnce(append).mockImplementationOnce(() => { throw new Error("disk full"); });
+    await w.intro.introduce();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+    expect(w.thread().map((line) => line.kind)).toEqual(["text"]);
+    expect(w.state.get()).toMatchObject({ mausbotIntro: { threadId: "m-main" } });
+    expect(w.state.get().chiefOffer).toBeUndefined();
+    await w.intro.introduce();
+    await w.intro.introduce();
+    expect(w.thread().map((line) => line.kind)).toEqual(["text", "options"]);
+    expect(w.saved()).toMatchObject({ chiefOffer: { messageId: w.offer().id } });
+    expect(w.store.patchTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("saves a record whose save failed with the next save that works", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ bots: [{ id: "tango", name: "Tango" }], configured: false });
+    vi.spyOn(w.state, "patch").mockImplementationOnce(() => { throw new Error("read-only file system"); });
+    await w.intro.introduce();
+    expect(w.saved()).toMatchObject({ mausbotIntro: { at: NOW, threadId: "m-main" }, chiefOffer: { requestId: "id1", messageId: w.offer().id } });
+  });
+});
+
 describe("the Chief offer", () => {
   const answer = (w: ReturnType<typeof world>, choice: string, auth: RequestAuth, behavior: "allow" | "deny" | "answer" = "answer") =>
     w.intro.answerCard("m-main", w.offer().card!.requestId!, behavior, choice, auth);
@@ -236,12 +268,88 @@ describe("the Chief offer", () => {
     expect(w.intro.answerCard("m-main", "someone-else", "answer", CREATE_CHIEF, owner)).toBeUndefined();
     expect(w.intro.answerCard("other-thread", w.offer().card!.requestId!, "answer", CREATE_CHIEF, owner)).toBeUndefined();
     w.store.bots[0]!.chiefOfStaff = true;
+    expect(answer(w, CREATE_CHIEF, owner)).toBe("unavailable");
+    expect(w.store.createBot).not.toHaveBeenCalled();
+    expect(w.offer().card?.answered).toBe("unavailable");
+    expect(w.offer().card).not.toHaveProperty("answeredText");
+    expect(w.saved()).toMatchObject({ chiefOffer: { answered: "no" } });
     expect(answer(w, CREATE_CHIEF, owner)).toBe("rejected");
     expect(w.store.createBot).not.toHaveBeenCalled();
     const fresh = world({ bots: [{ id: "tango", name: "Tango" }] });
     await fresh.intro.introduce();
     expect(answer(fresh, NOT_NOW, owner)).toBe("rejected");
     expect(fresh.state.get().chiefOffer?.answered).toBe("no");
+  });
+
+  it("treats an allow press, or text that is not one of the options, as Not now", async () => {
+    for (const [behavior, text] of [["allow", CREATE_CHIEF], ["answer", "make me a Chief"]] as const) {
+      const w = world({ bots: [{ id: "tango", name: "Tango" }], turns: [["tango", 1]] });
+      await w.intro.introduce();
+      expect(answer(w, text, owner, behavior)).toBe("rejected");
+      expect(w.store.createBot).not.toHaveBeenCalled();
+      expect(w.store.setChiefOfStaff).not.toHaveBeenCalled();
+      expect(w.offer().card).toMatchObject({ answered: "answer", answeredText: NOT_NOW });
+      expect(w.saved()).toMatchObject({ chiefOffer: { answered: "no" } });
+    }
+  });
+
+  it("does not appoint a bot that was deleted or hidden after the offer, and keeps the card open", async () => {
+    for (const change of ["deleted", "hidden"] as const) {
+      const w = world({ bots: [{ id: "tango", name: "Tango" }], turns: [["tango", 4]] });
+      await w.intro.introduce();
+      const before = w.saved();
+      if (change === "deleted") w.store.deleteBot("tango");
+      else w.store.bots.find((bot) => bot.id === "tango")!.hidden = true;
+      expect(answer(w, appointOption("Tango"), owner)).toBe("unavailable");
+      expect(w.store.setChiefOfStaff).not.toHaveBeenCalled();
+      expect(w.offer().card?.answered).toBeUndefined();
+      expect(w.saved()).toEqual(before);
+    }
+  });
+
+  it("creates no Chief at the workspace's bot limit, where built-in bots do not count", async () => {
+    const full = world({ bots: [{ id: "tango", name: "Tango" }], maxBots: 1 });
+    await full.intro.introduce();
+    const before = full.saved();
+    expect(answer(full, CREATE_CHIEF, owner)).toBe("unavailable");
+    expect(full.store.createBot).not.toHaveBeenCalled();
+    expect(full.offer().card?.answered).toBeUndefined();
+    expect(full.saved()).toEqual(before);
+    const room = world({ bots: [{ id: "tango", name: "Tango" }], maxBots: 2 });
+    await room.intro.introduce();
+    expect(answer(room, CREATE_CHIEF, owner)).toBe("answered");
+    expect(room.store.createBot).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes a half-made Chief when appointing it fails, and keeps the card open", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const failure of ["refused", "threw"] as const) {
+      const w = world({ bots: [{ id: "tango", name: "Tango" }] });
+      await w.intro.introduce();
+      const before = w.saved();
+      if (failure === "refused") w.store.setChiefOfStaff.mockReturnValueOnce(null);
+      else w.store.setChiefOfStaff.mockImplementationOnce(() => { throw new Error("bots.json is read-only"); });
+      expect(answer(w, CREATE_CHIEF, owner)).toBe("unavailable");
+      const created = w.store.createBot.mock.results[0]!.value as BotRecord;
+      expect(w.store.deleteBot).toHaveBeenCalledWith(created.id);
+      expect(w.store.bots.some((bot) => bot.name === "Chief of Staff")).toBe(false);
+      expect(w.offer().card?.answered).toBeUndefined();
+      expect(w.saved()).toEqual(before);
+    }
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("bots.json is read-only"));
+  });
+
+  it("never throws when settling the card fails: it logs and answers unavailable", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ bots: [{ id: "tango", name: "Tango" }] });
+    await w.intro.introduce();
+    const before = w.saved();
+    w.store.patchMessage.mockImplementationOnce(() => { throw new Error("transcript is locked"); });
+    expect(() => answer(w, NOT_NOW, owner)).not.toThrow();
+    w.store.patchMessage.mockImplementationOnce(() => { throw new Error("transcript is locked"); });
+    expect(answer(w, NOT_NOW, owner)).toBe("unavailable");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript is locked"));
+    expect(w.saved()).toEqual(before);
   });
 
   it("answers nothing on a hosted workspace, even for an offer left in brief.json", () => {

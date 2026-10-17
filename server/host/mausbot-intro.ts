@@ -21,10 +21,10 @@ export const MAUSBOT_SERVICES = [
 ] as const;
 
 export interface MausBotIntroDeps {
-  store: Pick<Store, "bots" | "bot" | "appendMessage" | "messagesFor" | "patchMessage" | "patchTask" | "createBot" | "setChiefOfStaff">;
-  /** The same instance the recap writes: one store per file. */
+  store: Pick<Store, "bots" | "bot" | "appendMessage" | "messagesFor" | "patchMessage" | "patchTask" | "createBot" | "setChiefOfStaff" | "deleteBot">;
   state: BriefStateStore;
   hosted: boolean;
+  maxBots: number;
   mainThread(bot: BotRecord): string | undefined;
   turnsByBot(): Map<string, number>;
   /** Connected apps are set up on this server: a project key or the managed service. */
@@ -51,8 +51,8 @@ export function createMausBotIntro(deps: MausBotIntroDeps) {
 
   function remember(changes: Remembered): void {
     try {
-      deps.state.patch(changes);
-      for (const key of Object.keys(changes) as Array<keyof Remembered>) delete unsaved[key];
+      deps.state.patch({ ...unsaved, ...changes });
+      for (const key of Object.keys(unsaved) as Array<keyof Remembered>) delete unsaved[key];
     } catch (error) {
       Object.assign(unsaved, changes);
       console.warn(`mausbot: could not save the intro state: ${failure(error)}`);
@@ -108,10 +108,21 @@ export function createMausBotIntro(deps: MausBotIntroDeps) {
       const bot = findMausBot(deps.store.bots);
       const threadId = bot && deps.mainThread(bot);
       if (!bot || !threadId) return;
+      let posted = false;
       if (!current().mausbotIntro) {
         deps.store.appendMessage(threadId, { role: "bot", kind: "text", text: deps.configured() ? MAUSBOT_INTRO : `${MAUSBOT_INTRO}\n\n${MAUSBOT_NO_APPS}` });
         remember({ mausbotIntro: { at: now(), threadId } });
-        if (!visibleChief()) offerChief(threadId);
+        posted = true;
+      }
+      if (!current().chiefOffer && !visibleChief()) {
+        try {
+          offerChief(threadId);
+          posted = true;
+        } catch (error) {
+          console.warn(`mausbot: the Chief offer was not posted: ${failure(error)}`);
+        }
+      }
+      if (posted) {
         try {
           deps.store.patchTask(bot.id, threadId, { unread: true });
         } catch (error) {
@@ -127,10 +138,23 @@ export function createMausBotIntro(deps: MausBotIntroDeps) {
     }
   }
 
-  /** Security invariant: only the owner or an admin may answer, whatever let the press reach this card; a refused press
-   * leaves the card open and records nothing. */
-  function answerCard(threadId: string, requestId: string, behavior: "allow" | "deny" | "answer", message: unknown, auth: RequestAuth): RequestOutcome | undefined {
-    if (deps.hosted) return undefined;
+  function createChief(): boolean {
+    const created = deps.store.createBot({ name: CHIEF_OF_STAFF_NAME });
+    try {
+      if (deps.store.setChiefOfStaff(created.id) !== null) return true;
+    } catch (error) {
+      console.warn(`mausbot: the new Chief of Staff could not be appointed: ${failure(error)}`);
+    }
+    deps.store.deleteBot(created.id);
+    return false;
+  }
+
+  function appointCandidate(id: string | undefined): boolean {
+    const target = id ? deps.store.bot(id) : null;
+    return Boolean(target && !target.hidden && !isMausBot(target) && deps.store.setChiefOfStaff(target.id) !== null);
+  }
+
+  function settle(threadId: string, requestId: string, behavior: "allow" | "deny" | "answer", message: unknown, auth: RequestAuth): RequestOutcome | undefined {
     const offer = current().chiefOffer;
     if (!offer || offer.requestId !== requestId || offer.threadId !== threadId) return undefined;
     const row = deps.store.messagesFor(threadId).find((line) => line.id === offer.messageId);
@@ -138,26 +162,35 @@ export function createMausBotIntro(deps: MausBotIntroDeps) {
     if (!presenceOwner(auth)) return "unavailable";
     if (offer.answered) return offer.answered === "no" ? "rejected" : "answered";
     const choice = behavior === "answer" && typeof message === "string" && row.card.options.includes(message) ? message : NOT_NOW;
+    if (choice !== NOT_NOW && visibleChief()) {
+      const { answeredText: _answeredText, ...card } = row.card;
+      deps.store.patchMessage(threadId, row.id, { card: { ...card, answered: "unavailable" } });
+      remember({ chiefOffer: { ...offer, answered: "no" } });
+      return "unavailable";
+    }
     let answered: "create" | "appoint" | "no" = "no";
-    if (choice !== NOT_NOW && !visibleChief()) {
-      try {
-        if (choice === CREATE_CHIEF) {
-          const created = deps.store.createBot({ name: CHIEF_OF_STAFF_NAME });
-          if (deps.store.setChiefOfStaff(created.id) === null) return "unavailable";
-          answered = "create";
-        } else {
-          const target = offer.candidateId ? deps.store.bot(offer.candidateId) : null;
-          if (!target || target.hidden || isMausBot(target) || deps.store.setChiefOfStaff(target.id) === null) return "unavailable";
-          answered = "appoint";
-        }
-      } catch (error) {
-        console.warn(`mausbot: the Chief of Staff was not set up: ${failure(error)}`);
-        return "unavailable";
-      }
+    if (choice === CREATE_CHIEF) {
+      if (deps.store.bots.filter((bot) => !bot.builtIn).length >= deps.maxBots || !createChief()) return "unavailable";
+      answered = "create";
+    } else if (choice !== NOT_NOW) {
+      if (!appointCandidate(offer.candidateId)) return "unavailable";
+      answered = "appoint";
     }
     deps.store.patchMessage(threadId, row.id, { card: { ...row.card, answered: "answer", answeredText: choice } });
     remember({ chiefOffer: { ...offer, answered } });
     return answered === "no" ? "rejected" : "answered";
+  }
+
+  /** Security invariant: only the owner or an admin may answer, whatever let the press reach this card; a refused press
+   * leaves the card open and records nothing. */
+  function answerCard(threadId: string, requestId: string, behavior: "allow" | "deny" | "answer", message: unknown, auth: RequestAuth): RequestOutcome | undefined {
+    if (deps.hosted) return undefined;
+    try {
+      return settle(threadId, requestId, behavior, message, auth);
+    } catch (error) {
+      console.warn(`mausbot: the Chief offer was not settled: ${failure(error)}`);
+      return "unavailable";
+    }
   }
 
   return { introduce, answerCard };
