@@ -42,7 +42,6 @@ it("posts one recap card in the Chief's chat when the person comes back after a 
     await api("POST", `/api/bots/${chief.id}/read`, { threadId: chief.threadId });
     expect(await chiefUnread()).toBe(false);
 
-    // The person is here now (nothing to recap yet), then Scout works while they are away.
     expect(await api("POST", "/api/presence/active", { source: "desktop", timeZone: "Asia/Kolkata" })).toEqual({ ok: true, returned: false });
     await control(["send", "--bot", scout.id, "--task", scout.threadId, "--text", "Finish the report."]);
     await control(["wait", "--bot", scout.id, "--task", scout.threadId]);
@@ -55,7 +54,6 @@ it("posts one recap card in the Chief's chat when the person comes back after a 
     const { run } = await api("POST", `/api/routines/${routine.id}/run`, undefined, 201);
     await expect.poll(async () => (await api("GET", "/api/routines")).runs.find((candidate: any) => candidate.id === run.id)?.status, { timeout: 15_000 }).toBe("completed");
 
-    // Nine hours pass with the app closed: the stored activation is moved back and the server restarted on the same data.
     await waitForExit(fixture.child, { signal: "SIGTERM" });
     const presenceFile = join(dataDir, PRESENCE_FILE);
     const saved = JSON.parse(readFileSync(presenceFile, "utf8"));
@@ -74,11 +72,13 @@ it("posts one recap card in the Chief's chat when the person comes back after a 
       env: verificationServerEnvironment({}, dataDir, Number(new URL(url).port)), stdio: ["ignore", log, log],
     });
     closeSync(log);
+    const exited = () => restarted?.exitCode !== null || restarted?.signalCode !== null;
+    const serverLog = () => readFileSync(logPath, "utf8");
     await expect.poll(async () => {
-      if (restarted?.exitCode !== null) return true;
+      if (exited()) return true;
       try { return (await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1_000) })).ok; } catch { return false; }
-    }, { timeout: 30_000 }).toBe(true);
-    if (restarted.exitCode !== null) throw new Error(`the restarted server exited; see ${logPath}`);
+    }, { timeout: 30_000 }).toBe(true).catch((error: unknown) => { throw new Error(`the restarted server did not start:\n${serverLog()}`, { cause: error }); });
+    if (exited()) throw new Error(`the restarted server exited:\n${serverLog()}`);
 
     // An open event stream is not the person, so the desktop's call ends the absence: one recap, both clients told to open it.
     const events = await openSse(`${url}/api/events`);

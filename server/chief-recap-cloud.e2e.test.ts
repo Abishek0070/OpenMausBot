@@ -18,11 +18,13 @@ let home = "", dataDir = "", base = "", port = 0, log = "";
 let child: ChildProcess | undefined;
 let cloud = false;
 
+const cloudHeaders = (): Record<string, string> => (cloud ? { host: HOST, "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https", origin: `https://${HOST}` } : {});
+
 async function api(method: string, path: string, options: { body?: unknown; token?: string } = {}) {
   const response = await fetch(`${base}${path}`, {
     method,
     headers: {
-      ...(cloud ? { host: HOST, "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https", origin: `https://${HOST}` } : {}),
+      ...cloudHeaders(),
       ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
       ...(options.body === undefined ? {} : { "content-type": "application/json" }),
     },
@@ -48,16 +50,18 @@ async function boot(asCloud: boolean) {
   });
   child.stdout?.on("data", (chunk) => { log += chunk; });
   child.stderr?.on("data", (chunk) => { log += chunk; });
+  const exited = () => child?.exitCode !== null || child?.signalCode !== null;
   await expect.poll(async () => {
-    if (child?.exitCode !== null) return true;
+    if (exited()) return true;
     try { return (await fetch(`${base}/api/health`)).ok; } catch { return false; }
-  }, { timeout: 25_000 }).toBe(true);
-  if (child?.exitCode !== null) throw new Error(`the server exited:\n${log}`);
+  }, { timeout: 25_000 }).toBe(true).catch((error: unknown) => { throw new Error(`the server did not start:\n${log}`, { cause: error }); });
+  if (exited()) throw new Error(`the server exited:\n${log}`);
 }
 async function shutdown() { if (child) await waitForExit(child, { signal: "SIGTERM" }); child = undefined; }
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-chief-recap-cloud-"));
+  // Kept short: the engine's permission socket goes under this folder (the data folder or TMPDIR), and macOS refuses a socket path over 103 bytes.
+  home = mkdtempSync(join(tmpdir(), "omb-recap-c-"));
   dataDir = join(home, ".openmausbot");
   mkdirSync(dataDir, { recursive: true });
   writeFileSync(join(dataDir, "config.json"), JSON.stringify({
@@ -91,16 +95,15 @@ it("only the owner's presence calls count as the person coming back, never an ev
   const awayNineHours = () => writeFileSync(presenceFile, JSON.stringify({ version: 1, lastActiveAt: lastActiveAt() - 9 * HOUR }));
 
   expect((await api("POST", "/api/presence/active", { token: owner, body: { source: "desktop", timeZone: "Asia/Kolkata" } })).body).toEqual({ ok: true, returned: false });
-  const ownersActivation = lastActiveAt();
-  expect(ownersActivation).toBeGreaterThan(0);
-  // A client-only session never reaches the route: it is admin-scoped like every unlisted route.
-  expect((await api("POST", "/api/presence/active", { token: guest, body: { source: "phone" } })).status).toBe(403);
-  expect(lastActiveAt()).toBe(ownersActivation);
+  expect(lastActiveAt()).toBeGreaterThan(0);
 
-  // Nine hours later a guest's event stream opens first: it is not the person coming back, so the owner's return is still theirs.
   await shutdown();
   awayNineHours();
+  const beforeGuest = lastActiveAt();
   await boot(false);
+  // A client-only session never reaches the route: it is admin-scoped like every unlisted route.
+  expect((await api("POST", "/api/presence/active", { token: guest, body: { source: "phone" } })).status).toBe(403);
+  expect(lastActiveAt()).toBe(beforeGuest);
   const guestStream = await openSse(`${base}/api/events`, { authorization: `Bearer ${guest}` });
   await guestStream.until((frame) => frame.kind === "hello");
   guestStream.close();
@@ -130,6 +133,9 @@ it("only the owner's presence calls count as the person coming back, never an ev
   expect((await api("POST", "/api/presence/active", { token: guest, body: { source: "phone" } })).status).toBe(401);
   const local = await fetch(`${base}/api/presence/active`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "desktop" }) });
   expect(local.status).toBe(403);
+  const ownerStream = await openSse(`${base}/api/events`, { ...cloudHeaders(), authorization: `Bearer ${owner}` });
+  await ownerStream.until((frame) => frame.kind === "hello");
+  ownerStream.close();
   expect(lastActiveAt()).toBe(beforeCloud);
   expect((await api("POST", "/api/presence/active", { token: owner, body: { source: "desktop" } })).body).toEqual({ ok: true, returned: true });
   expect((await api("GET", `/api/threads/${chief.threadId}/messages`, { token: guest })).status).toBe(401);

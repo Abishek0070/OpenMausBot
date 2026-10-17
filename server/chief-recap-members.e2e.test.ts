@@ -67,11 +67,12 @@ afterAll(async () => {
 });
 
 it("a member reading the Chief's chat never sees a bot limited to admins in the recap", async () => {
+  const exited = () => child?.exitCode !== null || child?.signalCode !== null;
   await expect.poll(async () => {
-    if (child?.exitCode !== null) return true;
+    if (exited()) return true;
     try { return (await fetch(`${base}/api/health`)).ok; } catch { return false; }
-  }, { timeout: 25_000 }).toBe(true);
-  if (child?.exitCode !== null) throw new Error(`the server exited:\n${log}`);
+  }, { timeout: 25_000 }).toBe(true).catch((error: unknown) => { throw new Error(`the server did not start:\n${log}`, { cause: error }); });
+  if (exited()) throw new Error(`the server exited:\n${log}`);
   const create = async (name: string) => {
     const created = await api("POST", "/api/bots", BOSS, { name });
     expect(created.status, JSON.stringify(created.body)).toBe(201);
