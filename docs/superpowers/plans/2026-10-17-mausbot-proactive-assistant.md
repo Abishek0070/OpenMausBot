@@ -71,7 +71,33 @@ Each is a fact the plan depends on, with evidence.
 
 Each was decided here; the tasks follow it. Omkar may overrule any of them at review.
 
-- **D1. Store order.** A new install creates "Chief of Staff" and then MausBot appended after it: `bots = [Chief of Staff, MausBot]`. An existing install gets MausBot appended at the end. MausBot is "first in the sidebar" through the sidebar partition, not through store order, so every test and client that reads `bots[0]` keeps its bot. Consequence: a brand-new install opens on Chief of Staff (the renderer's `bots[0]` fallback), with MausBot pinned above it and its intro unread.
+- **D1. Store order.** A new install creates "Chief of Staff" and then MausBot appended after it: `bots = [Chief of Staff, MausBot]`. An existing install gets MausBot appended at the end. MausBot is "first in the sidebar" through the sidebar partition, not through store order, so every test and client that reads `bots[0]` keeps its bot. **Amended by Omkar at plan review (2026-10-17): a brand-new install opens on MausBot.** See Amendment B below. Task 2.9 owns it.
+
+## Amendment B (binding, Omkar at plan review, 2026-10-17)
+
+A brand-new install opens on MausBot, not on Chief of Staff.
+
+**The change.** When the renderer has no remembered selection, it picks MausBot (`builtIn === "mausbot"`), not
+`bots[0]`. In `src/state/store.tsx`, the `hydrate` case, the existing line
+
+```ts
+      const selectedId = state.selectedId && known(state.selectedId) ? state.selectedId : resumed || (action.bots[0]?.id ?? "");
+```
+
+becomes, as an in-place edit (no line added; `src/state/store.tsx` is pinned):
+
+```ts
+      const selectedId = state.selectedId && known(state.selectedId) ? state.selectedId : resumed || (action.bots.find((bot) => bot.builtIn === "mausbot")?.id ?? action.bots[0]?.id ?? "");
+```
+
+**What does not change.** A remembered selection (`resumeId`) still wins, so an existing user who updates stays
+where they were. The store order and every other `bots[0]` reader stay as D1 says.
+
+**Test**, added to `src/state/store.test.ts` in Task 2.9: a `hydrate` with no remembered selection and no `resumeId`,
+where `bots` is `[Chief of Staff, MausBot]`, selects MausBot. The same `hydrate` with a `resumeId` naming the Chief
+selects the Chief.
+
+The Part 2 end-to-end test (Task 2.10) needs no change. The open rule (D23) is unaffected.
 - **D2. MausBot is ensured on every start**, not once: a start with no `builtIn: "mausbot"` bot (and not hosted) appends one. A workspace backup restored from before this version, or a hand-edited `bots.json`, gets MausBot back; nothing else can remove it.
 - **D3. The intro waits for the person.** MausBot is created silently (`seedMessages: false`); its first message, the Chief offer and the connect card are posted on the first owner presence after it exists. A server nobody has opened shows nothing waiting, which also keeps the 260 suites that never call presence unaffected (the earlier build's ruling for its offers).
 - **D4. Hosted team workspaces keep today's single random starter** (no Chief, no MausBot).
