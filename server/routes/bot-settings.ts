@@ -1,5 +1,6 @@
 import { approvalModeFor, type ApprovalMode } from "../../shared/approval-mode.ts";
 import { botAvatarUrlFromStoredPath } from "../../shared/bot-avatar.ts";
+import { isMausBot, MAUSBOT_FIXED, mausbotPatchRefusal } from "../mausbot.ts";
 import type { CommandAllowlistResponse } from "../../shared/command-allowlist.ts";
 import type { WireBot } from "../../shared/wire.ts";
 import { deleteAttachment, saveImage } from "../attachments.ts";
@@ -61,6 +62,7 @@ export function createBotSettingsRoutes(deps: BotSettingsRouteDeps): RouteHandle
     if (m && method === "POST") {
       const existing = store.bot(m[1]);
       if (!existing) return json(res, 404, { error: "no such bot" });
+      if (isMausBot(existing)) return json(res, 409, { error: MAUSBOT_FIXED });
       // Snapshot the fields this request owns before the first await, so a late result cannot win.
       const initialAvatar = snapshotAvatarGenerationState(existing);
       const parsed = avatarGenerationRequestSchema.safeParse(await readBody(req));
@@ -96,6 +98,8 @@ export function createBotSettingsRoutes(deps: BotSettingsRouteDeps): RouteHandle
         return json(res, 400, { error: "avatarUrl must reference an existing stored image" });
       }
       const existingBot = store.bot(m[1]);
+      const fixed = mausbotPatchRefusal(existingBot, parsed.patch);
+      if (fixed) return json(res, 409, { error: fixed });
       // On a Cloud home these fields ride every owner turn: only the owner's own devices change them.
       if (CLOUD_HOME && existingBot && !cloudOwnerSession(auth)) {
         const changed = CLOUD_OWNER_PROFILE_FIELDS.find((field) => parsed.patch[field] !== undefined && (field === "notifications"

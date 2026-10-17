@@ -551,3 +551,14 @@ describe("Full Access team setup", () => {
     expect(h.messages).toHaveLength(0);
   });
 });
+
+describe("MausBot in team setup", () => {
+  it("is never a target of a Chief's setup or deletion", async () => {
+    const h = harness();
+    const mausbot = h.bot("MausBot", { builtIn: "mausbot", visibility: "admins" });
+    expect(() => h.propose([{ action: "update", botId: mausbot.id, fields: { title: "Assistant" } }])).toThrow(/authorized/);
+    await expect(h.service.submitDeletion({ botId: h.chief.id, threadId: h.chief.threadId, targetBotId: mausbot.id, reason: "remove" })).rejects.toThrow(/authorized/);
+    expect(h.messages).toHaveLength(0);
+    expect(h.deleteBot).not.toHaveBeenCalled();
+  });
+});

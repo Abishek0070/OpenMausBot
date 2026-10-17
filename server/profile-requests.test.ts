@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { botFolder } from "./bot-folder.ts";
+import { MAUSBOT_FIXED } from "./mausbot.ts";
 import { profileRevision } from "./profile-revision.ts";
 import { flushProfileHistory, readHistory } from "./profile-versions.ts";
 import {
@@ -106,6 +107,14 @@ function harness(options: { name: string; chiefOfStaff?: boolean }) {
 }
 
 describe("ProfileRequestService", () => {
+  it("keeps MausBot's name: a rename is refused, other changes still make a card", () => {
+    const { service, store, bot } = harness({ name: "MausBot" });
+    bot.builtIn = "mausbot";
+    expect(() => service.propose({ botId: bot.id, threadId: bot.threadId, changes: { name: "Maus" }, reason: "You asked me to." })).toThrow(MAUSBOT_FIXED);
+    service.propose({ botId: bot.id, threadId: bot.threadId, changes: { soul: "Be brief." }, reason: "You asked me to." });
+    expect(store.messagesFor(bot.threadId).at(-1)?.card?.tool).toBe("update_profile");
+  });
+
   it("applies Full Access from the source thread without exposing an unanswered card and claims replays", () => {
     const { store, bot } = harness({ name: "Scout" });
     bot.approvalMode = "full";

@@ -8,6 +8,7 @@ import { parseToolScope, toolScopeWidens } from "../../shared/tool-scope.ts";
 import type { WireBot, WireGroup } from "../../shared/wire.ts";
 import { validateBotCwd } from "../bot-cwd.ts";
 import { parseBotProfilePatch } from "../bot-profile.ts";
+import { mausbotPatchRefusal } from "../mausbot.ts";
 import { parseVisibility } from "../bot-visibility.ts";
 import type { BrowserLive } from "../browser-live.ts";
 import type { BrowserRuntime } from "../browser-runtime.ts";
@@ -94,6 +95,8 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         if (field) return json(res, 403, { error: `forbidden: this session may change how a bot looks, not "${field}" (needs the admin scope)` });
       }
       const existingBot = store.bot(m[1]);
+      const fixed = mausbotPatchRefusal(existingBot, body);
+      if (fixed) return json(res, 409, { error: fixed });
       const rawSelection = (body as Record<string, unknown>).modelSelection;
       if (body.threadId !== undefined && rawSelection === undefined) {
         return json(res, 400, { error: "threadId goes with modelSelection" });

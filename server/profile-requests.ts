@@ -5,6 +5,7 @@ import { PROFILE_REQUEST_FIELDS, type ProfileRequestCardData, type ProfileReques
 import { parseBotProfilePatch, type BotProfilePatchInput } from "./bot-profile.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { newId } from "./contracts.ts";
+import { isMausBot, MAUSBOT_FIXED } from "./mausbot.ts";
 import { UNDO_STALE, type DirectApply, type DirectApplyCheck } from "./direct-apply.ts";
 import { profileRevision, profileSnapshot } from "./profile-revision.ts";
 import { recordProfileChange } from "./profile-versions.ts";
@@ -270,6 +271,7 @@ export class ProfileRequestService {
     if (Object.keys(finalChanges).length === 0) {
       throw new ProfileRequestError("Nothing would change");
     }
+    if (isMausBot(target) && finalChanges.name !== undefined) throw new ProfileRequestError(MAUSBOT_FIXED, 409);
 
     const requestId = newId();
     const targetName = redactSecretsInText(target.name);

@@ -524,3 +524,12 @@ describe("live peer roster for coordination briefs", () => {
     expect(block).not.toContain("Ghost");
   });
 });
+
+describe("MausBot in the roster", () => {
+  it("never lists MausBot as a teammate, whoever asks", () => {
+    const chief = { id: "chief", name: "Chief", chiefOfStaff: true, visibility: "admins" as const };
+    const mausbot = { id: "m", name: "MausBot", builtIn: "mausbot", visibility: "admins" as const };
+    expect(canReachPeer(chief, mausbot)).toBe(false);
+    expect(reachablePeers([chief, mausbot], chief).map((bot) => bot.id)).toEqual([]);
+  });
+});

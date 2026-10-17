@@ -4,6 +4,7 @@ import type { BotActivity } from "./store.ts";
 export interface RosterMember {
   id: string;
   name: string;
+  builtIn?: string;
   title?: string;
   description?: string;
   busy?: boolean;
@@ -92,7 +93,7 @@ export const peerAllowed = (
 };
 
 export function canReachPeer(from: RosterMember, target: RosterMember): boolean {
-  return from.id !== target.id && !target.hidden && canAccessTeam(from, target.section) && peerAllowed(from, target);
+  return from.id !== target.id && !target.hidden && target.builtIn === undefined && canAccessTeam(from, target.section) && peerAllowed(from, target);
 }
 
 /** What a bot is told about its team can never be wider than what the comms endpoints allow. */

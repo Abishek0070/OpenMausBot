@@ -246,7 +246,7 @@ import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine }
 import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GATE } from "./escalations.ts";
 import { createChiefNotices } from "./host/chief-notices.ts";
 import { createChiefBrief } from "./host/chief-brief.ts";
-import { seedBots } from "./mausbot.ts";
+import { isMausBot, MAUSBOT_FIXED, seedBots } from "./mausbot.ts";
 import { briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
 import { needsInputQuestion } from "./runtime-coordinator.ts";
 import { RETRY_BLOCKED } from "./incidents.ts";
@@ -9758,6 +9758,7 @@ async function deleteBotWithLifecycle(botId: string, revalidate: () => void = ()
       revalidate();
       const bot = store.bot(botId);
       if (!bot) return deletionResponse( 404, { error: "no such bot" });
+      if (isMausBot(bot)) return deletionResponse(409, { error: MAUSBOT_FIXED });
       if (computerProviderConfigTransitions.size > 0) {
         return deletionResponse( 409, { error: "computer provider settings are being updated — wait before deleting this bot" });
       }
