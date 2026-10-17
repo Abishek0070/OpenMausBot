@@ -10,6 +10,7 @@ import {
   MAUS_COLOR_NAMES,
   MAUS_COLORS,
   MAUS_MOTIONS,
+  PICKABLE_MAUS_COLOR_NAMES,
   PICKABLE_STATES,
   STATE_GROUPS,
   type MausColor,
@@ -177,7 +178,7 @@ function Tuner({
 
           <h3>Colour</h3>
           <div className="chips">
-            {MAUS_COLOR_NAMES.map((c) => (
+            {PICKABLE_MAUS_COLOR_NAMES.map((c) => (
               <button
                 key={c}
                 type="button"

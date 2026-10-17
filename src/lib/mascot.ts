@@ -1,4 +1,5 @@
 import { CURSOR_STATES, type CursorState } from "@/components/CursorAvatar";
+import { PICKABLE_MAUS_COLORS } from "../../shared/maus-colors";
 import { botShowsUnread } from "./bot-unread";
 import { lastNonReceipt } from "./receipts";
 
@@ -55,10 +56,11 @@ export const MAUS_COLOR_NAMES = [
   "yellow",
   "teal",
   "coral",
+  "silver",
 ] as const;
 
-/** The ten colours a person can pick. MausBot's silver is drawn but never offered. */
-export type MausColor = (typeof MAUS_COLOR_NAMES)[number] | "silver";
+/** Every colour a bot may have, MausBot's silver included, so every lookup draws it. */
+export type MausColor = (typeof MAUS_COLOR_NAMES)[number];
 
 export const MAUS_COLORS = {
   green: "#009957",
@@ -73,6 +75,9 @@ export const MAUS_COLORS = {
   coral: "#E5634E",
   silver: "#A8ADB4",
 } satisfies Record<MausColor, string>;
+
+/** What a person may choose; silver is MausBot's. */
+export const PICKABLE_MAUS_COLOR_NAMES: readonly MausColor[] = PICKABLE_MAUS_COLORS;
 
 export const MAUS_MOTIONS = [
   "arrive",

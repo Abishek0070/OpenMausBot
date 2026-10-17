@@ -8,7 +8,7 @@ import { cn } from "@/lib/cn";
 import {
   PICKABLE_STATES,
   MAUS_COLORS,
-  MAUS_COLOR_NAMES,
+  PICKABLE_MAUS_COLOR_NAMES,
   type MausMotion,
   type MausState,
 } from "@/lib/mascot";
@@ -330,7 +330,7 @@ export function BotProfileAvatarCard({
               Color
             </div>
             <div className="flex flex-wrap gap-2.5">
-              {MAUS_COLOR_NAMES.map((color) => (
+              {PICKABLE_MAUS_COLOR_NAMES.map((color) => (
                 <button
                   key={color}
                   type="button"

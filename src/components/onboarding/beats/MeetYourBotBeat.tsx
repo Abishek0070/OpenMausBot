@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { MausAvatar } from "@/components/Avatar";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
-import { MAUS_COLOR_NAMES, MAUS_COLORS, type MausColor } from "@/lib/mascot";
+import { MAUS_COLORS, PICKABLE_MAUS_COLOR_NAMES, type MausColor } from "@/lib/mascot";
 import { api, type Bot } from "@/state/store";
 import { inputClass, PrimaryButton, QuietButton, staggerIndex, type BeatProps } from "./shared";
 
@@ -94,7 +94,7 @@ export function MeetYourBotBeat({
       <div className="animate-rise mt-4" style={staggerIndex(2)}>
         <div className="text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">{t("onboarding.bot.color")}</div>
         <div role="radiogroup" aria-label={t("onboarding.bot.color")} className="mt-2 flex flex-wrap gap-2">
-          {MAUS_COLOR_NAMES.map((c) => (
+          {PICKABLE_MAUS_COLOR_NAMES.map((c) => (
             <button
               key={c}
               type="button"
