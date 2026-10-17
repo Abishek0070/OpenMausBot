@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { parseConfigPatch, parseStoredConfig } from "./config.ts";
-import { briefAwayMs, briefRecapEnabled, briefSettings, DEFAULT_BRIEF_AWAY_HOURS } from "./brief-settings.ts";
+import { assistantActsEnabled, briefAwayMs, briefRecapEnabled, briefSettings, DEFAULT_BRIEF_AWAY_HOURS } from "./brief-settings.ts";
 
 describe("briefSettings", () => {
   const features = z.object({ browser: z.boolean().optional() }).extend(briefSettings);
 
-  it("is the brief's two settings, each optional, beside whatever else the group holds", () => {
-    expect(Object.keys(briefSettings).sort()).toEqual(["briefAwayHours", "briefRecap"]);
+  it("is the recap's two settings and MausBot's switch, each optional, beside whatever else the group holds", () => {
+    expect(Object.keys(briefSettings).sort()).toEqual(["assistantActs", "briefAwayHours", "briefRecap"]);
     expect(features.parse({})).toEqual({});
     expect(features.parse({ browser: false, briefRecap: false, briefAwayHours: 6 })).toEqual({ browser: false, briefRecap: false, briefAwayHours: 6 });
   });
@@ -52,5 +52,13 @@ describe("the features group in server/config.ts", () => {
 
   it("refuses an away time that is not positive", () => {
     expect(() => parseConfigPatch({ features: { briefAwayHours: 0 } })).toThrow("features.briefAwayHours");
+  });
+});
+
+describe("assistantActsEnabled", () => {
+  it("lets MausBot act on its own unless the setting says false", () => {
+    expect(assistantActsEnabled(undefined)).toBe(true);
+    expect(assistantActsEnabled({})).toBe(true);
+    expect(assistantActsEnabled({ assistantActs: false })).toBe(false);
   });
 });

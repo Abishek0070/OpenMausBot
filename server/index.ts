@@ -249,7 +249,7 @@ import { createChiefBrief } from "./host/chief-brief.ts";
 import { builtInWireLevel, builtInWireOutbound, builtInWireTask, findMausBot, isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
 import { createMausBotIntro } from "./host/mausbot-intro.ts";
 import { assistantHitTitle, assistantRecallThreads } from "./mausbot-recall.ts";
-import { briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
+import { assistantActsEnabled, briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
 import { needsInputQuestion } from "./runtime-coordinator.ts";
 import { RETRY_BLOCKED } from "./incidents.ts";
 
@@ -13185,7 +13185,7 @@ function configStatus() {
       autoRecall: autoRecallEnabled(cfg),
       roomMemoryCapture: roomMemoryCaptureEnabled(cfg),
       parallelRoomJobs: parallelRoomJobsEnabled(cfg),
-      llmThreadTitles: llmThreadTitlesEnabled(cfg),
+      llmThreadTitles: llmThreadTitlesEnabled(cfg), assistantActs: assistantActsEnabled(cfg.features),
     },
     onboarding: {
       completedAt: cfg.onboarding?.completedAt ?? "",

@@ -8,11 +8,14 @@ export const briefSettings = {
   briefRecap: z.boolean().optional(),
   /** Hours away before the next activation counts as a return. */
   briefAwayHours: z.number().positive().max(168).optional(),
+  /** "MausBot can act on its own": it reads the calendar and the inbox and prepares cards without being asked. On unless false. */
+  assistantActs: z.boolean().optional(),
 };
 
 export interface BriefFeatureSettings {
   briefRecap?: boolean;
   briefAwayHours?: number;
+  assistantActs?: boolean;
 }
 
 export function briefRecapEnabled(features: BriefFeatureSettings | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -26,4 +29,8 @@ export function briefAwayMs(features: BriefFeatureSettings | undefined): number 
   const hours = features?.briefAwayHours;
   const chosen = typeof hours === "number" && Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_BRIEF_AWAY_HOURS;
   return chosen * 60 * 60_000;
+}
+
+export function assistantActsEnabled(features: BriefFeatureSettings | undefined): boolean {
+  return features?.assistantActs !== false;
 }

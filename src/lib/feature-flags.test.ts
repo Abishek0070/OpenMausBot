@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { builtInBrowserEnabled, llmThreadTitlesEnabled, parseSkillReviewSteps, roomMemoryCaptureEnabled, routinesInConversationEnabled, shareLearnedSkillsMode, sharedComputersEnabled, showToolCallsEnabled, skillAuthoringEnabled, skillReviewEnabled, skillReviewSteps, skillReviewUnavailableEngines } from "./feature-flags";
+import { assistantActsEnabled, builtInBrowserEnabled, llmThreadTitlesEnabled, parseSkillReviewSteps, roomMemoryCaptureEnabled, routinesInConversationEnabled, shareLearnedSkillsMode, sharedComputersEnabled, showToolCallsEnabled, skillAuthoringEnabled, skillReviewEnabled, skillReviewSteps, skillReviewUnavailableEngines } from "./feature-flags";
 
 describe("experimental feature flags", () => {
   it("keeps skill authoring on by default, before and after the config arrives", () => {
@@ -62,6 +62,12 @@ describe("experimental feature flags", () => {
     expect(routinesInConversationEnabled(null)).toBe(false);
     expect(routinesInConversationEnabled({})).toBe(false);
     expect(routinesInConversationEnabled({ features: { routinesInConversation: true } })).toBe(true);
+  });
+
+  it("lets MausBot act on its own unless the server says it may not", () => {
+    expect(assistantActsEnabled(null)).toBe(true);
+    expect(assistantActsEnabled({ features: { skillAuthoring: true } })).toBe(true);
+    expect(assistantActsEnabled({ features: { assistantActs: false } })).toBe(false);
   });
 
   it("keeps computer sharing off unless the server says it is on", () => {
