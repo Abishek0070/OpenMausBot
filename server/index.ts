@@ -248,6 +248,7 @@ import { createChiefNotices } from "./host/chief-notices.ts";
 import { createChiefBrief } from "./host/chief-brief.ts";
 import { builtInWireLevel, builtInWireOutbound, builtInWireTask, findMausBot, isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
 import { createMausBotIntro } from "./host/mausbot-intro.ts";
+import { assistantHitTitle, assistantRecallThreads } from "./mausbot-recall.ts";
 import { briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
 import { needsInputQuestion } from "./runtime-coordinator.ts";
 import { RETRY_BLOCKED } from "./incidents.ts";
@@ -1294,7 +1295,7 @@ function recentWorkSources(bot: BotRecord) {
 
 function recallThreads(from: BotRecord, capability: Parameters<typeof cloudLendingView>[0]): { roomByThread: Map<string, GroupRecord>; ownThreads: string[] } {
   const roomByThread = recallRooms(store.groups, from, roomFeedsBot);
-  return { roomByThread, ownThreads: recallThreadIds(from, roomByThread).filter(cloudLendingView(capability) ? cloudOwnerOnlyThread : () => true) };
+  return { roomByThread, ownThreads: (isMausBot(from) ? assistantRecallThreads(store, from) : recallThreadIds(from, roomByThread)).filter(cloudLendingView(capability) || (CLOUD_HOME && isMausBot(from)) ? cloudOwnerOnlyThread : () => true) };
 }
 
 /** Other conversations only for a 1:1 turn the person started: another bot, a webhook or a room must not pull a private chat into its reply. */
@@ -15014,7 +15015,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           source: proposed.state === "pending" ? "profile" : "full-access" });
         return json(res, 201, proposed);
       }
-      // session_search searches the calling bot's own threads only: search across bots would be an isolation change.
+      // session_search searches the calling bot's own threads; MausBot's reach every conversation within its audience (admins).
       const discloseRecall = (bot: BotRecord, roomThreadId: string, sourceThreadIds: readonly string[]): void => {
         const crossing = claimRecallCrossings(roomThreadId, sourceThreadIds);
         if (!crossing.count) return;
@@ -15060,9 +15061,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const room = roomByThread.get(hit.threadId);
           return {
             ...hit,
-            task: room
-              ? (room.tasks ?? []).find((task) => task.threadId === hit.threadId)?.title
-              : store.taskByThread(from.id, hit.threadId)?.title,
+            task: room ? (room.tasks ?? []).find((task) => task.threadId === hit.threadId)?.title
+              : isMausBot(from) ? assistantHitTitle(store, from, hit.threadId) : store.taskByThread(from.id, hit.threadId)?.title,
             ...(room ? { room: room.name } : {}),
             current: hit.threadId === fromThreadId,
             crossed: inRoom && !room && hit.threadId !== fromThreadId,
@@ -15096,7 +15096,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ...message,
           crossed: readCrossed,
           text: message.text.length > SESSION_READ_MAX_CHARS ? `${message.text.slice(0, SESSION_READ_MAX_CHARS)}…` : message.text,
-          task: store.taskByThread(from.id, threadId)?.title,
+          task: isMausBot(from) ? assistantHitTitle(store, from, threadId) : store.taskByThread(from.id, threadId)?.title,
         });
       }
       if (method === "GET" && path === "/api/internal/skills") {
