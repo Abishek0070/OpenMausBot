@@ -59,6 +59,41 @@ describe("createAssistantTurns", () => {
     expect(deps.interrupt).toHaveBeenCalledWith("m", "job-1");
   });
 
+  it("ignores a completion that arrives after the deadline", async () => {
+    const { deps, turns, deadlines } = harness();
+    const pending = turns.run("m", "Prep: Demo", "p");
+    await vi.waitFor(() => expect(deps.start).toHaveBeenCalled());
+    deadlines[0]!();
+    turns.completed("job-1", true, "late-turn");
+    await expect(pending).resolves.toEqual({ ok: false, threadId: "job-1", error: "it took longer than 15 minutes" });
+    turns.completed("job-1", true, "later-turn");
+    expect(deps.replyOf).not.toHaveBeenCalled();
+    expect(deps.interrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the deadline of a turn that finishes in time", async () => {
+    const cancel = vi.fn();
+    const { deps, turns } = harness({ setTimer: () => ({ cancel }) });
+    const pending = turns.run("m", "Prep: Demo", "p");
+    await vi.waitFor(() => expect(deps.start).toHaveBeenCalled());
+    turns.completed("job-1", true, "turn-1");
+    await expect(pending).resolves.toMatchObject({ ok: true, threadId: "job-1" });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a stop that throws at once, or a reply that cannot be read, inside the job's answer", async () => {
+    const throwing = harness({ interrupt: vi.fn(() => { throw new Error("no such turn"); }) });
+    const late = throwing.turns.run("m", "Prep: Demo", "p");
+    await vi.waitFor(() => expect(throwing.deps.start).toHaveBeenCalled());
+    throwing.deadlines[0]!();
+    await expect(late).resolves.toEqual({ ok: false, threadId: "job-1", error: "it took longer than 15 minutes" });
+    const unreadable = harness({ replyOf: vi.fn(() => { throw new Error("messages.jsonl is unreadable"); }) });
+    const done = unreadable.turns.run("m", "Prep: Demo", "p");
+    await vi.waitFor(() => expect(unreadable.deps.start).toHaveBeenCalled());
+    unreadable.turns.completed("job-1", true, "turn-1");
+    await expect(done).resolves.toEqual({ ok: false, threadId: "job-1", error: "messages.jsonl is unreadable" });
+  });
+
   it("names its threads so the server can tell a job thread from any other", () => {
     expect(jobRoutineRunId("abc")).toBe("mausbot-abc");
     expect(isAssistantJobThread("mausbot-abc")).toBe(true);

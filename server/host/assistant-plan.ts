@@ -94,8 +94,9 @@ export function todayDue(input: { now: number; timeZone?: string; lastTodayDate?
 }
 
 export function turnsLeft(input: { now: number; timeZone?: string; turnDay?: string; dayTurns?: number }): { day: string; left: number } {
-  const day = localDate(input.now, input.timeZone);
-  const used = input.turnDay === day ? input.dayTurns ?? 0 : 0;
+  const local = localDate(input.now, input.timeZone);
+  const day = input.turnDay !== undefined && local <= input.turnDay ? input.turnDay : local;
+  const used = day === input.turnDay ? input.dayTurns ?? 0 : 0;
   return { day, left: Math.max(0, DAILY_TURN_CAP - used) };
 }
 

@@ -139,6 +139,13 @@ describe("days in the person's zone", () => {
     expect(turnsLeft({ now: Date.UTC(2026, 9, 17, 18, 31), timeZone: "Asia/Kolkata", turnDay: "2026-10-17", dayTurns: 12 })).toEqual({ day: "2026-10-18", left: DAILY_TURN_CAP });
   });
 
+  it("grants no new day's turns after flying west, and keeps counting the later day", () => {
+    expect(turnsLeft({ now: NOW, timeZone: "America/Los_Angeles", turnDay: "2026-10-17", dayTurns: 12 })).toEqual({ day: "2026-10-17", left: 0 });
+    expect(turnsLeft({ now: NOW, timeZone: "America/Los_Angeles", turnDay: "2026-10-17", dayTurns: 5 })).toEqual({ day: "2026-10-17", left: DAILY_TURN_CAP - 5 });
+    expect(turnsLeft({ now: NOW + 24 * HOUR, timeZone: "America/Los_Angeles", turnDay: "2026-10-17", dayTurns: 12 })).toEqual({ day: "2026-10-17", left: 0 });
+    expect(turnsLeft({ now: NOW + 48 * HOUR, timeZone: "America/Los_Angeles", turnDay: "2026-10-17", dayTurns: 12 })).toEqual({ day: "2026-10-18", left: DAILY_TURN_CAP });
+  });
+
   it("forgets meetings more than five weeks old", () => {
     const kept = pruneMeetings({ old: { start: NOW - KEEP_MEETINGS_MS - 1, fingerprint: "x" }, recent: { start: NOW - HOUR, fingerprint: "y" } }, NOW);
     expect(Object.keys(kept)).toEqual(["recent"]);

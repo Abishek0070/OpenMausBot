@@ -49,11 +49,15 @@ export function createAssistantTurns(deps: AssistantTurnsDeps) {
     waiting.delete(threadId);
     timer?.cancel();
     if (outcome === "late") {
-      await deps.interrupt(botId, threadId).catch(() => undefined);
+      await Promise.resolve().then(() => deps.interrupt(botId, threadId)).catch(() => undefined);
       return { ok: false, threadId, error: `it took longer than ${Math.round(deadlineMs / 60_000)} minutes` };
     }
     if (!outcome.ok) return { ok: false, threadId, error: "the turn did not finish" };
-    return { ok: true, threadId, reply: deps.replyOf(threadId, outcome.turnId) };
+    try {
+      return { ok: true, threadId, reply: deps.replyOf(threadId, outcome.turnId) };
+    } catch (error) {
+      return { ok: false, threadId, error: failure(error) };
+    }
   }
 
   function completed(threadId: string, ok: boolean, turnId?: string): void {
