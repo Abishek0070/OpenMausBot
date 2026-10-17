@@ -3,7 +3,7 @@
 import { request } from "node:http";
 import { describe, expect, it } from "vitest";
 
-import { launchVerificationServer } from "../scripts/control-omb.ts";
+import { FIXTURE_STARTER_BOT_NAME, launchVerificationServer } from "../scripts/control-omb.ts";
 import { BROWSER_SIGN_IN } from "./request-auth.ts";
 
 /** Headers set exactly as given: Chrome's Sec-Fetch-* and Origin, which a page cannot change. */
@@ -56,7 +56,8 @@ describe("a browser on a self-hosted server's own machine", () => {
       const cookie = String(paired.headers["set-cookie"]).split(";", 1)[0]!;
       const signedIn = await raw(url, "/api/bots", { ...fromPage(url), cookie });
       expect(signedIn.status).toBe(200);
-      expect(JSON.parse(signedIn.body).bots).toHaveLength(1);
+      // The verification launcher renames the seeded Chief of Staff to the fixture starter, then MausBot follows as the built-in bot.
+      expect(JSON.parse(signedIn.body).bots.map((bot: { name: string; builtIn?: string }) => [bot.name, bot.builtIn])).toEqual([[FIXTURE_STARTER_BOT_NAME, undefined], ["MausBot", "mausbot"]]);
       // The cookie is for this page only: another page on this machine still gets nothing.
       expect((await raw(url, "/api/bots", { ...otherPage, cookie })).status).toBe(403);
     } finally {

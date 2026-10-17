@@ -81,13 +81,16 @@ afterAll(async () => {
 });
 
 describe("PATCH /api/bots/:id colour", { timeout: 60_000 }, () => {
-  it("accepts the ten palette colours only, and keeps silver for MausBot's unchanged value", async () => {
+  it("accepts the ten palette colours only, refuses silver for any bot but MausBot, and keeps it for MausBot's unchanged value", async () => {
     const bot = (await api("POST", "/api/bots", { modelSelection: { instanceId: "fixture", model: "claude-sonnet-5" } })).body.bot;
-    for (const color of ["silver", "mauve", "", 3, null]) {
+    for (const color of ["mauve", "", 3, null]) {
       const refused = await api("PATCH", `/api/bots/${bot.id}`, { color });
       expect(refused.status, String(color)).toBe(400);
       expect(refused.body.error).toMatch(/color/);
     }
+    const reserved = await api("PATCH", `/api/bots/${bot.id}`, { color: "silver" });
+    expect(reserved.status).toBe(409);
+    expect(reserved.body.error).toBe("Silver is MausBot's colour. Choose another one.");
     expect((await api("PATCH", `/api/bots/${bot.id}`, { color: "coral" })).body.bot.color).toBe("coral");
 
     await stop();
@@ -101,6 +104,6 @@ describe("PATCH /api/bots/:id colour", { timeout: 60_000 }, () => {
     expect((await api("PATCH", `/api/bots/${builtIn}`, { color: "silver" })).status).toBe(200);
     const listed = (await api("GET", "/api/bots?messages=0")).body.bots.find((entry: { id: string }) => entry.id === builtIn);
     expect(listed).toMatchObject({ color: "silver", builtIn: "mausbot" });
-    expect((await api("PATCH", `/api/bots/${bot.id}`, { color: "silver" })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { color: "silver" })).status).toBe(409);
   });
 });
