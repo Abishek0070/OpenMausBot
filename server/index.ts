@@ -524,6 +524,7 @@ import {
   isLoopbackHost,
   isProxied,
   labelFromUserAgent,
+  ownerOrAdmin,
   requestOrigin,
   requestSource,
   requiredScope,
@@ -1116,10 +1117,6 @@ function cardAnswerRefusal(auth: RequestAuth, threadId: string, requestId: strin
   const known = [threadStarters.get(threadId), cardRequesterKey(threadId, requestId)].filter((person): person is string => Boolean(person));
   if (!known.length || known.includes(personKey(auth.session))) return null;
   return "Only the person who started this conversation or sent this request, or a workspace admin, can answer this card.";
-}
-
-function canManageCommandAllowlist(auth: RequestAuth): boolean {
-  return auth.kind === "loopback" ? auth.trust !== "service" : auth.scopes.includes("admin");
 }
 
 const COMMAND_ALLOWLIST_DRIVERS = new Set([
@@ -5345,7 +5342,7 @@ const unansweredApprovals = new UnansweredApprovals();
 const pendingCommandRules = new Map<string, { botId: string; candidate: CommandAllowlistCandidate }>();
 
 function commandRememberRefusal(auth: RequestAuth, threadId: string, requestId: string, behavior: string): string | null {
-  if (!canManageCommandAllowlist(auth)) return "Only the owner or an admin can save bot-wide command permissions.";
+  if (!ownerOrAdmin(auth)) return "Only the owner or an admin can save bot-wide command permissions.";
   if (behavior !== "allow" || !pendingCommandRules.has(`${threadId}:${requestId}`)) {
     return "This live request does not contain a command that can be saved. Allow it once instead.";
   }
@@ -13552,7 +13549,7 @@ ROUTES.push(createBotSettingsRoutes({
   cloudHome: Boolean(CLOUD_HOME), cloudOwnerProfileFields: CLOUD_OWNER_PROFILE_FIELDS,
   hostedModels, supportsApprovalMode, directTurnBots, broadcast, wireBot, cloudOwnerSession, storedAvatarExists,
   requestedTaskBot, threadBusy, activeGroupTurnForBot, checkedModelSelection, engineSwitchNeedsAsk, readCursor,
-  canManageCommandAllowlist, commandAllowlistResponse, cardAnswerRefusal,
+  canManageCommandAllowlist: ownerOrAdmin, commandAllowlistResponse, cardAnswerRefusal,
 }));
 ROUTES.push(createBotPatchRoutes({
   store, cfg, registry, sessions, browserRuntime, browserLive, memoryUpkeep, cacheKeepWarm, hostedModels, supportsApprovalMode,
