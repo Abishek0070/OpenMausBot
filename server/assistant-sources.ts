@@ -49,7 +49,7 @@ export const GMAIL_FETCH_TOOL = "GMAIL_FETCH_EMAILS";
 const MULTI_EXECUTE = "COMPOSIO_MULTI_EXECUTE_TOOL";
 const CALL_ID = "omb-assistant-call";
 const PREVIEW_MAX = 300;
-const ADDRESS = /^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/;
+const ADDRESS = /^[\w.+][\w.+-]*@[\w-]+(?:\.[\w-]+)+$/;
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -133,17 +133,20 @@ function calendarEvent(raw: unknown): CalendarEvent | null {
 }
 
 export function eventsFromData(data: unknown): CalendarEvent[] {
-  return eventList(data).flatMap((raw) => {
+  const list = eventList(data);
+  const events = list.flatMap((raw) => {
     const event = calendarEvent(raw);
     return event ? [event] : [];
   });
+  if (list.length > 0 && events.length === 0) throw new Error("none of the calendar events could be read");
+  return events;
 }
 
 export function emailsFromData(data: unknown): EmailHeader[] {
   const top = record(data);
   const list = Array.isArray(top?.messages) ? top.messages : Array.isArray(data) ? data : null;
   if (!list) throw new Error("the Gmail answer had no message list");
-  return list.flatMap((raw) => {
+  const headers = list.flatMap((raw) => {
     const item = record(raw);
     const id = item?.messageId ?? item?.id;
     if (!item || typeof id !== "string" || !id) return [];
@@ -159,6 +162,8 @@ export function emailsFromData(data: unknown): EmailHeader[] {
       preview: flat(preview?.body ?? item.snippet ?? item.messageText).slice(0, PREVIEW_MAX),
     }];
   });
+  if (list.length > 0 && headers.length === 0) throw new Error("none of the Gmail messages could be read");
+  return headers;
 }
 
 export interface ComposioSourceDeps {
@@ -190,6 +195,10 @@ export function createComposioSources(deps: ComposioSourceDeps): AssistantSource
     }
   }
 
+  function requireFinite(service: AssistantService, ...times: number[]): void {
+    if (times.some((time) => !Number.isFinite(time))) throw new SourceError(service, "the time window was not a finite time");
+  }
+
   async function gmail(query: string, limit: number): Promise<EmailHeader[]> {
     const data = await call("gmail", GMAIL_FETCH_TOOL, { user_id: "me", query, max_results: limit, include_payload: false, verbose: false });
     try {
@@ -210,6 +219,7 @@ export function createComposioSources(deps: ComposioSourceDeps): AssistantSource
       }
     },
     async events(fromMs, toMs) {
+      requireFinite("googlecalendar", fromMs, toMs);
       const data = await call("googlecalendar", CALENDAR_LIST_TOOL, {
         calendarId: "primary", timeMin: new Date(fromMs).toISOString(), timeMax: new Date(toMs).toISOString(),
         singleEvents: true, orderBy: "startTime", maxResults: 100, showDeleted: true,
@@ -220,8 +230,12 @@ export function createComposioSources(deps: ComposioSourceDeps): AssistantSource
         throw new SourceError("googlecalendar", error instanceof Error ? error.message : String(error));
       }
     },
-    emails: (sinceMs, limit) => gmail(`in:inbox after:${seconds(sinceMs)} -category:promotions -category:social`, limit),
+    async emails(sinceMs, limit) {
+      requireFinite("gmail", sinceMs);
+      return gmail(`in:inbox after:${seconds(sinceMs)} -category:promotions -category:social`, limit);
+    },
     async mailFrom(addresses, sinceMs) {
+      requireFinite("gmail", sinceMs);
       const valid = addresses.filter((address) => ADDRESS.test(address));
       if (!valid.length) return false;
       return (await gmail(`from:(${valid.join(" OR ")}) after:${seconds(sinceMs)}`, 1)).length > 0;

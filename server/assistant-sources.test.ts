@@ -42,6 +42,24 @@ describe("eventsFromData", () => {
   });
 });
 
+describe("unreadable lists", () => {
+  it("a non-empty list where nothing parses is an error, an empty list is empty, a mixed list keeps what parses", () => {
+    expect(() => eventsFromData({ items: [{ event_id: "a", start: { dateTime: "2026-10-17T10:00:00Z" } }] })).toThrow(/none of the calendar events/);
+    expect(() => emailsFromData({ messages: [{ message_id: "m", subject: "hi" }] })).toThrow(/none of the Gmail messages/);
+    expect(eventsFromData({ items: [] })).toEqual([]);
+    expect(emailsFromData({ messages: [] })).toEqual([]);
+    expect(eventsFromData({ items: [{ event_id: "a" }, { id: "b", start: { dateTime: "2026-10-17T10:00:00Z" } }] }).map((event) => event.id)).toEqual(["b"]);
+    expect(emailsFromData({ messages: [{ message_id: "m" }, { id: "n" }] }).map((email) => email.id)).toEqual(["n"]);
+  });
+
+  it("drops a cancelled instance without a start, keeps tentative, and ends a missing end at the start", () => {
+    const start = { dateTime: "2026-10-17T10:00:00Z" };
+    const events = eventsFromData({ items: [{ id: "c", status: "cancelled" }, { id: "t", status: "tentative", start }] });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ id: "t", status: "tentative", start: Date.parse(start.dateTime), end: Date.parse(start.dateTime) });
+  });
+});
+
 describe("emailsFromData", () => {
   it("keeps the id, thread, time, sender, subject and a short preview, whatever the field names", () => {
     expect(emailsFromData(fixture("composio-gmail-fetch.json"))).toEqual([
@@ -105,6 +123,9 @@ describe("createComposioSources", () => {
     expect(await sources.mailFrom(["ada@example.test", "x) OR (in:sent", "jake@pin.example"], Date.parse("2026-10-10T00:00:00Z"))).toBe(false);
     expect(calls[2].payload.params.arguments.tools[0].arguments.query).toBe("from:(ada@example.test OR jake@pin.example) after:1791590400");
     expect(await sources.mailFrom(["x) OR (in:sent"], 0)).toBe(false);
+    const before = relay.mock.calls.length;
+    expect(await sources.mailFrom(["-ada@example.test"], 0)).toBe(false);
+    expect(relay.mock.calls.length).toBe(before);
   });
 
   it("names the service in every failure: a refused handshake, an HTTP error, an unreadable answer", async () => {
@@ -115,6 +136,23 @@ describe("createComposioSources", () => {
     }
     const refused = createComposioSources({ configured: () => true, connectedServices: services, relay: async () => ({ status: 401, bytes: encode({}) }) });
     await expect(refused.events(0, 1)).rejects.toMatchObject({ service: "googlecalendar" });
+  });
+
+  it("refuses a non-finite time before any relay call", async () => {
+    const { relay } = relayWith(() => ({ body: {} }));
+    const sources = createComposioSources({ configured: () => true, connectedServices: services, relay });
+    await expect(sources.events(Number.NaN, 1)).rejects.toMatchObject({ name: "SourceError", service: "googlecalendar" });
+    await expect(sources.events(0, Number.POSITIVE_INFINITY)).rejects.toMatchObject({ service: "googlecalendar" });
+    await expect(sources.emails(Number.NaN, 20)).rejects.toMatchObject({ service: "gmail" });
+    await expect(sources.mailFrom(["ada@example.test"], Number.NaN)).rejects.toMatchObject({ service: "gmail" });
+    expect(relay).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable list is a SourceError naming its service", async () => {
+    const calendar = createComposioSources({ configured: () => true, connectedServices: services, relay: relayWith(() => ({ body: multi(CALENDAR_LIST_TOOL, { successful: true, data: { items: [{ event_id: "a" }] } }) })).relay });
+    await expect(calendar.events(0, 1)).rejects.toMatchObject({ name: "SourceError", service: "googlecalendar" });
+    const mail = createComposioSources({ configured: () => true, connectedServices: services, relay: relayWith(() => ({ body: multi(GMAIL_FETCH_TOOL, { successful: true, data: { messages: [{ message_id: "m" }] } }) })).relay });
+    await expect(mail.emails(0, 20)).rejects.toMatchObject({ name: "SourceError", service: "gmail" });
   });
 
   it("reports connected services, and null when connected apps are not set up or cannot be reached", async () => {
