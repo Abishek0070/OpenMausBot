@@ -26,7 +26,8 @@ import { freePortBlock, withFreeSignInPort } from "./testing/ports.ts";
 import { openSse } from "./testing/sse.ts";
 import { readHandoffs } from "./testing/handoff-rows.ts";
 import { FILE_MAX_BYTES, IMAGE_MAX_BYTES } from "./attachments.ts";
-import { computerPrompt, SIGN_IN_PROMPT } from "./system-prompt.ts";
+import { mausbotPersona } from "./mausbot.ts";
+import { COMPOSIO_PROMPT, computerPrompt, SIGN_IN_PROMPT } from "./system-prompt.ts";
 import {
   PHONE_SECRET_INFO,
   phoneSecretAAD,
@@ -581,6 +582,35 @@ beforeAll(async () => {
           updatedAt: 1,
           resumeCursors: {},
           modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+          unread: false,
+        }],
+      },
+      // The API refuses MausBot a daily allowance; a hand-edited record can still hold one.
+      {
+        id: "test-mausbot",
+        threadId: "test-mausbot-thread",
+        name: "MausBot",
+        builtIn: "mausbot",
+        peers: [],
+        title: "",
+        description: "",
+        soul: "",
+        soulHash: createHash("sha256").update("").digest("hex"),
+        notifications: true,
+        color: "silver",
+        mascotBody: "cursor",
+        visibility: "admins",
+        unread: false,
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+        resumeCursors: {},
+        createdAt: 2,
+        outbound: { policy: "allow", dailyCap: 100 },
+        tasks: [{
+          threadId: "test-mausbot-thread",
+          title: "MausBot",
+          createdAt: 2,
+          updatedAt: 2,
+          resumeCursors: {},
           unread: false,
         }],
       },
@@ -5576,7 +5606,7 @@ describe("harness HTTP API", () => {
     const stateBefore = (await api("GET", "/api/bots")).body;
     const roomsBefore = stateBefore.groups.length;
     const visibleNames = stateBefore.bots
-      .filter((bot: { hidden?: boolean }) => !bot.hidden)
+      .filter((bot: { hidden?: boolean; builtIn?: string }) => !bot.hidden && !bot.builtIn)
       .map((bot: { name: string }) => bot.name);
     const exported = await api("POST", "/api/teams/export", { name: "Field Team" });
     expect(exported.status).toBe(200);
@@ -8868,6 +8898,47 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("gives MausBot its persona in the preview and a real turn, telling it to draft only when the turn has connected apps", async () => {
+    const mausbot = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
+    expect(mausbot).toBeTruthy();
+    const persona = (connectedApps: boolean) => `You are MausBot, a personal bot in OpenMausBot. ${mausbotPersona(connectedApps)}`;
+    const previewSections = async () => (await api("GET", `/api/bots/${mausbot.id}/system-prompt`)).body.sections as Array<{ id: string; text: string }>;
+    const turnSystem = async () => {
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${mausbot.id}/messages`, { text: "hello" })).status).toBe(202);
+      const system = (await readJsonFileWhenReady<{ systemPrompt: string }>(fakeClaudeDump, 15_000)).systemPrompt;
+      expect((await api("POST", `/api/bots/${mausbot.id}/interrupt`)).status).toBe(200);
+      await expect.poll(async () => {
+        const state = (await api("GET", "/api/bots?messages=0")).body;
+        return state.bots.find((candidate: { id: string }) => candidate.id === mausbot.id)?.busy;
+      }, { timeout: 5_000 }).toBe(false);
+      return system;
+    };
+    try {
+      expect((await api("PATCH", `/api/bots/${mausbot.id}`, {
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      })).status).toBe(200);
+      let sections = await previewSections();
+      expect(sections.find((section) => section.id === "persona")?.text).toBe(persona(true));
+      expect(sections.some((section) => section.id === "composio")).toBe(true);
+      let system = await turnSystem();
+      expect(system.startsWith(persona(true))).toBe(true);
+      expect(system).toContain(COMPOSIO_PROMPT);
+
+      expect((await api("PATCH", `/api/bots/${mausbot.id}`, { composio: false })).status).toBe(200);
+      sections = await previewSections();
+      expect(sections.find((section) => section.id === "persona")?.text).toBe(persona(false));
+      expect(sections.some((section) => section.id === "composio")).toBe(false);
+      system = await turnSystem();
+      expect(system.startsWith(persona(false))).toBe(true);
+      expect(system).not.toContain(COMPOSIO_PROMPT);
+      expect(system).not.toContain("Draft replies");
+    } finally {
+      await api("POST", `/api/bots/${mausbot.id}/interrupt`);
+      await api("PATCH", `/api/bots/${mausbot.id}`, { composio: true });
+    }
+  });
+
   it("ends a Chief of Staff's team section at the roster, in the preview and in a real turn", async () => {
     const bot = (await api("POST", "/api/bots", { name: "Atlas", section: "Roster end" })).body.bot;
     try {
@@ -11659,6 +11730,62 @@ describe("harness HTTP API", () => {
       expect(allowRows.some((row) => row.botId === legacy.id && row.tool === "SLACK_POST_MESSAGE" && row.rule === "composio")).toBe(true);
     } finally {
       await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("holds every MausBot send, booking and delete on the Approve card at Full access, whatever allowance its record holds", async () => {
+    expect((await api("PUT", "/api/config", { composio: { apiKey: "" } })).status).toBe(200);
+    const mausbot = (await api("GET", "/api/bots")).body.bots.find((entry: { builtIn?: string }) => entry.builtIn === "mausbot");
+    expect((await api("GET", `/api/bots/${mausbot.id}/outbound`)).body).toEqual({ policy: { policy: "allow", dailyCap: 100 }, today: 0 });
+    const level = mausbot.approvalMode;
+    connectorRelayCalls.length = 0;
+    const token = await mintTestCapability(BASE, mausbot.id, mausbot.threadId, { kind: "connectors" });
+    const relay = async (name: string, args: unknown = {}) => {
+      const response = await fetch(`${BASE}/api/internal/connectors/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 31, method: "tools/call", params: { name, arguments: args } }),
+      });
+      return await response.json() as any;
+    };
+    const messages = async () => (await api("GET", `/api/threads/${mausbot.threadId}/messages?limit=100`)).body.messages as any[];
+    const pending = async () => {
+      let card: any;
+      await expect.poll(async () => {
+        card = (await messages()).findLast((row) => row.card?.outboundRequest && !row.card.answered);
+        return Boolean(card);
+      }, { timeout: 5_000 }).toBe(true);
+      return card;
+    };
+    try {
+      expect((await api("PATCH", `/api/bots/${mausbot.id}`, { approvalMode: "full" })).status).toBe(200);
+      expect((await api("GET", "/api/bots")).body.bots.find((entry: { id: string }) => entry.id === mausbot.id).approvalMode).toBe("full");
+
+      for (const slug of ["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST", "GMAIL_CREATE_EMAIL_DRAFT"]) {
+        expect((await relay(slug)).result.content[0].text, slug).toBe("relay-ok");
+      }
+      expect(connectorRelayCalls).toHaveLength(3);
+      expect((await messages()).some((row) => row.card?.outboundRequest)).toBe(false);
+
+      for (const slug of ["GMAIL_SEND_EMAIL", "GMAIL_SEND_DRAFT", "GOOGLECALENDAR_CREATE_EVENT", "GMAIL_DELETE_MESSAGE", "COMPOSIO_REMOTE_WORKBENCH"]) {
+        const held = relay(slug, { to: "board@example.test" });
+        const card = await pending();
+        expect(card.card.title, slug).toBe("Send on your behalf?");
+        expect(connectorRelayCalls, slug).toHaveLength(3);
+        expect((await api("POST", `/api/threads/${mausbot.threadId}/respond`, { requestId: card.card.requestId, behavior: "deny" })).status).toBe(200);
+        expect((await held).result.isError, slug).toBe(true);
+        expect(connectorRelayCalls, slug).toHaveLength(3);
+      }
+
+      const booking = relay("GOOGLECALENDAR_CREATE_EVENT", { summary: "Call with the board" });
+      const card = await pending();
+      expect(card.card.outboundRequest.tool).toBe("GOOGLECALENDAR_CREATE_EVENT");
+      expect((await api("POST", `/api/threads/${mausbot.threadId}/respond`, { requestId: card.card.requestId, behavior: "allow" })).status).toBe(200);
+      expect((await booking).result.content[0].text).toBe("relay-ok");
+      expect(connectorRelayCalls).toHaveLength(4);
+      expect((await api("GET", `/api/bots/${mausbot.id}/outbound`)).body.today).toBe(0);
+    } finally {
+      await api("PATCH", `/api/bots/${mausbot.id}`, { approvalMode: level });
     }
   });
 

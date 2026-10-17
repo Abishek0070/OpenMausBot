@@ -1,6 +1,7 @@
 // One builder for every turn's system prompt, so what a bot receives and the "what the model sees" preview are the same bytes.
 import { soulSystemPrompt } from "./bot-folder.ts";
 import { agentsToolBridged } from "./drivers/agents-bridge.ts";
+import { isMausBot, mausbotPersona } from "./mausbot.ts";
 import { teammateAvailabilityPrompt, type RosterMember } from "./peer-roster.ts";
 import type { ConnectorToolGrant } from "../shared/wire.ts";
 import { loginLabel, type LoginPlace } from "../shared/logins.ts";
@@ -39,8 +40,9 @@ export function replyStylePrompt(style: ReplyStyle | undefined): string {
   return isConversational(style) ? CONVERSATIONAL_STYLE_PROMPT : "";
 }
 
-export function botPersona(bot: { name: string; title?: string; description?: string }): string {
-  return [`You are ${bot.name}, a personal bot in OpenMausBot.`, bot.title && `Role: ${bot.title}.`, bot.description && `About: ${bot.description}`]
+export function botPersona(bot: { name: string; title?: string; description?: string; builtIn?: string }, opts?: { connectedApps?: boolean }): string {
+  return [`You are ${bot.name}, a personal bot in OpenMausBot.`, bot.title && `Role: ${bot.title}.`, bot.description && `About: ${bot.description}`,
+    isMausBot(bot) && mausbotPersona(opts?.connectedApps === true)]
     .filter(Boolean)
     .join(" ");
 }

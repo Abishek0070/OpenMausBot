@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { OUTBOUND_DEFAULT_CAP, connectorCallsIn, isOutboundTool, isReadOnlyTool, normalizeOutboundPolicy, outboundCallsIn } from "./outbound.ts";
+import { OUTBOUND_DEFAULT_CAP, approvalCallsIn, connectorCallsIn, isOutboundTool, isReadOnlyTool, normalizeOutboundPolicy, outboundCallsIn } from "./outbound.ts";
 
 describe("isOutboundTool", () => {
   it("flags tools that send, reply, post, publish, invite, share, or move money", () => {
@@ -69,6 +69,23 @@ describe("isReadOnlyTool", () => {
       "Bash",
     ]) expect(isReadOnlyTool(name), name).toBe(false);
   });
+
+  it("knows Composio's Gmail and Calendar reads by slug, and keeps their writes out", () => {
+    for (const name of [
+      "GMAIL_FETCH_EMAILS",
+      "GOOGLECALENDAR_EVENTS_LIST",
+      "GOOGLECALENDAR_EVENTS_GET",
+      "GOOGLECALENDAR_FIND_EVENT",
+      "mcp__composio__GOOGLECALENDAR_EVENTS_LIST",
+    ]) expect(isReadOnlyTool(name), name).toBe(true);
+
+    for (const name of [
+      "GOOGLECALENDAR_EVENTS_DELETE",
+      "GOOGLECALENDAR_CREATE_EVENT",
+      "GOOGLECALENDAR_PATCH_EVENT",
+      "mcp__linear__GOOGLECALENDAR_EVENTS_LIST",
+    ]) expect(isReadOnlyTool(name), name).toBe(false);
+  });
 });
 
 describe("normalizeOutboundPolicy", () => {
@@ -133,5 +150,37 @@ describe("outboundCallsIn", () => {
     expect(sends.map((call) => call.slug)).toEqual(["GMAIL_SEND_EMAIL"]);
     expect(outboundCallsIn("GMAIL_FETCH_EMAILS", {})).toEqual([]);
     expect(isOutboundTool("COMPOSIO_PROXY_EXECUTE")).toBe(true);
+  });
+});
+
+describe("approvalCallsIn", () => {
+  it("is every app call that is neither a read nor a draft, including booking and accepting", () => {
+    const multi = (...slugs: string[]) => ({ tools: slugs.map((tool_slug) => ({ tool_slug, arguments: {} })) });
+    expect(approvalCallsIn("COMPOSIO_MULTI_EXECUTE_TOOL", multi("GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST", "GMAIL_CREATE_EMAIL_DRAFT"))).toEqual([]);
+    expect(approvalCallsIn("COMPOSIO_MULTI_EXECUTE_TOOL", multi("GMAIL_SEND_EMAIL", "GOOGLECALENDAR_CREATE_EVENT", "GOOGLECALENDAR_PATCH_EVENT")).map((call) => call.slug))
+      .toEqual(["GMAIL_SEND_EMAIL", "GOOGLECALENDAR_CREATE_EVENT", "GOOGLECALENDAR_PATCH_EVENT"]);
+    expect(approvalCallsIn("GMAIL_DELETE_MESSAGE", {}).map((call) => call.slug)).toEqual(["GMAIL_DELETE_MESSAGE"]);
+    expect(approvalCallsIn("COMPOSIO_REMOTE_WORKBENCH", { code: "send()" }).map((call) => call.slug)).toEqual(["COMPOSIO_PROXY_EXECUTE"]);
+    expect(approvalCallsIn("COMPOSIO_SEARCH_TOOLS", { query: "gmail" })).toEqual([]);
+  });
+
+  it("counts only writing a draft as drafting: sending or deleting one waits too", () => {
+    for (const slug of ["GMAIL_SEND_DRAFT", "GMAIL_DELETE_DRAFT", "OUTLOOK_SEND_DRAFT", "GOOGLECALENDAR_EVENTS_DELETE"]) {
+      expect(approvalCallsIn(slug, {}).map((call) => call.slug), slug).toEqual([slug]);
+    }
+    for (const slug of ["GMAIL_CREATE_EMAIL_DRAFT", "OUTLOOK_CREATE_DRAFT", "GMAIL_UPDATE_DRAFT"]) {
+      expect(approvalCallsIn(slug, {}), slug).toEqual([]);
+    }
+  });
+
+  it("holds every call that any other bot's send card would hold", () => {
+    const sends = [
+      "GMAIL_SEND_EMAIL", "GMAIL_REPLY_TO_THREAD", "SLACK_CHAT_POST_MESSAGE", "STRIPE_CREATE_REFUND",
+      "GITHUB_CREATE_AN_ISSUE_COMMENT", "GOOGLECALENDAR_INVITE_ATTENDEES", "OUTLOOK_CREATE_DRAFT_REPLY", "COMPOSIO_PROXY_EXECUTE",
+    ];
+    for (const slug of sends) {
+      expect(outboundCallsIn(slug, {}).map((call) => call.slug), slug).toEqual([slug]);
+      expect(approvalCallsIn(slug, {}).map((call) => call.slug), slug).toEqual([slug]);
+    }
   });
 });

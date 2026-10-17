@@ -41,6 +41,12 @@ const SENT_NOUNS = new Set(["MESSAGE", "COMMENT", "POST", "EMAIL", "MAIL", "INVO
  * REDDIT_GET_POST fetches a post, it does not post. */
 const READ_VERBS = new Set(["GET", "LIST", "FETCH", "SEARCH", "READ", "FIND", "RETRIEVE", "LOOKUP", "DOWNLOAD", "VIEW", "CHECK", "COUNT"]);
 
+/** Composio reads known by slug, since some put the noun first (GOOGLECALENDAR_EVENTS_LIST lists events). */
+const READ_SLUGS = new Set(["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET", "GOOGLECALENDAR_FIND_EVENT"]);
+
+/** Writing a draft leaves it for the person; sending or deleting one is not drafting. */
+const DRAFT_VERBS = new Set(["CREATE", "UPDATE", "SAVE", "EDIT"]);
+
 /** The action part of a tool name, as upper-case word tokens. Composio's
  * TOOLKIT_ACTION drops its toolkit; an MCP server's mcp__server__action
  * drops its server; a bare built-in like Bash stays as it is. */
@@ -64,6 +70,7 @@ function actionTokens(name: string): string[] {
  * narrower than "not outbound": updates, deletes and other writes do not
  * become reads merely because they send nothing to another person. */
 export function isReadOnlyTool(name: string): boolean {
+  if (READ_SLUGS.has(name.replace(/^mcp__composio__/, ""))) return true;
   const tokens = actionTokens(name);
   return tokens.length > 0 && READ_VERBS.has(tokens[0]);
 }
@@ -136,4 +143,14 @@ export function connectorCallsIn(name: string, args: unknown): ConnectorCall[] {
 /** The subset of a request's app tools that would send something. */
 export function outboundCallsIn(name: string, args: unknown): ConnectorCall[] {
   return connectorCallsIn(name, args).filter((call) => isOutboundTool(call.slug));
+}
+
+/** For a bot that may only read and draft on its own: every app call that is neither, each waiting for the person's
+ * Approve. Booking, accepting and deleting count, though they reach nobody, and so does every call that sends. */
+export function approvalCallsIn(name: string, args: unknown): ConnectorCall[] {
+  return connectorCallsIn(name, args).filter((call) => {
+    if (isOutboundTool(call.slug)) return true;
+    const tokens = actionTokens(call.slug);
+    return !isReadOnlyTool(call.slug) && !(tokens.includes("DRAFT") && DRAFT_VERBS.has(tokens[0]));
+  });
 }
