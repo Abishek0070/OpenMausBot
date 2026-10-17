@@ -269,16 +269,20 @@ it("waits for Approve before MausBot sends, reads freely, and refuses a batch of
   expect(router.relayed).toHaveLength(2);
 }, 90_000);
 
-it("adds MausBot to an install that had none, offers a Chief once, and lets only an admin answer", async () => {
+/** The install as it was before this version: one bot of the person's, no Chief, no MausBot. */
+async function legacyInstall() {
   const first = await start({ signIn: true });
   const [starter] = await first.bots(BOSS);
-  // The install as it was before this version: one bot of the person's, no Chief, no MausBot.
   expect((await first.api("PATCH", `/api/bots/${starter.id}/profile`, { name: "Tango" }, BOSS)).status).toBe(200);
   expect((await first.api("PATCH", `/api/bots/${starter.id}`, { chiefOfStaff: false }, BOSS)).status).toBe(200);
   await first.stop();
   const file = join(first.dataDir, "bots.json");
   writeFileSync(file, JSON.stringify((JSON.parse(readFileSync(file, "utf8")) as Array<{ builtIn?: string }>).filter((bot) => !bot.builtIn)));
-  const s = await start({ home: first.home, tokens: first.tokens });
+  return start({ home: first.home, tokens: first.tokens });
+}
+
+it("adds MausBot to an install that had none, offers a Chief once, and lets only an admin answer", async () => {
+  const s = await legacyInstall();
   const bots = await s.bots(BOSS);
   expect(bots.map((bot) => bot.name)).toEqual(["Tango", "MausBot"]);
   const mausbot = bots[1];
@@ -300,19 +304,68 @@ it("adds MausBot to an install that had none, offers a Chief once, and lets only
   expect((await s.lines(mausbot.threadId, BOSS)).filter((line) => line.card?.title === "Set up a Chief of Staff?")).toHaveLength(1);
 }, 120_000);
 
-it("seeds no MausBot or Chief and posts no recap on a hosted team workspace", async () => {
+it("does not offer a Chief again after Not now", async () => {
+  const s = await legacyInstall();
+  const mausbot = (await s.bots(BOSS))[1];
+  await s.api("POST", "/api/presence/active", { source: "desktop" }, BOSS);
+  const offers = async () => (await s.lines(mausbot.threadId, BOSS)).filter((line) => line.card?.title === "Set up a Chief of Staff?");
+  await expect.poll(async () => (await offers()).length, { timeout: 15_000 }).toBe(1);
+  const card = (await offers())[0].card;
+  const answered = await s.api("POST", `/api/threads/${mausbot.threadId}/respond`, { requestId: card.requestId, behavior: "answer", message: "Not now" }, BOSS);
+  expect(answered.body).toEqual({ ok: true, outcome: "rejected" });
+  await expect.poll(() => s.brief(), { timeout: 15_000 }).toMatchObject({ chiefOffer: { answered: "no" } });
+  expect((await s.bots(BOSS)).some((bot) => bot.chiefOfStaff)).toBe(false);
+  await s.api("POST", "/api/presence/active", { source: "desktop" }, BOSS);
+  await s.api("POST", "/api/presence/active", { source: "phone" }, BOSS);
+  expect(await offers()).toHaveLength(1);
+}, 120_000);
+
+it("seeds no MausBot or Chief on a hosted team workspace", async () => {
   const home = mkdtempSync(join(tmpdir(), "omb-mb-"));
   cleanups.push(() => removeTempDir(home));
   const dataDir = join(home, ".openmausbot");
   mkdirSync(dataDir, { recursive: true });
-  writeFileSync(join(dataDir, PRESENCE_FILE), JSON.stringify({ lastActiveAt: Date.now() - 9 * HOUR }));
   const s = await start({ home, hosted: true });
   const [starter, ...rest] = await s.bots();
   expect(rest).toEqual([]);
   expect([starter.builtIn, Boolean(starter.chiefOfStaff)]).toEqual([undefined, false]);
-  const presence = await s.api("POST", "/api/presence/active", { source: "desktop", timeZone: "Asia/Kolkata" });
-  expect(presence).toEqual({ status: 200, body: { ok: true, returned: false } });
-  expect((await s.lines(starter.threadId)).some((line) => line.kind === "widget" || line.card?.title === "Set up a Chief of Staff?")).toBe(false);
-  expect((await s.bots()).map((bot) => [bot.builtIn, Boolean(bot.chiefOfStaff)])).toEqual([[undefined, false]]);
+  expect(await s.api("POST", "/api/presence/active", { source: "desktop" })).toEqual({ status: 200, body: { ok: true, returned: false } });
+  expect((await s.lines(starter.threadId)).some((line) => line.card?.title === "Set up a Chief of Staff?")).toBe(false);
   expect(existsSync(join(dataDir, BRIEF_STATE_FILE))).toBe(false);
 }, 90_000);
+
+/** One install with a Chief and a bot that finished work while the person was last there, then nine hours away. */
+async function awayInstall() {
+  const first = await start();
+  const [chief, mausbot] = await first.bots();
+  const scout = (await first.api("POST", "/api/bots", { name: "Scout" })).body.bot;
+  expect((await first.api("POST", "/api/presence/active", { source: "desktop", timeZone: "Asia/Kolkata" })).body).toEqual({ ok: true, returned: false });
+  expect((await first.api("POST", `/api/bots/${scout.id}/messages`, { text: "Finish the report.", threadId: scout.threadId })).status).toBeLessThan(300);
+  await expect.poll(async () => (await first.lines(scout.threadId)).some((line) => line.kind === "digest"), { timeout: 30_000 }).toBe(true);
+  await first.stop();
+  const file = join(first.dataDir, PRESENCE_FILE);
+  const saved = JSON.parse(readFileSync(file, "utf8")) as { lastActiveAt: number };
+  writeFileSync(file, JSON.stringify({ ...saved, lastActiveAt: saved.lastActiveAt - 9 * HOUR }));
+  return { home: first.home, dataDir: first.dataDir, chief, mausbot, scout };
+}
+
+it.each([
+  { hosted: false, returned: true },
+  { hosted: true, returned: false },
+])("hosted=$hosted: a return after nine hours answers returned=$returned, and the Chief's recap exists only when not hosted", async ({ hosted, returned }) => {
+  const away = await awayInstall();
+  const briefFile = join(away.dataDir, BRIEF_STATE_FILE);
+  const briefBefore = existsSync(briefFile) ? readFileSync(briefFile, "utf8") : null;
+  const s = await start({ home: away.home, hosted });
+  const presence = await s.api("POST", "/api/presence/active", { source: "desktop", timeZone: "Asia/Kolkata" });
+  expect(presence).toMatchObject({ status: 200, body: { ok: true, returned } });
+  const recaps = async () => (await s.lines(away.chief.threadId)).filter((line) => line.kind === "widget");
+  if (!hosted) {
+    await expect.poll(async () => (await recaps()).length, { timeout: 15_000 }).toBe(1);
+    expect((await recaps())[0].text).toContain("Since you last looked");
+    return;
+  }
+  expect(presence.body).not.toHaveProperty("open");
+  expect(await recaps()).toEqual([]);
+  expect(existsSync(briefFile) ? readFileSync(briefFile, "utf8") : null).toBe(briefBefore);
+}, 120_000);
