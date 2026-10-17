@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import type { RoutineRun } from "../routines.ts";
 import { Store, type Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { usageFileFor } from "../usage-ledger.ts";
-import { activePathTail, createChiefBrief, presenceOwner } from "./chief-brief.ts";
+import { activePathTail, createChiefBrief, presenceOwner, type ChiefBriefDeps } from "./chief-brief.ts";
 
 const HOUR = 60 * 60_000;
 const NOW = Date.UTC(2026, 9, 15, 8, 0, 0);
@@ -22,7 +22,7 @@ afterEach(async () => {
 type WorldBot = { id: string; name: string; section?: string; chiefOfStaff?: boolean; hidden?: boolean; visibility?: BotVisibility };
 type WorldRoom = { id: string; threadId: string; memberIds: string[]; audienceFloor?: BotVisibility };
 
-function world(bots: WorldBot[], options: { recap?: boolean; runs?: (since: number) => RoutineRun[]; patchTaskFails?: boolean; rooms?: WorldRoom[]; hosted?: boolean } = {}) {
+function world(bots: WorldBot[], options: { recap?: boolean; runs?: (since: number) => RoutineRun[]; patchTaskFails?: boolean; rooms?: WorldRoom[]; hosted?: boolean; mausbot?: string; onPresence?: ChiefBriefDeps["onPresence"] } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "omb-chief-brief-"));
   dirs.push(dataDir);
   const messages = new Map<string, Message[]>();
@@ -67,6 +67,8 @@ function world(bots: WorldBot[], options: { recap?: boolean; runs?: (since: numb
     threadOwner, hosted: options.hosted ?? false,
     threadBusy: () => false,
     routineRuns: options.runs ?? (() => []),
+    mausbot: () => (options.mausbot ? store.bot(options.mausbot) : null),
+    onPresence: options.onPresence,
   });
   const brief = start();
   // A finished turn: its digest row, and the thread's `updatedAt` moved to it, as the store does on append.
@@ -412,5 +414,114 @@ describe("createChiefBrief", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(w.brief.active("desktop", `Zone/${"x".repeat(200)}`)).toEqual({ returned: false });
     expect(w.brief.state.get().timeZone).toBeUndefined();
+  });
+});
+
+describe("MausBot in the recap composition", () => {
+  const MAUSBOT = { id: "mausbot", name: "MausBot", visibility: "admins" as const };
+
+  it("posts the recap as MausBot when there is no Chief, covering what only admins see", () => {
+    const w = world([MAUSBOT, { id: "scout", name: "Scout" }, { id: "payroll", name: "Payroll", visibility: "admins" }], { mausbot: "mausbot" });
+    w.brief.active("desktop");
+    w.tick(4 * HOUR);
+    w.digestFor("scout", NOW + HOUR);
+    w.digestFor("payroll", NOW + HOUR);
+    expect(w.brief.active("desktop")).toEqual({ returned: true, open: { botId: "mausbot", threadId: "mausbot-main" } });
+    const text = w.widgets("mausbot-main").map((line) => line.text).join("\n");
+    expect(text).toContain("scout finished a job.");
+    expect(text).toContain("payroll finished a job.");
+  });
+
+  it("leaves the recap to the Chief when there is one", () => {
+    const w = world([{ id: "chief", name: "Chief", chiefOfStaff: true }, MAUSBOT, { id: "scout", name: "Scout" }], { mausbot: "mausbot" });
+    w.brief.active("desktop");
+    w.tick(4 * HOUR);
+    w.digestFor("scout", NOW + HOUR);
+    expect(w.brief.active("desktop")).toEqual({ returned: true, open: { botId: "chief", threadId: "chief-main" } });
+    expect(w.widgets("mausbot-main")).toEqual([]);
+  });
+
+  it("opens MausBot's new card before the recap, once per client", () => {
+    const w = world([{ id: "chief", name: "Chief", chiefOfStaff: true }, MAUSBOT, { id: "scout", name: "Scout" }], {
+      mausbot: "mausbot",
+      onPresence: ({ returned }) => { if (returned) w.brief.noteAssistantCard({ botId: "mausbot", threadId: "mausbot-main" }); },
+    });
+    const open = { botId: "mausbot", threadId: "mausbot-main" };
+    w.brief.active("desktop");
+    w.brief.active("phone");
+    w.tick(4 * HOUR);
+    w.digestFor("scout", NOW + HOUR);
+    expect(w.brief.active("desktop")).toEqual({ returned: true, open });
+    expect(w.brief.active("phone")).toEqual({ returned: false, open });
+    expect(w.widgets("chief-main")).toHaveLength(1);
+    expect(w.brief.state.get().assistantCard).toMatchObject({ botId: "mausbot", threadId: "mausbot-main", kind: "assistant" });
+    w.tick(60_000);
+    expect(w.brief.active("desktop")).toEqual({ returned: false });
+    expect(w.brief.active("phone")).toEqual({ returned: false });
+  });
+
+  it("tells each client about MausBot's card or the recap, never one and then the other", () => {
+    const w = world([{ id: "chief", name: "Chief", chiefOfStaff: true }, MAUSBOT, { id: "scout", name: "Scout" }], { mausbot: "mausbot" });
+    const open = { botId: "mausbot", threadId: "mausbot-main" };
+    w.brief.active("desktop");
+    w.tick(2 * HOUR);
+    w.brief.noteAssistantCard({ botId: "mausbot", threadId: "mausbot-main" });
+    w.tick(2 * HOUR);
+    w.digestFor("scout", NOW + 3 * HOUR);
+    expect(w.brief.active("desktop")).toEqual({ returned: true, open });
+    expect(w.widgets("chief-main")).toHaveLength(1);
+    w.tick(HOUR);
+    expect(w.brief.active("phone")).toEqual({ returned: false, open });
+    for (const step of [HOUR, HOUR]) {
+      w.tick(step);
+      expect(w.brief.active("phone")).toEqual({ returned: false });
+    }
+    w.tick(HOUR / 2);
+    expect(w.brief.active("desktop")).toEqual({ returned: false });
+  });
+
+  it("never moves a client that is already here when MausBot posts", () => {
+    const w = world([MAUSBOT], { mausbot: "mausbot" });
+    w.brief.active("desktop");
+    w.tick(60_000);
+    w.brief.noteAssistantCard({ botId: "mausbot", threadId: "mausbot-main" });
+    w.tick(60_000);
+    expect(w.brief.active("desktop")).toEqual({ returned: false });
+  });
+
+  it("calls onPresence on each owner activation, survives it throwing, and never on a hosted workspace", () => {
+    const seen: unknown[] = [];
+    const w = world([MAUSBOT], { mausbot: "mausbot", onPresence: (event) => { seen.push(event); } });
+    w.brief.active("desktop");
+    w.tick(4 * HOUR);
+    w.brief.active("phone");
+    expect(seen).toEqual([{ source: "desktop", returned: false }, { source: "phone", returned: true }]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failing = world([MAUSBOT], { mausbot: "mausbot", onPresence: () => { throw new Error("intro exploded"); } });
+    expect(failing.brief.active("desktop")).toEqual({ returned: false });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("intro exploded"));
+    const hosted = vi.fn();
+    world([MAUSBOT], { mausbot: "mausbot", hosted: true, onPresence: hosted }).brief.active("desktop");
+    expect(hosted).not.toHaveBeenCalled();
+  });
+
+  it("opens a card MausBot posted while the person was away, even when the state file cannot be saved", () => {
+    const w = world([MAUSBOT], { mausbot: "mausbot" });
+    w.brief.active("desktop");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(w.brief.state, "patch").mockImplementation(() => { throw new Error("disk full"); });
+    w.tick(4 * HOUR);
+    w.brief.noteAssistantCard({ botId: "mausbot", threadId: "mausbot-main" });
+    expect(w.brief.active("phone")).toEqual({ returned: true, open: { botId: "mausbot", threadId: "mausbot-main" } });
+    expect(w.brief.active("desktop")).toEqual({ returned: false, open: { botId: "mausbot", threadId: "mausbot-main" } });
+    expect(w.brief.state.get().assistantCard).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+  });
+
+  it("notes no MausBot card on a hosted workspace", () => {
+    const w = world([MAUSBOT], { mausbot: "mausbot", hosted: true });
+    w.brief.noteAssistantCard({ botId: "mausbot", threadId: "mausbot-main" });
+    expect(w.brief.state.get().assistantCard).toBeUndefined();
+    expect(existsSync(join(w.dataDir, "brief.json"))).toBe(false);
   });
 });

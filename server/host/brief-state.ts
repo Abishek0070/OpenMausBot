@@ -4,12 +4,13 @@ import { z } from "zod";
 import { writeFileAtomic } from "../atomic.ts";
 
 const id = z.string().min(1).max(128);
+const at = z.number().finite().nonnegative();
 
 const cardSchema = z.object({
-  at: z.number().finite().nonnegative(),
+  at,
   botId: id,
   threadId: id,
-  kind: z.enum(["recap"]),
+  kind: z.enum(["recap", "assistant"]),
 }).strict();
 
 export const briefStateSchema = z.object({
@@ -18,6 +19,14 @@ export const briefStateSchema = z.object({
   timeZone: z.string().min(1).max(128).optional(),
   /** The newest recap card the server posted, so a client that was away can open on it. */
   lastCard: cardSchema.optional(),
+  /** The newest card MausBot posted on its own; a client that was away opens on it before the recap. */
+  assistantCard: cardSchema.optional(),
+  /** MausBot's first message, posted once. */
+  mausbotIntro: z.object({ at, threadId: id }).strict().optional(),
+  /** The one "Set up a Chief of Staff?" card and how it was answered. */
+  chiefOffer: z.object({ requestId: id, threadId: id, messageId: id, at, candidateId: id.optional(), answered: z.enum(["create", "appoint", "no"]).optional() }).strict().optional(),
+  /** The connect card, posted once, or the check that found nothing to connect. */
+  connectOffer: z.object({ at, threadId: id, shown: z.boolean() }).strict().optional(),
 });
 
 export type BriefState = z.infer<typeof briefStateSchema>;

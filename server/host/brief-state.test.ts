@@ -44,4 +44,17 @@ describe("createBriefState", () => {
     expect(() => state.patch({ timeZone: "x".repeat(200) })).toThrow();
     expect(state.get()).toEqual({ version: 1, timeZone: "UTC" });
   });
+
+  it("keeps MausBot's card, intro, Chief offer and connect card beside the recap", () => {
+    const path = file();
+    const state = createBriefState(path);
+    state.patch({
+      assistantCard: { at: 7, botId: "m", threadId: "m-main", kind: "assistant" },
+      mausbotIntro: { at: 6, threadId: "m-main" },
+      chiefOffer: { requestId: "rq", threadId: "m-main", messageId: "m1", at: 6, candidateId: "tango", answered: "appoint" },
+      connectOffer: { at: 6, threadId: "m-main", shown: true },
+    });
+    expect(createBriefState(path).get()).toMatchObject({ assistantCard: { kind: "assistant" }, chiefOffer: { answered: "appoint" }, connectOffer: { shown: true } });
+    expect(() => state.patch({ chiefOffer: { requestId: "rq", threadId: "m-main", messageId: "m1", at: 6, answered: "maybe" as never } })).toThrow();
+  });
 });

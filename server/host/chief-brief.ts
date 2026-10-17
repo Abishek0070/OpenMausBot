@@ -23,13 +23,18 @@ export interface ChiefBriefDeps {
   threadBusy: RecapDeps["threadBusy"];
   /** Runs that finished at or after `since`, or have not finished, whenever they were scheduled. */
   routineRuns(since: number): RoutineRun[];
+  /** MausBot, which posts the recap when there is no Chief. */
+  mausbot?(): BotRecord | null;
+  /** Each owner activation, after a return's recap and before the answer chooses what to open. */
+  onPresence?(event: { source: PresenceSource; returned: boolean }): void;
 }
 
 export interface PresenceAnswer {
   returned: boolean;
-  /** The latest recap card, sent once to each client (desktop, phone) when it was posted at or after the start of the
-   * absence the latest return ended (before any return since start-up, at or after the previous activation), and only to
-   * a client arriving: on a return, or when that client's own last activation is missing or older than the away time. */
+  /** MausBot's newest card, else the latest recap card, sent once to each client (desktop, phone) when it was posted at
+   * or after the start of the absence the latest return ended (before any return since start-up, at or after the
+   * previous activation), and only to a client arriving: on a return, or when that client's own last activation is
+   * missing or older than the away time. */
   open?: { botId: string; threadId: string };
 }
 
@@ -55,6 +60,7 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
   const now = deps.now ?? Date.now;
   const state: BriefStateStore = createBriefState(join(deps.dataDir, BRIEF_STATE_FILE));
   let unsavedCard: BriefState["lastCard"];
+  let unsavedAssistantCard: BriefState["assistantCard"];
 
   function savePatch(changes: Parameters<BriefStateStore["patch"]>[0]): boolean {
     try {
@@ -69,6 +75,17 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
   function lastCard(): BriefState["lastCard"] {
     const saved = state.get().lastCard;
     return unsavedCard && (!saved || unsavedCard.at > saved.at) ? unsavedCard : saved;
+  }
+
+  function lastAssistantCard(): BriefState["assistantCard"] {
+    const saved = state.get().assistantCard;
+    return unsavedAssistantCard && (!saved || unsavedAssistantCard.at > saved.at) ? unsavedAssistantCard : saved;
+  }
+
+  function noteAssistantCard(card: { botId: string; threadId: string }): void {
+    if (deps.hosted) return;
+    const noted = { at: now(), botId: card.botId, threadId: card.threadId, kind: "assistant" as const };
+    unsavedAssistantCard = savePatch({ assistantCard: noted }) ? undefined : noted;
   }
 
   let turnsCache: { at: number; counts: Map<string, number> } | undefined;
@@ -146,7 +163,7 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
 
   function postRecap(since: number): boolean {
     if (deps.hosted || !deps.settings().recap) return false;
-    const bot = chief();
+    const bot = chief() ?? deps.mausbot?.() ?? null;
     const threadId = bot && chiefThread(bot);
     if (!bot || !threadId) return false;
     const recap = buildRecap(recapInputs(seenWith(bot)), { since, exclude: { threadId }, timeZone: state.get().timeZone });
@@ -173,16 +190,25 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
     if (deps.hosted) return { returned: false };
     if (timeZone && timeZone !== state.get().timeZone) savePatch({ timeZone });
     const outcome = presence.active(source);
+    try {
+      deps.onPresence?.({ source, returned: outcome.returned });
+    } catch (error) {
+      console.warn(`brief: the presence hook failed: ${failure(error)}`);
+    }
     const at = now();
     const sourcePrevious = sourceActiveAt.get(source);
     sourceActiveAt.set(source, at);
     const arriving = outcome.returned || sourcePrevious === undefined || at - sourcePrevious >= deps.settings().awayMs;
-    const card = lastCard();
     const floor = absenceStart ?? outcome.previousActiveAt ?? -Infinity;
-    if (!arriving || !card || card.at < floor || card.at <= (openedBy.get(source) ?? -Infinity)) return { returned: outcome.returned };
-    openedBy.set(source, card.at);
+    const told = openedBy.get(source) ?? -Infinity;
+    const fresh = (card: BriefState["lastCard"] | BriefState["assistantCard"]) => card !== undefined && card.at >= floor && card.at > told;
+    const assistant = lastAssistantCard();
+    const recap = lastCard();
+    const card = fresh(assistant) ? assistant : fresh(recap) ? recap : undefined;
+    if (!arriving || !card) return { returned: outcome.returned };
+    openedBy.set(source, Math.max(assistant?.at ?? -Infinity, recap?.at ?? -Infinity));
     return { returned: outcome.returned, open: { botId: card.botId, threadId: card.threadId } };
   }
 
-  return { state, presence, chief, chiefThread, turnsByBot, postRecap, active };
+  return { state, presence, chief, chiefThread, turnsByBot, postRecap, active, noteAssistantCard };
 }
