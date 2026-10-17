@@ -20,7 +20,7 @@ const dirs: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) await removeTempDir(dir); });
 
 function world(options: { bots?: Array<Partial<BotRecord> & { id: string; name: string }>; mausbot?: Partial<BotRecord>; turns?: Array<[string, number]>;
-  configured?: boolean; appTools?: boolean; connected?: Record<string, { connected: boolean }> | Error; hosted?: boolean } = {}) {
+  configured?: boolean; connected?: Record<string, { connected: boolean }> | Error; hosted?: boolean } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "omb-mausbot-intro-"));
   dirs.push(dataDir);
   const bots = [...(options.bots ?? []), { id: "m", name: "MausBot", builtIn: "mausbot", visibility: "admins", ...options.mausbot }]
@@ -28,7 +28,6 @@ function world(options: { bots?: Array<Partial<BotRecord> & { id: string; name: 
   const messages = new Map<string, Message[]>();
   let ids = 0;
   let connected = options.connected ?? {};
-  let appTools = options.appTools ?? true;
   const store = {
     bots,
     bot: (id: string) => bots.find((bot) => bot.id === id) ?? null,
@@ -61,7 +60,6 @@ function world(options: { bots?: Array<Partial<BotRecord> & { id: string; name: 
     store: store as unknown as MausBotIntroDeps["store"], state, hosted: options.hosted ?? false,
     mainThread: (bot) => bot.threadId, turnsByBot: () => new Map(options.turns ?? []),
     configured: () => options.configured ?? true,
-    connectedAppTools: () => appTools,
     connected: checks,
     newId: () => `id${++ids}`, now: () => NOW,
   });
@@ -71,7 +69,6 @@ function world(options: { bots?: Array<Partial<BotRecord> & { id: string; name: 
   return {
     intro, store, state, thread, offer, saved, checks,
     reconnect: (value: Record<string, { connected: boolean }> | Error) => { connected = value; },
-    switchEngine: (value: boolean) => { appTools = value; },
   };
 }
 
@@ -111,15 +108,16 @@ describe("MausBot's intro", () => {
     expect(w.checks).not.toHaveBeenCalled();
   });
 
-  it("offers nothing to connect while MausBot's engine cannot use connected apps, and offers it once the engine can", async () => {
-    const w = world({ bots: [{ id: "chief", name: "Chief of Staff", chiefOfStaff: true }], appTools: false });
-    await w.intro.introduce();
-    expect(w.thread().map((line) => line.text)).toEqual([MAUSBOT_INTRO]);
-    expect(w.checks).not.toHaveBeenCalled();
-    expect(w.state.get().connectOffer).toBeUndefined();
-    w.switchEngine(true);
+  it("offers the connect card on a server with connected apps whatever MausBot's engine, and none on a server without them", async () => {
+    const engine = { modelSelection: { instanceId: "engine-without-connected-app-tools", model: "plain" } } as Partial<BotRecord>;
+    const w = world({ bots: [{ id: "chief", name: "Chief of Staff", chiefOfStaff: true }], mausbot: engine });
     await w.intro.introduce();
     expect(w.thread().filter((line) => line.kind === "connector").map((line) => line.connector?.slug)).toEqual(["gmail", "googlecalendar"]);
+    expect(w.state.get().connectOffer).toMatchObject({ shown: true });
+    const bare = world({ bots: [{ id: "chief", name: "Chief of Staff", chiefOfStaff: true }], mausbot: engine, configured: false });
+    await bare.intro.introduce();
+    expect(bare.thread().some((line) => line.kind === "connector" || line.text === CONNECT_LINE)).toBe(false);
+    expect(bare.checks).not.toHaveBeenCalled();
   });
 
   it("waits out a failed connected-apps check and offers the card on a later presence", async () => {

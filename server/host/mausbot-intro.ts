@@ -29,8 +29,6 @@ export interface MausBotIntroDeps {
   turnsByBot(): Map<string, number>;
   /** Connected apps are set up on this server: a project key or the managed service. */
   configured(): boolean;
-  /** MausBot's engine in this chat mounts connected-app tools (its `composioMcp`). */
-  connectedAppTools(bot: BotRecord, threadId: string): boolean;
   /** The install's connected services by slug; rejects when the service cannot be reached. */
   connected(): Promise<Record<string, { connected: boolean }>>;
   newId(): string;
@@ -120,7 +118,7 @@ export function createMausBotIntro(deps: MausBotIntroDeps) {
           console.warn(`mausbot: could not mark the chat unread: ${failure(error)}`);
         }
       }
-      if (!current().connectOffer && deps.configured() && deps.connectedAppTools(bot, threadId)) {
+      if (!current().connectOffer && deps.configured()) {
         connecting ??= offerConnect(bot, threadId).finally(() => { connecting = undefined; });
         await connecting;
       }
