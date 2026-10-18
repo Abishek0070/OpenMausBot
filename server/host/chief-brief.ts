@@ -148,7 +148,7 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
   });
 
   function postCard(bot: BotRecord, threadId: string, card: WidgetRoot): boolean {
-    const posted = createAgentCard({ store: deps.store, bot, threadId, input: { tool: "show_widget", widget: card } });
+    const posted = createAgentCard({ store: deps.store, bot, threadId, input: { tool: "show_widget", widget: card }, serverCard: true });
     if (!posted.ok) {
       console.warn(`brief: the card was refused: ${posted.error}`);
       return false;

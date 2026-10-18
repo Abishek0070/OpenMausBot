@@ -173,6 +173,7 @@ describe("createChiefBrief", () => {
     expect(cards[0]!.text).toContain("**Since you last looked**");
     expect(cards[0]!.text).toContain("Scout · scout finished a job.");
     expect(cards[0]).not.toHaveProperty("from");
+    expect(cards[0]).toMatchObject({ serverCard: true });
     expect(w.unreadThreads()).toEqual(["chief-main"]);
     expect(w.brief.state.get().lastCard).toMatchObject({ botId: "chief", threadId: "chief-main", kind: "recap" });
     // the other client returning a moment later gets the same card to open, and no second card

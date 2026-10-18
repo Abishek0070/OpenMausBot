@@ -1,4 +1,5 @@
 import type { WidgetAction } from "../shared/widget.ts";
+import { cardRecords } from "./records-block.ts";
 import type { Message } from "./store.ts";
 
 const MAX_REPLY_EXCERPT = 900;
@@ -78,11 +79,14 @@ export function promptWithReply(text: string, target: ReplyTarget | undefined, u
   ].join("\n");
 }
 
+/** A row as a later turn replays it. */
 export function transcriptText(message: Message, messagesById: ReadonlyMap<string, Message>, userName = "User"): string {
+  if (message.serverCard) return cardRecords(message.text ?? "");
   if (!message.text || !message.replyToId) return message.text ?? "";
   const target = messagesById.get(message.replyToId);
   if (!target?.text) return message.text;
   const excerpt = replyExcerpt(target.text, 220);
+  if (target.serverCard) return `[answering a card shown in this chat]\n${cardRecords(excerpt)}\n${message.text}`;
   return target.kind === "widget"
     ? `[answering ${replySpeaker(target, userName)}'s widget: “${excerpt}”]\n${message.text}`
     : `[replying to ${replySpeaker(target, userName)}: “${excerpt}”]\n${message.text}`;

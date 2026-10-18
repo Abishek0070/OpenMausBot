@@ -166,7 +166,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   }
 
   function post(bot: BotRecord, threadId: string, built: BuiltCard): string | null {
-    const posted = createAgentCard({ store: deps.store, bot, threadId, input: { tool: "show_widget", widget: built.card } });
+    const posted = createAgentCard({ store: deps.store, bot, threadId, input: { tool: "show_widget", widget: built.card }, serverCard: true });
     if (!posted.ok) {
       console.warn(`assistant: a card was refused: ${posted.error}`);
       return null;

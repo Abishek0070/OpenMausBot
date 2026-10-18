@@ -101,6 +101,8 @@ export function createAgentCard(args: {
   input: unknown;
   /** The row a widget call wrote: the calling session made it, so it is never offered back to it as unseen. */
   authored?(messageId: string): void;
+  /** The server built this card from records, not the bot. */
+  serverCard?: true;
 }): AgentCardResult {
   const { store, bot, threadId, input } = args;
   if (!isRecord(input) || input.tool === undefined) return createOptionsCard(args);
@@ -113,7 +115,7 @@ export function createAgentCard(args: {
     const widget = canonicalWidget(input);
     if (!widget.ok) return widget;
     // No `from`: in a direct thread a bot-authored row carrying one is replayed as another bot's line.
-    const message = store.appendMessage(threadId, { role: "bot", kind: "widget", text: widget.text, widget: { v: 1, root: widget.root } });
+    const message = store.appendMessage(threadId, { role: "bot", kind: "widget", text: widget.text, widget: { v: 1, root: widget.root }, ...(args.serverCard ? { serverCard: true as const } : {}) });
     args.authored?.(message.id);
     return { ok: true, messageId: message.id, ...(widget.masked ? { masked: true as const } : {}) };
   }

@@ -754,6 +754,7 @@ describe("cards and the open rule", () => {
     expect(w.titles()).toEqual(["Today", "Prep: Meeting a", "Subject important-1", "Call with Jake Price in 9 minutes"]);
     expect(w.notify).toHaveBeenCalledTimes(4);
     expect(w.noteCard).toHaveBeenCalledTimes(4);
+    expect(w.messages.filter((line) => line.kind === "widget").map((line) => line.serverCard)).toEqual([true, true, true, true]);
   });
 
   it("notes each newly posted card once, and never a Retry card or its answer", async () => {
