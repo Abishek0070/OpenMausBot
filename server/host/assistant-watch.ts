@@ -468,9 +468,11 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     }
   }
 
+  const started = (event: CalendarEvent): boolean => (events.find((candidate) => candidate.id === event.id)?.start ?? event.start) <= now();
+
   async function perform(job: Job): Promise<void> {
     const here = context();
-    if (!here) return abandon(job, turnOf(job));
+    if (!here || (job.kind !== "triage" && started(job.event))) return abandon(job, turnOf(job));
     const { bot, threadId } = here;
     const tools = deps.capabilities(bot, threadId);
     if (!tools.mailTools && !current().notices?.noConnectorTools) {

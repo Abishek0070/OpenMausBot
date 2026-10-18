@@ -323,6 +323,30 @@ describe("the daily cap", () => {
   });
 });
 
+describe("a prep that would start late", () => {
+  it("drops a queued prep whose meeting started before its turn began, gives the turn back, and posts no error", async () => {
+    const hold = gate();
+    const w = world({
+      events: [meeting("first", NOW + 2 * HOUR), meeting("second", NOW + 30 * MINUTE)],
+      reply: async (title, prompt) => { if (title === "Prep: Meeting first") await hold.closed; return defaultReply(title, prompt); },
+    });
+    void w.watch.check();
+    await expect.poll(() => w.jobs.length).toBe(1);
+    expect(w.watch.state.get().dayTurns).toBe(2);
+    w.tick(31 * MINUTE);
+    hold.open();
+    await w.watch.idle();
+    expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting first"]);
+    expect(w.titles()).toEqual(["Prep: Meeting first"]);
+    expect(w.retries()).toEqual([]);
+    expect(w.watch.state.get().dayTurns).toBe(1);
+    expect(w.watch.state.get().inFlight).toEqual([]);
+    expect(w.watch.state.get().meetings?.second).not.toHaveProperty("prepStartedAt");
+    await w.settle();
+    expect(w.jobs).toHaveLength(1);
+  });
+});
+
 describe("past the daily cap", () => {
   it("only reminds once the day's turns are used up", async () => {
     const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
