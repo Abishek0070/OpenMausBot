@@ -5,7 +5,7 @@ import type { MeetingRecord } from "./assistant-state.ts";
 
 export const RECORDS_END = "[end of records]";
 // Characters with no width: dropped, so a marker split by one is whole again before it is checked.
-const INVISIBLE = /[\u00ad\u200b-\u200f\u2060-\u2064\ufeff\u{e0000}-\u{e007f}]/gu;
+const INVISIBLE = /[\u00ad\u200b-\u200f\u2060-\u2064\ufeff\u061c\u180e\u034f\ufe00-\ufe0f\u115f\u3164\u{e0000}-\u{e007f}]/gu;
 // Controls and bidi overrides: a space, so they never glue two words together.
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069]/g;

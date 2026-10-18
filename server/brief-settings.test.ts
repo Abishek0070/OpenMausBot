@@ -61,4 +61,11 @@ describe("assistantActsEnabled", () => {
     expect(assistantActsEnabled({})).toBe(true);
     expect(assistantActsEnabled({ assistantActs: false })).toBe(false);
   });
+
+  it("keeps MausBot's switch through a PATCH and a stored config, and refuses a string", () => {
+    const acts = { assistantActs: false };
+    expect(parseConfigPatch({ features: acts })).toEqual({ features: acts });
+    expect(parseStoredConfig({ features: acts }).features).toEqual(acts);
+    expect(() => parseConfigPatch({ features: { assistantActs: "false" } })).toThrow("features.assistantActs");
+  });
 });

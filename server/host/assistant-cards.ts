@@ -137,7 +137,10 @@ export function reminderCard(input: { event: CalendarEvent; line?: string; timeZ
 }
 
 // "Ada <ada@example.test>" becomes "Ada"; with no name, the address.
-function senderName(from: string): string {
+const SENDER_INPUT_MAX = 300;
+
+function senderName(rawFrom: string): string {
+  const from = rawFrom.slice(0, SENDER_INPUT_MAX);
   const match = /^\s*"?([^"<]*?)"?\s*<([^>]*)>\s*$/.exec(from);
   return match ? match[1]!.trim() || match[2]!.trim() : from.trim();
 }

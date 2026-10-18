@@ -19,15 +19,18 @@ presence of the person's day. Design:
   fingerprints, the email cursor and judged ids, the last Today date and the
   day's turn count; never a subject or a body.
 - The Today card posts at once on the first presence of the day, from the last
-  calendar read, so opening the app lands on MausBot. If that read is older
+  calendar read (after a restart, "at once" waits for the first check), so opening the app lands on MausBot. If that read is older
   than one check interval, the card is edited in place after the next fresh
   read. There is no second notification.
-- At most 12 turns a day, counted in the person's time zone. An email check
-  takes up to 20 emails, and one runs per check interval at most.
+- At most 12 prep turns a day, counted in the person's time zone: preps,
+  updates and repeat preps all count. Email checks are separate, at most one
+  per check interval, and each takes up to 20 emails.
 - After 3 failed reads of Gmail or Calendar in a row, one Reconnect card
   appears for that service. A success resets the count.
 - A **Retry** card settles as "unavailable" when nothing would run: the daily
-  cap is used, the meeting has started or is gone, or the switch is off.
+  cap is used, the meeting has started or is gone, the switch is off, the
+  calendar has not been read since a restart, the service is disconnected, or
+  the press came from someone who is not the owner or an admin.
 - A job thread is hidden and runs at Ask whatever level is stored on MausBot.
   The server answers its approval requests itself: only web search is allowed.
   OpenMausBot's write tools are refused, and connected apps are limited to

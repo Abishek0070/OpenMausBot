@@ -5711,7 +5711,7 @@ const memoryUpkeep = createMemoryUpkeep({
     return !room || roomCaptureAllowed(room, store.bot(botId));
   },
   restoreTurn: (botId, threadId, turnId) => {
-    if (routines?.runForThread(threadId)) return null;
+    if (routines?.runForThread(threadId) || jobGate.isJobThread(botId, threadId)) return null;
     const room = store.groupByThread(threadId);
     if (room) return roomCaptureAllowed(room, store.bot(botId)) ? captureRoomTurnFor(threadId, botId, turnId) : null;
     if (store.botByThread(threadId)?.id !== botId) return null;
@@ -5897,7 +5897,7 @@ bus.subscribe((event: RuntimeEvent) => {
     }
     const bot = store.botByThread(event.threadId);
     if (!bot || !upkeepEnabled(bot) || isInternalTurn(event.threadId)
-      || isUnattended(bot.id, event.threadId) || routines?.runForThread(event.threadId)) return;
+      || isUnattended(bot.id, event.threadId) || routines?.runForThread(event.threadId) || jobGate.isJobThread(bot.id, event.threadId)) return;
     if (CLOUD_HOME && !cloudOwnerOnlyThread(event.threadId)) return;
     const turn = captureTurnFor(event.threadId, event.turnId);
     if (turn) memoryUpkeep.noteTurn(bot.id, event.threadId, turn);

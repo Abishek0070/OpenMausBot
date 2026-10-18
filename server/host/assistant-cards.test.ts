@@ -171,6 +171,13 @@ describe("clipping and plain text", () => {
     expect(BRIEF_MAX).toBe(WIDGET_LIMITS.markdown);
   });
 
+  it("reads a sender made of a long whitespace run without backtracking", () => {
+    const started = performance.now();
+    const built = emailCard({ email: { id: "m", threadId: "t", at: NOW, from: `a${" ".repeat(5_000)}x`, subject: "Hi", preview: "" }, why: "w", action: "a" });
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(built.summary.length).toBeLessThanOrEqual(140);
+  });
+
   it("writes every summary as one short line, and the email's without the preview", () => {
     const nasty = `Title\nwith\n\nlines ${"😀".repeat(300)}`;
     const email = emailCard({ email: { id: "m", threadId: "t", at: NOW, from: `"Ada Lovelace" <ada@example.test>`, subject: nasty, preview: "SECRET PREVIEW" }, why: "w", action: "a" });
