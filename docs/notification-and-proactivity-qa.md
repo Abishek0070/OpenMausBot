@@ -3,8 +3,7 @@
 OpenMausBot treats **proactivity as an explicit trigger**, not as a hidden
 heartbeat. A bot may continue within an active task through Auto mode, may be
 started by a Routine or Webhook, and may coordinate peers when its engine and
-profile allow that. This change does not add background polling that invents
-work or sends messages without one of those configured paths. The Chief of Staff's "Since you last looked" recap only reads records that already exist and never runs a model.
+profile allow that. Nothing polls in the background to invent work or send messages outside those configured paths, with one exception the person can switch off: MausBot's watcher ("MausBot can act on its own" in Settings, on by default) reads the owner's calendar and new email about every 15 minutes, prepares meeting notes, reminders, important-email cards and a Today card in MausBot's own chat, and never sends anything without the person's Approve. The Chief of Staff's "Since you last looked" recap only reads records that already exist and never runs a model.
 
 ## Notification policy
 
@@ -15,6 +14,7 @@ notifications disabled remains quiet. Otherwise it may emit:
 - **Needs your hands** when a computer task requires a takeover.
 - **Finished** only when there is a non-empty result to summarize.
 - **Routine failed** when a scheduled or manual routine run cannot complete.
+- **MausBot** (`assistant`) once per card MausBot posts on its own: a meeting prep, a reminder, an important email, Today, a change, a Reconnect or an error card.
 
 Every notification carries both the bot ID and the exact task thread ID. A
 click must select that bot **and switch to that task**, including a routine's
@@ -38,6 +38,9 @@ alone cannot provide closed-app delivery.
 | iOS target parsing and detached-task decision | `ios/Tests/CompanionCoreTests/DecodingTests.swift` |
 | Paired-device route policy remains default-deny | `companion/test/routes.test.ts` |
 | One recap per return; a guest or service never moves presence | `server/host/presence.test.ts`, `server/host/chief-brief.test.ts`, `server/routes/presence.test.ts`, `server/chief-recap.e2e.test.ts` |
+| The watcher's decisions: the prep window, late bookings, repeats, reminders, email batches, the daily cap, catch-up, Today, connected-app failures | `server/host/assistant-plan.test.ts`, `server/host/assistant-watch.test.ts` |
+| One prep card, one important-email card, none for a newsletter, one reminder; MausBot never sends; nothing on a hosted workspace | `server/assistant.e2e.test.ts` |
+| A MausBot job thread answers its own approval requests: a web search only | `server/host/assistant-job-requests.test.ts` |
 | A member never sees a restricted bot in the recap | `server/chief-recap-members.e2e.test.ts` |
 
 ## Manual release pass
@@ -61,6 +64,10 @@ other:
 7. Close the app for three hours or more while a bot finishes something, open it,
    and confirm one "Since you last looked" card in the Chief's chat and that the
    app opens on it.
+8. With Gmail and Google Calendar connected, add a meeting with one other
+   person three hours ahead. Confirm one "Prep: ..." card in MausBot's chat with
+   **Join**, one reminder about ten minutes before the start, one notification
+   for each, and that switching off "MausBot can act on its own" stops new cards.
 
 Live provider, OS-permission, backgrounding, and APNs behavior cannot be proven
 by unit tests alone and remains part of the signed desktop/iPhone release pass.

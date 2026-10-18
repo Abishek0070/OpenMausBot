@@ -34,6 +34,7 @@ The posted lines are in `server/host/mausbot-intro.ts`.
   Starter" and un-appoints it, so a fixture starts with one plain bot plus a
   silent MausBot.
 - A hosted team workspace has no MausBot, no Chief and no recap.
+- What MausBot does on its own is in [MausBot's watcher](mausbot-watcher.md).
 
 ## Server
 
