@@ -69,7 +69,7 @@ type Outcome = NonNullable<NonNullable<AssistantState["retryCards"]>[string]["ou
 type TodayPost = { messageId: string; threadId: string; day: string; key: string; emails: Array<{ from: string; subject: string }>; team?: { text: string; open: Target } };
 
 export interface AssistantWatchDeps {
-  store: Pick<Store, "appendMessage" | "messagesFor" | "patchMessage" | "groupByThread" | "patchTask" | "deleteTasks" | "taskByThread">;
+  store: Pick<Store, "appendMessage" | "messagesFor" | "patchMessage" | "groupByThread" | "patchTask" | "deleteTasks" | "taskByThread" | "tasks">;
   dataDir: string;
   now?: () => number;
   checkMs: number;
@@ -699,8 +699,18 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     if (event.returned || todayRefresh) void check();
   }
 
+  function deleteUnrecordedJobThreads(): void {
+    const bot = deps.mausbot();
+    if (!bot || working) return;
+    const recorded = new Set((current().workThreads ?? []).map((entry) => entry.threadId));
+    const leftover = deps.store.tasks(bot.id)
+      .filter((task) => isAssistantJobThread(task.routineRunId) && !recorded.has(task.threadId) && !deps.threadBusy(bot.id, task.threadId));
+    if (leftover.length) deps.store.deleteTasks(bot.id, leftover.map((task) => task.threadId));
+  }
+
   function start(): void {
     if (deps.hosted || timers.length) return;
+    quietly("job threads a restart cut short were not deleted", deleteUnrecordedJobThreads);
     timers.push(every(() => { void check(); }, deps.checkMs), every(reminders, MINUTE));
     void check();
   }

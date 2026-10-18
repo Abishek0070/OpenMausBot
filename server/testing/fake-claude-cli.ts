@@ -25,6 +25,7 @@
 //   FAKE_CLAUDE_TEXT_RESULT  raw --output-format json one-shot response
 //   FAKE_CLAUDE_REPLIES  JSON array of replies (string, or string[] for several items) used in order
 //   FAKE_CLAUDE_REPLY_STATE  counter file keeping FAKE_CLAUDE_REPLIES in order across processes
+//   FAKE_CLAUDE_TURN_ROUTES  path of {"marker": "reply"}: the first marker a turn's prompt contains picks that turn's reply
 //   FAKE_CLAUDE_TOOL_CALLS  JSON [{name, input?, ok?}] each turn calls before its reply (unset: one Bash call)
 //   FAKE_CLAUDE_USES_CLOUD_COMPUTER  1: first take one screenshot through the `computer` MCP server
 //   FAKE_CLAUDE_CONNECT_APPS  toolkits (gmail,slack): first call COMPOSIO_MANAGE_CONNECTIONS via `composio`
@@ -145,6 +146,13 @@ const nextScriptedReply = (): string[] => {
   }
   const reply = scriptedReplies[index] ?? "hello from fake claude";
   return Array.isArray(reply) ? reply : [reply];
+};
+const routedTurnReply = (prompt: string): string[] | null => {
+  const file = process.env.FAKE_CLAUDE_TURN_ROUTES;
+  if (!file || !existsSync(file)) return null;
+  const routes = JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
+  const hit = Object.entries(routes).find(([marker]) => prompt.includes(marker));
+  return hit ? [hit[1]] : null;
 };
 
 const argv = process.argv.slice(2);
@@ -737,7 +745,7 @@ const playTurn = (prompt: JsonValue, late = false) => {
   if (process.env.FAKE_CLAUDE_USES_CLOUD_COMPUTER === "1") useCloudComputer();
   if (process.env.FAKE_CLAUDE_CONNECT_APPS) connectApps(process.env.FAKE_CLAUDE_CONNECT_APPS.split(",").filter(Boolean));
 
-  let replyParts = nextScriptedReply();
+  let replyParts = routedTurnReply(steeredText(prompt)) ?? nextScriptedReply();
   const defaultToolId = `tu-${process.pid}-${++toolUseCount}`;
   if (process.env.FAKE_CLAUDE_TURN_STATE) {
     let n = 0;

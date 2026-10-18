@@ -78,7 +78,8 @@ async function start(options: StartOptions = {}) {
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(join(dataDir, "config.json"), JSON.stringify({
       ...(options.signIn ? { signIn: { admins: [BOSS], members: [BOB] } } : {}),
-      ...(options.router ? { composio: { apiKey: "ak_fixture", userId: "fixture-user", sessionId: "fixture-session" } } : {}),
+      // MausBot's watcher would read Gmail through this router too; switched off, the router sees only this test's calls.
+      ...(options.router ? { composio: { apiKey: "ak_fixture", userId: "fixture-user", sessionId: "fixture-session" }, features: { assistantActs: false } } : {}),
       instances: {
         ...Object.fromEntries(["codex", "cursor", "openaiCompat", "qwen", "hermes", "pi"].map((id) => [id, { driver: "not-a-real-driver" }])),
         claude: { driver: "claudeAgent", displayName: "Verification fixture", config: { cli: join(SERVER_DIR, "testing", "fake-claude-cli.ts") } },

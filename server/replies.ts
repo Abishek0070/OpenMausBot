@@ -18,8 +18,9 @@ export function replySpeaker(message: Message, userName = "User"): string {
   return message.role === "user" ? userName : (message.from?.name ?? "Assistant");
 }
 
-/** A widget press is known only from the route that checked it (`widgetPress`), never read back from the message text. */
-export type ReplyTarget = Message & { widgetPress?: { label: string; action: WidgetAction } };
+/** A widget press is known only from the route that checked it (`widgetPress`), never read back from the message text;
+ * `records` is the server's own record of what the pressed card is about, found by the id the press carries. */
+export type ReplyTarget = Message & { widgetPress?: { label: string; action: WidgetAction; records?: string } };
 
 const WIDGET_OPEN = "--- widget ---";
 const WIDGET_CLOSE = "--- end widget ---";
@@ -56,6 +57,7 @@ function promptWithWidget(text: string, target: ReplyTarget): string {
     `action: ${inFence(press.action.type)}`,
     ...(press.action.payload === undefined ? [] : [`payload: ${inFence(JSON.stringify(press.action.payload))}`]),
     WIDGET_CLOSE,
+    ...(press.records ? ["What the pressed card is about, from your own records:", press.records] : []),
     "Current message:",
     text,
   ].join("\n");

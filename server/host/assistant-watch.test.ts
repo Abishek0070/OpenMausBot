@@ -91,6 +91,7 @@ function world(options: {
     patchTask: vi.fn(() => null),
     deleteTasks: vi.fn((_botId: string, threadIds: string[]) => { for (const id of threadIds) tasks.delete(id); return null; }),
     taskByThread: (_botId: string, threadId: string) => tasks.get(threadId),
+    tasks: () => [...tasks].map(([threadId, task]) => ({ threadId, ...task })),
   };
   const sources = {
     connected: vi.fn(async () => live.connected),
@@ -987,6 +988,39 @@ describe("when MausBot may not act, or says what it cannot do", () => {
     await w.settle();
     expect(w.store.deleteTasks).toHaveBeenCalledWith("m", ["job-1"]);
     expect(w.tasks.has("person-thread")).toBe(true);
+  });
+
+  it("deletes on start the job threads a restart left unrecorded, never a recorded one, a busy one or another thread", () => {
+    const busy = new Set(["job-running"]);
+    const w = world({ deps: { threadBusy: (_botId, threadId) => busy.has(threadId) } });
+    for (const id of ["job-cut-short", "job-finished", "job-running"]) w.tasks.set(id, { routineRunId: `mausbot-${id}` });
+    w.tasks.set("routine-thread", { routineRunId: "routine-run-1" });
+    w.watch.state.patch({ workThreads: [{ threadId: "job-finished", at: NOW }] });
+    w.make().start();
+    expect(w.store.deleteTasks).toHaveBeenCalledTimes(1);
+    expect(w.store.deleteTasks).toHaveBeenCalledWith("m", ["job-cut-short"]);
+    expect([...w.tasks.keys()]).toEqual(["m-main", "scout-main", "job-finished", "job-running", "routine-thread"]);
+  });
+
+  it("leaves the thread of a job already running when it starts, which a presence can begin before the start", async () => {
+    const running = gate();
+    const entered = gate();
+    const w = world({ events: [meeting("a", NOW + HOUR)], reply: async (title, prompt) => { entered.open(); await running.closed; return defaultReply(title, prompt); } });
+    const settled = w.watch.check();
+    await entered.closed;
+    w.watch.start();
+    expect(w.store.deleteTasks).not.toHaveBeenCalled();
+    running.open();
+    await settled;
+    await w.watch.idle();
+    expect(w.titles()).toEqual(["Prep: Meeting a"]);
+  });
+
+  it("deletes nothing on start on a hosted workspace", () => {
+    const w = world({ hosted: true });
+    w.tasks.set("job-cut-short", { routineRunId: "mausbot-job-cut-short" });
+    w.watch.start();
+    expect(w.store.deleteTasks).not.toHaveBeenCalled();
   });
 
   it("keeps the thread of a job whose start was refused, so it is deleted later", async () => {

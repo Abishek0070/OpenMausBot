@@ -247,7 +247,7 @@ import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GAT
 import { createChiefNotices } from "./host/chief-notices.ts";
 import { createChiefBrief } from "./host/chief-brief.ts";
 import { builtInWireLevel, builtInWireOutbound, builtInWireTask, findMausBot, isMausBot, MAUSBOT_FIXED, mausbotRoomRefusal, mausbotTeamRefusal, seedBots } from "./mausbot.ts";
-import { createMausBotIntro } from "./host/mausbot-intro.ts";
+import { createMausBotHost } from "./host/mausbot-host.ts";
 import { assistantHitTitle, assistantRecallThreads } from "./mausbot-recall.ts";
 import { createAssistantJobGate, JOB_DECLINE } from "./host/assistant-job-requests.ts";
 import { assistantActsEnabled, briefAwayMs, briefRecapEnabled } from "./brief-settings.ts";
@@ -1304,7 +1304,7 @@ function autoRecallPrompt(bot: BotRecord, threadId: string, message: string, opt
   if (bot.memoryEnabled === false || !autoRecallEnabled(cfg)) return "";
   const roomByThread = opts.conversations ? recallRooms(store.groups, bot, roomFeedsBot) : new Map<string, GroupRecord>();
   const threadIds = opts.conversations
-    ? recallThreadIds(bot, roomByThread).filter((id) => id !== threadId && (!CLOUD_HOME || cloudOwnerOnlyThread(id)))
+    ? recallThreadIds(bot, roomByThread).filter((id) => id !== threadId && !jobGate.isJobThread(bot.id, id) && (!CLOUD_HOME || cloudOwnerOnlyThread(id)))
     : [];
   try {
     const recalled = buildRecall({
@@ -8394,7 +8394,7 @@ async function startTurn(
   const commsDepth = opts?.commsDepth ?? 0;
   if (commsDepth > 0) markInternalTurn(threadId);
   else clearInternalTurn(threadId);
-  if (answer.quiet) quietTurnThreads.add(threadId);
+  if (answer.quiet || jobGate.isJobThread(bot.id, threadId)) quietTurnThreads.add(threadId);
   else quietTurnThreads.delete(threadId);
   if (resolvedImages.text.trim() && !opts?.cardContinuation) {
     const titled = store.titleTaskFromFirstMessage(bot.id, resolvedImages.text, threadId);
@@ -9489,8 +9489,9 @@ async function stopBotForEmergencyApprovalDowngrade(botId: string): Promise<void
 }
 
 const chiefBrief = createChiefBrief({ store, dataDir: DATA_DIR, threadOwner, hosted: HOSTED_WORKSPACE, threadBusy, settings: () => ({ recap: briefRecapEnabled(cfg.features), awayMs: briefAwayMs(cfg.features) }),
-  routineRuns: (since) => (routines?.listRuns() ?? []).filter((run) => run.finishedAt === undefined ? run.status === "running" || run.status === "waiting" : run.finishedAt >= since), mausbot: () => findMausBot(store.bots.filter((bot) => !bot.hidden)), onPresence: () => { void mausbotIntro.introduce(); } });
-const mausbotIntro = createMausBotIntro({ store, state: chiefBrief.state, hosted: HOSTED_WORKSPACE, maxBots: MAX_WORKSPACE_BOTS, mainThread: (bot) => chiefBrief.chiefThread(bot), turnsByBot: chiefBrief.turnsByBot, configured: () => composio.configured(cfg), connected: () => composio.connectedServices(cfg), newId });
+  routineRuns: (since) => (routines?.listRuns() ?? []).filter((run) => run.finishedAt === undefined ? run.status === "running" || run.status === "waiting" : run.finishedAt >= since), mausbot: () => findMausBot(store.bots.filter((bot) => !bot.hidden)), onPresence: (event) => mausbotHost.onPresence(event) });
+const mausbotHost = createMausBotHost({ store, cfg, composio, registry, brief: chiefBrief, dataDir: DATA_DIR, hosted: HOSTED_WORKSPACE, cloudHome: Boolean(CLOUD_HOME), maxBots: MAX_WORKSPACE_BOTS, notify, threadBusy, newId, startTurn, interruptDirectThread, cloudOwnerOnlyThread });
+bus.subscribe((event: RuntimeEvent) => { if (!shouldIgnoreProviderEvent(event)) mausbotHost.onEvent(event); });
 routines = new RoutineManager({
   emit: broadcast,
   launchId: DESKTOP_MANAGED && /^[\w-]{1,100}$/.test(process.env.OMB_DESKTOP_LAUNCH_ID ?? "")
@@ -10508,7 +10509,7 @@ const approvalBus: ApprovalBus = { store, broadcast, notify, autoApply: fullAcce
   onPeerApprovalPending: (from, target, action, sourceThreadId, message) => void reportEscalation({
     kind: "peer-approval", bot: from, threadId: sourceThreadId, gate: peerApprovalGate(action, target.name), reason: message, alreadyNotified: true }) };
 
-const { quotaSwitch, harnessCardOutcome } = createQuotaSwitchHost({ store, coordinator, registry, turnStops, approvalBus, hostedModels, providerConfigs, policyModelRefusal, checkedTaskModelSwitch, threadBusy, directRequestOwners, startOrQueueDirectMessage, harnessCards: [mausbotIntro.answerCard] });
+const { quotaSwitch, harnessCardOutcome } = createQuotaSwitchHost({ store, coordinator, registry, turnStops, approvalBus, hostedModels, providerConfigs, policyModelRefusal, checkedTaskModelSwitch, threadBusy, directRequestOwners, startOrQueueDirectMessage, harnessCards: mausbotHost.harnessCards });
 
 // Peer approvals live only in memory: settle every peer card still open on disk, or it locks the composer forever.
 {
@@ -13541,7 +13542,7 @@ ROUTES.push(createBotMessageRoutes({
   turnSelection, policyModelRefusal, clearUnattended, drainQueuedSends, answeringCardAs, resolveAndSendTrust, resolveAndSendTeamSetup,
   resolveAndSendRoutine, resolveAndSendProfile, resolveAndSendModel, resolveSkillRequest, sendSkillResolution, answerRequest,
   deliverLateQuestionAnswer, interruptDirectThread, cancelDirectTurnDispatch, revokeInternalCapabilitiesForThread,
-  cancelGroupTurnOperations, closeOpenApprovals, harnessCardOutcome,
+  cancelGroupTurnOperations, closeOpenApprovals, harnessCardOutcome, pressRecords: mausbotHost.pressRecords,
 }));
 // `let` slots are read per request.
 ROUTES.push(createThreadRoutes({
@@ -15451,9 +15452,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const note = typeof body.note === "string" ? body.note.trim() : "";
         const target = store.bot(botId);
         if (!target || target.id === from.id) return json(res, 404, { error: "no such teammate" });
-        if (target.hidden || !canAccessTeam(from, target.section) || !peerAllowed(from, target)) {
-          return json(res, 403, { error: "that bot is not on this Chief's team — call list_bots for the ones you can reach" });
-        }
+        if (isMausBot(target)) return json(res, 409, { error: MAUSBOT_FIXED });
+        if (target.hidden || !canAccessTeam(from, target.section) || !peerAllowed(from, target)) return json(res, 403, { error: "that bot is not on this Chief's team — call list_bots for the ones you can reach" });
         if (store.groupByThread(threadId)) return json(res, 400, { error: "that is a room thread — use coordinate_bots in the room instead" });
         const task = store.taskByThread(target.id, threadId);
         if (!task) return json(res, 404, { error: "no such thread on that bot" });
@@ -17412,7 +17412,7 @@ server.listen(PORT, "127.0.0.1", async () => {
   }
   // Only once every registry is initialized and the endpoint listens: earlier dispatch can hit uninitialized bindings.
   routines!.start();
-  memoryUpkeep.start();
+  memoryUpkeep.start(); mausbotHost.start();
 });
 
 // Tunnel requests have no peer address, which request-auth treats as proxied: a session is required, never loopback trust.
@@ -17470,7 +17470,7 @@ const gracefulShutdown = createGracefulShutdown({
       watchdog.stop();
       routines?.stop();
       calendarCalls?.stop();
-      memoryUpkeep.stop();
+      memoryUpkeep.stop(); mausbotHost.stop();
       cacheKeepWarm.dispose();
       skillReview.stop();
       webhookIngress?.server.close();
