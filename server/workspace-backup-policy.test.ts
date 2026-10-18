@@ -21,7 +21,7 @@ describe("workspace backup data boundary", () => {
     const portable = portableWorkspaceConfig({ ...connections, language: "ja", features: { browser: true }, profile: { name: "Example" } });
     expect(portable).toEqual({ profile: { name: "Example" }, language: "ja", features: { browser: true } });
     const restored = restoredWorkspaceConfig(portable, { ...connections, language: "en", budgets: { monthlyUsd: 12 } });
-    expect(restored).toEqual({ ...connections, ...portable });
+    expect(restored).toEqual({ ...connections, ...portable, features: { browser: true, assistantActs: false } });
     expect(restored.instances).toBe(connections.instances);
   });
 
@@ -35,10 +35,16 @@ describe("workspace backup data boundary", () => {
 
   it("keeps the destination's own computer-sharing switch, whatever the backup says", () => {
     const portable = portableWorkspaceConfig({ features: { browser: true, sharedComputers: true } });
-    expect(restoredWorkspaceConfig(portable, { features: { sharedComputers: false } }).features).toEqual({ browser: true, sharedComputers: false });
-    expect(restoredWorkspaceConfig(portable, {}).features).toEqual({ browser: true });
-    expect(restoredWorkspaceConfig(portableWorkspaceConfig({ features: { sharedComputers: true } }), {})).not.toHaveProperty("features");
-    expect(restoredWorkspaceConfig({}, { features: { sharedComputers: true, browser: true } }).features).toEqual({ sharedComputers: true });
+    expect(restoredWorkspaceConfig(portable, { features: { sharedComputers: false } }).features).toEqual({ browser: true, sharedComputers: false, assistantActs: false });
+    expect(restoredWorkspaceConfig(portable, {}).features).toEqual({ browser: true, assistantActs: false });
+    expect(restoredWorkspaceConfig(portableWorkspaceConfig({ features: { sharedComputers: true } }), {}).features).toEqual({ assistantActs: false });
+    expect(restoredWorkspaceConfig({}, { features: { sharedComputers: true, browser: true } }).features).toEqual({ sharedComputers: true, assistantActs: false });
+  });
+
+  it("pauses MausBot's watcher, as a restore pauses routines, whatever either side had", () => {
+    for (const [source, destination] of [[{ assistantActs: true }, {}], [{}, { assistantActs: true }], [{ assistantActs: false }, { assistantActs: true }]]) {
+      expect(restoredWorkspaceConfig(portableWorkspaceConfig({ features: source }), { features: destination }).features).toEqual({ assistantActs: false });
+    }
   });
 
   it.each([

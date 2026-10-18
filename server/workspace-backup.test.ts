@@ -53,6 +53,10 @@ function fixture(root: string): DatabaseSync {
   json(join(root, "webhooks.json"), { version: 1, webhooks: [{ id: "hook", endpointId: "endpoint", enabled: true, secretHash: "a".repeat(64) }], deliveries: [{ id: "delivery" }] });
   json(join(root, "calendar-calls.json"), { version: 1, calls: [{ id: "call", nextRunAt: 100 }] });
   json(join(root, "delegations.json"), { thread: [{ id: "pending" }] });
+  json(join(root, "assistant.json"), {
+    version: 1, meetings: { "demo-1": { start: 1, fingerprint: "f" } }, inFlight: [{ item: "prep:demo-1", at: 1 }],
+    retryCards: { rq1: { item: "prep:demo-1", threadId: "thread", messageId: "message" } },
+  });
   const runtime = openRuntimeStore(join(root, "runtime.db"));
   try {
     runtime.insert(RUNTIME_ROW, { kind: "enqueued", at: RUNTIME_ROW.createdAt });
@@ -176,7 +180,8 @@ describe("encrypted full workspace backups", () => {
       expect(restoredBot).not.toHaveProperty("voice");
       expect(readFileSync(join(target, restoredBot.avatarUrl.slice("/api/".length)))).toEqual(AVATAR_BYTES);
       expect(readJson(join(target, "groups.json"))[0].cwd).toBe("/external/project");
-      expect(readJson(join(target, "config.json"))).toEqual({ ...connections, language: "ja" });
+      expect(readJson(join(target, "config.json"))).toEqual({ ...connections, language: "ja", features: { assistantActs: false } });
+      expect(readJson(join(target, "assistant.json"))).toEqual({ version: 1, meetings: { "demo-1": { start: 1, fingerprint: "f" } } });
       expect(readFileSync(join(target, "task-workspaces", "bot", "thread", "binary.bin"))).toEqual(Buffer.alloc(2 * 1024 * 1024, 0xa5));
       expect(readJson(join(target, "sessions.json"))).toEqual({ identity: "target-session" });
       expect(readJson(join(target, "cloud-owner.json"))).toEqual({ identity: "target-owner-record" });
@@ -367,7 +372,7 @@ describe("encrypted full workspace backups", () => {
     for (const path of authPaths) expect(readFileSync(join(target, path), "utf8")).toBe("DESTINATION_SAVED_SECRET");
     expect(readFileSync(join(target, "vm-home", "project.txt"), "utf8")).toBe("ordinary managed VM file");
     expect(readFileSync(join(target, "attachments", "user-note.txt"), "utf8")).toBe("A user-pasted secret is not silently redacted.");
-    expect(readJson(join(target, "config.json"))).toEqual({ xai: { key: "DESTINATION_SAVED_SECRET", url: "https://destination.example" }, language: "ja" });
+    expect(readJson(join(target, "config.json"))).toEqual({ xai: { key: "DESTINATION_SAVED_SECRET", url: "https://destination.example" }, language: "ja", features: { assistantActs: false } });
     expect(readJson(join(target, "webhooks.json")).webhooks[0]).toMatchObject({ secretHash: "b".repeat(64), enabled: false, verificationPending: false });
     for (const path of authPaths) expect(readFileSync(join(source, path), "utf8")).toBe("SOURCE_SAVED_SECRET");
     expect(readJson(join(source, "webhooks.json")).webhooks[0].secretHash).toBe("a".repeat(64));

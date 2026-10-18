@@ -28,8 +28,9 @@ export function restoredWorkspaceConfig(portable: unknown, destination: unknown)
     delete features[key];
     if (own[key] !== undefined) features[key] = own[key];
   }
-  if (Object.keys(features).length) restored.features = features;
-  else delete restored.features;
+  // The source may still be watching the same calendar and inbox: a restore pauses MausBot's watcher, as it pauses routines.
+  features.assistantActs = false;
+  restored.features = features;
   return restored;
 }
 
