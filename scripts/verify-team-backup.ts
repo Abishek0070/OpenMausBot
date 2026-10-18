@@ -32,7 +32,7 @@ export async function verifyTeamBackup(report: (event: unknown) => void = () => 
     const backup = parseTeamBackup(await post("/api/teams/export", { format: "backup", name: "Fixture backup" }));
     report({ command: "export backup", bots: backup.bots.length, conversations: backup.bots.reduce((n, bot) => n + bot.tasks.length, 0) });
     const imported = await post("/api/teams/import?mode=add", JSON.parse(JSON.stringify(backup)));
-    assert.equal(imported.bots.length, before.bots.length);
+    assert.equal(imported.bots.length, before.bots.filter((candidate: { builtIn?: string }) => candidate.builtIn === undefined).length);
     const added = imported.bots.find((candidate: { name: string }) => candidate.name === "Backup probe 2");
     assert.ok(added);
     assert.equal(added.section, "Original team 2");
