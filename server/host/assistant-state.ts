@@ -44,6 +44,8 @@ export const assistantStateSchema = z.object({
   dayTurns: z.number().int().min(0).optional(),
   failures: perService(z.number().int().min(0)).optional(),
   reconnectShown: perService(z.boolean()).optional(),
+  /** Seen connected since its last Reconnect card for a lost connection. */
+  connectedSeen: perService(z.boolean()).optional(),
   notices: z.object({ noWebSearch: z.boolean().optional(), noConnectorTools: z.boolean().optional() }).strict().optional(),
   /** AI jobs started and not finished; after a restart each becomes one error card with Retry. */
   inFlight: z.array(z.object({ item, at }).strict()).max(MAX_IN_FLIGHT).optional(),

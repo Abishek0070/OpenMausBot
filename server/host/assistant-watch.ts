@@ -38,6 +38,11 @@ export const RECONNECT_TEXT: Record<AssistantService, string> = {
   gmail: "Reconnect Gmail: I couldn't read your email three times in a row.",
   googlecalendar: "Reconnect Calendar: I couldn't read your calendar three times in a row.",
 };
+export const DISCONNECTED_TEXT: Record<AssistantService, string> = {
+  gmail: "Reconnect Gmail: your Gmail connection stopped working, so I can't read your email.",
+  googlecalendar: "Reconnect Calendar: your Google Calendar connection stopped working, so I can't read your calendar.",
+};
+const SERVICES: readonly AssistantService[] = ["gmail", "googlecalendar"];
 const LABEL: Record<AssistantService, string> = { gmail: "Gmail", googlecalendar: "Google Calendar" };
 const CUT_SHORT: Record<string, string> = {
   prep: "A meeting prep was cut short",
@@ -179,13 +184,24 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   const say = (threadId: string, text: string): void => { deps.store.appendMessage(threadId, { role: "bot", kind: "text", text }); };
 
-  function reconnect(bot: BotRecord, threadId: string, service: AssistantService): void {
-    say(threadId, RECONNECT_TEXT[service]);
+  function reconnect(bot: BotRecord, threadId: string, service: AssistantService, text: string): void {
+    state.patch({ reconnectShown: { ...current().reconnectShown, [service]: true } });
+    say(threadId, text);
     deps.store.appendMessage(threadId, {
       role: "bot", kind: "connector", text: connectorCardText(LABEL[service]),
       connector: { slug: service, label: LABEL[service], description: `Reconnect ${LABEL[service]} so MausBot can keep reading it.`, status: "required", resumeKey: `mausbot-reconnect-${deps.newId()}` },
     });
-    announce(bot, threadId, RECONNECT_TEXT[service]);
+    announce(bot, threadId, text);
+  }
+
+  function noteConnections(bot: BotRecord, threadId: string, connected: Record<AssistantService, boolean>): void {
+    for (const service of SERVICES) {
+      const seen = current().connectedSeen?.[service] === true;
+      if (!mausbotMayUse(bot, service) || connected[service] === seen) continue;
+      state.patch({ connectedSeen: { ...current().connectedSeen, [service]: connected[service] } });
+      if (connected[service]) state.patch({ failures: { ...current().failures, [service]: 0 }, reconnectShown: { ...current().reconnectShown, [service]: false } });
+      else if (!current().reconnectShown?.[service]) reconnect(bot, threadId, service, DISCONNECTED_TEXT[service]);
+    }
   }
 
   function failCard(bot: BotRecord, threadId: string, item: string, title: string, reason: string): void {
@@ -237,10 +253,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       const count = (current().failures?.[service] ?? 0) + 1;
       state.patch({ failures: { ...current().failures, [service]: count } });
       console.warn(`assistant: reading ${service} failed (${count} in a row): ${failure(error)}`);
-      if (count >= RECONNECT_AFTER && !current().reconnectShown?.[service]) {
-        state.patch({ reconnectShown: { ...current().reconnectShown, [service]: true } });
-        reconnect(bot, threadId, service);
-      }
+      if (count >= RECONNECT_AFTER && !current().reconnectShown?.[service]) reconnect(bot, threadId, service, RECONNECT_TEXT[service]);
       return null;
     }
   }
@@ -576,6 +589,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     try {
       lastConnected = await deps.sources.connected();
       if (!lastConnected || !context()) return;
+      quietly("a lost connection was not reported", () => noteConnections(bot, threadId, lastConnected!));
       const at = now();
       if (lastConnected.googlecalendar && mausbotMayUse(bot, "googlecalendar")) {
         const fresh = await readService(bot, threadId, "googlecalendar", () => deps.sources.events(at - HOUR, at + LOOKAHEAD_MS));

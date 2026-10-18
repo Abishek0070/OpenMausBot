@@ -11,7 +11,7 @@ import { removeTempDir } from "../testing/cleanup.ts";
 import { fingerprint } from "./assistant-plan.ts";
 import { MAX_JUDGED } from "./assistant-state.ts";
 import type { JobResult } from "./assistant-turns.ts";
-import { createAssistantWatch, NO_CONNECTOR_TOOLS, NO_WEB_SEARCH, RECONNECT_TEXT, RETRY, type AssistantWatchDeps } from "./assistant-watch.ts";
+import { createAssistantWatch, DISCONNECTED_TEXT, NO_CONNECTOR_TOOLS, NO_WEB_SEARCH, RECONNECT_TEXT, RETRY, type AssistantWatchDeps } from "./assistant-watch.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -425,6 +425,50 @@ describe("connected-app failures", () => {
     w.live.calendarFailures = 3;
     for (let check = 0; check < 3; check += 1) await w.settle();
     expect(w.texts().filter((text) => text === RECONNECT_TEXT.googlecalendar)).toHaveLength(2);
+  });
+
+  it("posts one Reconnect card when a service it saw connected is reported not connected, and again only after it reconnected and was lost again", async () => {
+    const w = world({ events: [meeting("a", NOW + 6 * HOUR)] });
+    const connectors = () => w.messages.filter((line) => line.kind === "connector").map((line) => line.connector?.slug);
+    await w.settle();
+    expect(w.watch.state.get().connectedSeen).toEqual({ gmail: true, googlecalendar: true });
+    w.live.connected = { gmail: true, googlecalendar: false };
+    await w.settle();
+    await w.settle();
+    expect(w.texts().filter((text) => text === DISCONNECTED_TEXT.googlecalendar)).toHaveLength(1);
+    expect(connectors()).toEqual(["googlecalendar"]);
+    expect(w.notify).toHaveBeenCalledWith(expect.objectContaining({ kind: "assistant", body: DISCONNECTED_TEXT.googlecalendar }));
+    w.live.connected = { gmail: true, googlecalendar: true };
+    await w.settle();
+    expect(w.watch.state.get().connectedSeen).toEqual({ gmail: true, googlecalendar: true });
+    expect(connectors()).toEqual(["googlecalendar"]);
+    w.live.connected = { gmail: false, googlecalendar: false };
+    await w.settle();
+    expect(connectors()).toEqual(["googlecalendar", "gmail", "googlecalendar"]);
+    expect(w.texts().filter((text) => text === DISCONNECTED_TEXT.gmail)).toHaveLength(1);
+  });
+
+  it("posts no Reconnect card for a service that was never connected, or one MausBot may not use", async () => {
+    const never = world({ connected: { gmail: false, googlecalendar: false } });
+    await never.settle();
+    await never.settle();
+    expect(never.messages.filter((line) => line.kind === "connector")).toEqual([]);
+    const barred = world({ connectorTools: { googlecalendar: { tools: "*" } } });
+    await barred.settle();
+    barred.live.connected = { gmail: false, googlecalendar: true };
+    await barred.settle();
+    expect(barred.messages.filter((line) => line.kind === "connector")).toEqual([]);
+    expect(barred.watch.state.get().connectedSeen).toEqual({ googlecalendar: true });
+  });
+
+  it("shows one Reconnect card for a service whose three failed reads already showed one, then lost its connection", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ events: [meeting("a", NOW + 6 * HOUR)] });
+    w.live.calendarFailures = 3;
+    for (let check = 0; check < 3; check += 1) await w.settle();
+    w.live.connected = { gmail: true, googlecalendar: false };
+    await w.settle();
+    expect(w.messages.filter((line) => line.kind === "connector").map((line) => line.connector?.slug)).toEqual(["googlecalendar"]);
   });
 });
 
