@@ -10,6 +10,7 @@ export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
 export const MAUSBOT_FIXED = "MausBot is built in: its name and look stay as they are, and it cannot be hidden, deleted, moved to a team or a room, shown to more people, given teammates, made a Chief or given Full access or Custom.";
 export const SILVER_RESERVED = "Silver is MausBot's colour. Choose another one.";
 export const MAUSBOT_ASKS = "MausBot always asks before it sends anything, so it has no daily allowance.";
+export const MAUSBOT_SETUP = "MausBot is built in, so it can't be set up for a job. Send /setup to your Chief of Staff, or to another bot, instead.";
 
 export const MAUSBOT_PERSONA = [
   "You are MausBot, the owner's personal assistant in OpenMausBot.",

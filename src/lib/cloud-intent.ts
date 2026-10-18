@@ -10,6 +10,14 @@ export function setupMessage(job: string): string {
   return `/setup ${job.trim()}`;
 }
 
+type SetupCandidate = { hidden?: boolean; chiefOfStaff?: boolean; builtIn?: string };
+
+/** The first job is set up by the Chief of Staff, else the first visible bot that is not built in: MausBot cannot become a job bot. */
+export function setupTarget<T extends SetupCandidate>(bots: readonly T[]): T | undefined {
+  const candidates = bots.filter((bot) => !bot.hidden && bot.builtIn === undefined);
+  return candidates.find((bot) => bot.chiefOfStaff) ?? candidates[0];
+}
+
 /** A new Cloud opens on its welcome, which brings this computer's bots over before any chat: the question waits to be asked for. */
 export function cloudIntentDue(facts: {
   viewer: WelcomeViewer | null;

@@ -13,11 +13,13 @@ import { parseDataContext, type DataContext } from "../data-context.ts";
 import type { Handoffs } from "../delta-context.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
 import { spokenLineFields } from "../live-call-record.ts";
+import { MAUSBOT_SETUP } from "../mausbot.ts";
 import type { PhoneSecretSubmissionRegistry } from "../phone-secret.ts";
 import type { ReplyTarget } from "../replies.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import type { RoutineManager } from "../routines.ts";
 import { acceptedSendMatch, parseSendId } from "../send-idempotency.ts";
+import { parseSetupCommand } from "../setup-mode.ts";
 import { cancelSteeredMessage, holdSteeredQueue, restoreHeldSteeredQueue, settleHeldSteeredQueue } from "../steer-queue.ts";
 import type { BotRecord, GroupRecord, Message, Store } from "../store.ts";
 import { extractSteerImages } from "../turn-images.ts";
@@ -183,6 +185,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
       const press = pressed ? prepareWidgetPress(store, threadId, body.widgetAction, sendId) : null;
       if (press && !press.ok) return json(res, press.status, { error: press.error });
       const text = press ? press.text : typed;
+      if (bot.builtIn !== undefined && parseSetupCommand(text)) return json(res, 409, { error: MAUSBOT_SETUP });
       const target = resolveReplyTarget(threadId, press ? press.messageId : body.replyToId);
       // Only a real press marks the reply; a typed reply to the same row never does, whatever its words.
       const records = press && target ? pressRecords(bot, press.action) : null;

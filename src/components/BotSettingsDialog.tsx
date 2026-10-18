@@ -231,7 +231,7 @@ export function BotSettingsDialog({ bot, overlay = false }: {
             prompt={prompt}
             promptError={promptError}
             onOpen={(target) => dispatch({ type: "toggleSettings", open: true, section: target })}
-            onSetup={derived.canCoordinate && !bot.busy ? () => {
+            onSetup={derived.canCoordinate && !bot.busy && bot.builtIn === undefined ? () => {
               dispatch({ type: "toggleSettings", open: false });
               dispatch({ type: "send", botId: bot.id, text: "/setup", threadId: bot.threadId });
             } : undefined}

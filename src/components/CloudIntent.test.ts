@@ -13,7 +13,7 @@ vi.mock("@/lib/cloud-intent", async original => {
   const actual = await original<typeof import("@/lib/cloud-intent")>();
   return { ...actual, dismissCloudIntent: vi.fn(actual.dismissCloudIntent) };
 });
-import { CloudIntent } from "./CloudIntent";
+import { CloudIntent, startCloudSetup } from "./CloudIntent";
 import { dismissCloudIntent } from "@/lib/cloud-intent";
 import { api } from "@/state/store";
 
@@ -62,4 +62,18 @@ it("sends nothing while the box is empty", () => {
   send.props.onClick!();
   expect(store.dispatch).not.toHaveBeenCalled();
   expect(api).not.toHaveBeenCalled();
+});
+
+it("sends the first job's /setup to the Chief of Staff and opens its chat, never to MausBot, even with MausBot selected", () => {
+  vi.stubGlobal("document", { documentElement: { dataset: {} } });
+  try {
+    const bots = [{ id: "mausbot", threadId: "t-mausbot", builtIn: "mausbot" }, { id: "chief", threadId: "t-chief", chiefOfStaff: true }, { id: "scout", threadId: "t-scout" }];
+    expect(startCloudSetup("Every morning at 8, summarize Hacker News", { bots } as never, store.dispatch)).toBe(true);
+    expect(store.dispatch).toHaveBeenCalledWith({ type: "select", id: "chief" });
+    expect(store.dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "send", botId: "chief", threadId: "t-chief", text: "/setup Every morning at 8, summarize Hacker News" }));
+    expect(store.dispatch.mock.calls.some(([action]) => JSON.stringify(action).includes("mausbot"))).toBe(false);
+    expect(startCloudSetup("anything", { bots: [bots[0]] } as never, store.dispatch)).toBe(false);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

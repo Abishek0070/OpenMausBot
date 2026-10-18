@@ -300,7 +300,7 @@ export function Composer({
         description: t("composer.command.learnDesc"),
       });
     }
-    if (!group && supportsAgents(bot)) available.push({
+    if (!group && supportsAgents(bot) && bot?.builtIn === undefined) available.push({
       kind: "command",
       id: "setup",
       label: "/setup",

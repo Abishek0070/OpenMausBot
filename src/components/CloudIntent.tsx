@@ -7,7 +7,7 @@ import { withViewTransition } from "@/components/onboarding/view-transition";
 import { track } from "@/lib/analytics";
 import { brand } from "@/lib/brand";
 import { CLOUD_INTENT_ASKED, CLOUD_INTENT_GIVEN } from "@/lib/cloud-setup";
-import { dismissCloudIntent, markIntentSent, reopenCloudIntent, setPendingIntent, setupMessage, useCloudIntent } from "@/lib/cloud-intent";
+import { dismissCloudIntent, markIntentSent, reopenCloudIntent, setPendingIntent, setupMessage, setupTarget, useCloudIntent } from "@/lib/cloud-intent";
 import { cn } from "@/lib/cn";
 import { restoreComposerDraft } from "@/lib/drafts";
 import { t } from "@/lib/i18n";
@@ -32,8 +32,8 @@ export function rememberIntent(record: OnboardingStatus | undefined, ids: string
     .then((config) => dispatch({ type: "configStatus", config })).catch(() => {});
 }
 
-export function startCloudSetup(job: string, state: Pick<AppState, "bots" | "selectedId">, dispatch: (action: Action) => void): boolean {
-  const bot = state.bots.find((candidate) => candidate.id === state.selectedId && !candidate.hidden) ?? state.bots.find((candidate) => !candidate.hidden);
+export function startCloudSetup(job: string, state: Pick<AppState, "bots">, dispatch: (action: Action) => void): boolean {
+  const bot = setupTarget(state.bots);
   if (!bot) return false;
   const text = setupMessage(job);
   const root = document.documentElement;

@@ -10,6 +10,7 @@ import { createAgentCard } from "../chat-widgets.ts";
 import { DATA_DIR } from "../config.ts";
 import type { ModelSelection } from "../contracts.ts";
 import { json, readBody } from "../harness/http.ts";
+import { MAUSBOT_SETUP } from "../mausbot.ts";
 import { promptWithReply } from "../replies.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { acceptedSendMatch, sendFingerprint, SendSequencer } from "../send-idempotency.ts";
@@ -40,9 +41,9 @@ class DirectSendRefused extends Error {
 
 type AcceptInput = Parameters<BotMessageRouteDeps["acceptDirectSend"]>[0];
 
-async function fixture() {
+async function fixture(options: { mausbot?: boolean } = {}) {
   const store = new Store(() => sonnet);
-  const bot = store.createBot({ name: "Scout" });
+  const bot = options.mausbot ? store.createBot({ name: "MausBot" }, { builtIn: "mausbot", seedMessages: false }) : store.createBot({ name: "Scout" });
   const threadId = bot.threadId;
   const sequencer = new SendSequencer();
   type StartOpts = NonNullable<Parameters<BotMessageRouteDeps["startTurn"]>[2]>;
@@ -418,5 +419,20 @@ describe("POST /api/bots/:id/messages with widgetAction", () => {
     expect((await post({ threadId, text: "Hold off until Monday", replyToId: widgetId })).status).toBe(202);
     expect(sent().map((message) => [message.text, message.replyToId])).toEqual([["Hello", undefined], ["Hold off until Monday", widgetId]]);
     expect(state.accepted.map((input) => input.replyTo?.id)).toEqual([undefined, widgetId]);
+  });
+});
+
+describe("/setup aimed at MausBot", () => {
+  it("is refused with a pointer to the Chief of Staff and reaches no turn, while any other bot still takes it", async () => {
+    const mausbot = await fixture({ mausbot: true });
+    for (const text of ["/setup Every morning at 8, summarize Hacker News", "/SETUP", "  /setup  "]) {
+      expect(await mausbot.post({ threadId: mausbot.threadId, text })).toEqual({ status: 409, body: { error: MAUSBOT_SETUP } });
+    }
+    expect(mausbot.state.accepted).toEqual([]);
+    expect(mausbot.sent()).toEqual([]);
+    expect(mausbot.store.bot(mausbot.bot.id)).toMatchObject({ name: "MausBot", builtIn: "mausbot" });
+    expect((await mausbot.post({ threadId: mausbot.threadId, text: "What is on my calendar today?" })).status).toBe(202);
+    const scout = await fixture();
+    expect((await scout.post({ threadId: scout.threadId, text: "/setup Every morning at 8, summarize Hacker News" })).status).toBe(202);
   });
 });

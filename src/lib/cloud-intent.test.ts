@@ -69,6 +69,18 @@ describe("the waiting job", () => {
   });
 });
 
+describe("the bot that sets up the first job", () => {
+  it("is the Chief of Staff, else the first visible bot that is not built in, never MausBot", async () => {
+    const { module } = await load();
+    const mausbot = { id: "mausbot", builtIn: "mausbot" as const };
+    const chief = { id: "chief", chiefOfStaff: true };
+    const scout = { id: "scout" };
+    expect(module.setupTarget([mausbot, scout, chief])).toBe(chief);
+    expect(module.setupTarget([mausbot, { ...chief, hidden: true }, { id: "archived", hidden: true }, scout])).toBe(scout);
+    expect(module.setupTarget([mausbot])).toBeUndefined();
+  });
+});
+
 describe("the job once sent", () => {
   it("is the bot's: it stops waiting in the same step, and the bot is remembered on this device", async () => {
     const { module, saved } = await load("watch my page");
