@@ -346,6 +346,41 @@ it("preps a meeting three hours out once, cards only the important email, remind
   expect(system).not.toMatch(/· "(Prep: |Email check|Update: |Since last time: )/);
 }, 360_000);
 
+it("posts nothing before the owner first comes, then its intro first; a morning restart opens on Today at once and fills that card in place", async () => {
+  const fake = await startFakeConnectedApps();
+  cleanups.push(() => fake.close());
+  fake.events = [demo("demo-1", Date.now() + 6 * HOUR)];
+  const s = await start(fake);
+  const mausbot = await s.mausbot();
+  expect(await s.lines(mausbot.threadId)).toEqual([]);
+  expect(fake.calls).toEqual([]);
+  expect((await s.api("POST", "/api/presence/active", { source: "desktop", timeZone: "UTC" })).status).toBe(200);
+  const todays = async (server: Server) => (await server.lines(mausbot.threadId)).filter((line) => line.kind === "widget" && line.widget.root.title === "Today");
+  await expect.poll(async () => (await todays(s)).length, { timeout: STEP_MS }).toBe(1);
+  const rows = await s.lines(mausbot.threadId);
+  expect(rows[0]).toMatchObject({ kind: "text", text: expect.stringContaining("Hi, I'm MausBot") });
+  expect(rows.findIndex((line) => line.kind === "widget")).toBeGreaterThan(0);
+  await s.stop();
+
+  // The next morning the desktop app starts the server again, and the calendar is slow to answer.
+  const stateFile = join(s.dataDir, "assistant.json");
+  const saved = JSON.parse(readFileSync(stateFile, "utf8"));
+  expect(saved.connectedSeen).toEqual({ gmail: true, googlecalendar: true });
+  delete saved.lastTodayDate;
+  writeFileSync(stateFile, JSON.stringify(saved));
+  let answer!: () => void;
+  fake.holdCalendar = new Promise((resolve) => { answer = resolve; });
+  const again = await start(fake, { home: s.home });
+  const presence = await again.api("POST", "/api/presence/active", { source: "desktop", timeZone: "UTC" });
+  expect(presence.body.open).toEqual({ botId: mausbot.id, threadId: mausbot.threadId });
+  const waiting = (await todays(again)).at(-1);
+  expect(JSON.stringify(waiting.widget.root)).toContain("Checking your calendar…");
+  answer();
+  await expect.poll(async () => JSON.stringify((await todays(again)).at(-1).widget.root), { timeout: STEP_MS }).toContain("Supamaus demo with Jake");
+  expect((await todays(again)).map((line) => line.id)).toEqual([rows.find((line) => line.kind === "widget").id, waiting.id]);
+  expect((await again.notifications()).filter((entry) => entry.kind === "assistant" && entry.threadId === mausbot.threadId)).toHaveLength(2);
+}, 180_000);
+
 it("runs a job at Ask without exec, browser or phone and answers its requests itself, and never sends, with Full stored on MausBot", async () => {
   const fake = await startFakeConnectedApps();
   cleanups.push(() => fake.close());

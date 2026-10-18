@@ -8,7 +8,7 @@ import type { RequestOutcome } from "../contracts.ts";
 import { buildNotification, type Notification } from "../notify.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
-import { cancelledCard, clip, clockTime, emailCard, prepCard, reminderCard, todayCard, updateCard, type BuiltCard, type TodayMeeting } from "./assistant-cards.ts";
+import { cancelledCard, clip, clockTime, emailCard, prepCard, reminderCard, todayCard, updateCard, type BuiltCard, type TodayMeeting, type TodayMeetings } from "./assistant-cards.ts";
 import {
   DAILY_TURN_CAP, emailSince, fingerprint, keepNewest, localDate, LOOKAHEAD_MS, planMeetings, planTriage, PREP_LEAD_MS, pruneMeetings, qualifies, RECONNECT_AFTER,
   todayDue, turnsLeft,
@@ -32,6 +32,9 @@ const TITLE_MAX = 120;
 const REASON_MAX = 300;
 
 export const RETRY = "Retry";
+export const TODAY_FAILED = "I couldn't read your calendar for Today";
+const CALENDAR_UNREAD = "Google Calendar did not answer";
+const CALENDAR_DISCONNECTED = "Google Calendar is not connected";
 export const NO_WEB_SEARCH = "I can't search the web on this engine, so my meeting prep uses your calendar, your mail and earlier conversations only.";
 export const NO_CONNECTOR_TOOLS = "My engine can't use your connected apps inside its own turns, so my prep works from the calendar details I read for you and from earlier conversations.";
 export const RECONNECT_TEXT: Record<AssistantService, string> = {
@@ -71,7 +74,9 @@ const FAILED: Record<Job["kind"], (title: string) => string> = {
 
 type Target = { botId: string; threadId: string };
 type Outcome = NonNullable<NonNullable<AssistantState["retryCards"]>[string]["outcome"]>;
-type TodayPost = { messageId: string; threadId: string; day: string; key: string; emails: Array<{ from: string; subject: string }>; team?: { text: string; open: Target } };
+/** A posted Today whose meetings the next calendar read corrects: `key` names the meetings it shows, absent while it waits
+ * for the first read; `failed` once a read for it failed and was reported. */
+type TodayPost = { messageId: string; threadId: string; day: string; key?: string; failed?: boolean; emails: Array<{ from: string; subject: string }>; team?: { text: string; open: Target } };
 
 export interface AssistantWatchDeps {
   store: Pick<Store, "appendMessage" | "messagesFor" | "patchMessage" | "groupByThread" | "patchTask" | "deleteTasks" | "taskByThread" | "tasks">;
@@ -274,6 +279,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const kind = kindOf(item);
     const clears = RETRY_CLEARS[kind];
     if (clears) setMeeting(subjectOf(item), Object.fromEntries(clears.map((key) => [key, undefined])) as Partial<MeetingRecord>);
+    else if (kind === "today" && todayRefresh) todayRefresh.failed = false;
     else if (kind === "triage") {
       const { oldest, ids } = triageOf(item);
       const again = new Set(ids);
@@ -522,24 +528,28 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       .map((event) => ({ allDay: event.allDay, title: event.title, start: event.start, end: event.end, status: statusOf(event, at, zone), ...(event.joinUrl ? { joinUrl: event.joinUrl } : {}) }));
   }
 
+  /** What this process last heard from connected apps, else the services an earlier run saw connected. */
+  function connectedNow(): Record<AssistantService, boolean> | null {
+    if (lastConnected) return lastConnected;
+    const seen = current().connectedSeen;
+    return seen?.gmail || seen?.googlecalendar ? { gmail: seen.gmail === true, googlecalendar: seen.googlecalendar === true } : null;
+  }
+
   function today(bot: BotRecord, threadId: string): void {
     todayPending = false;
     const at = now();
     const zone = deps.timeZone();
     const day = todayDue({ now: at, timeZone: zone, lastTodayDate: current().lastTodayDate });
     if (!day) return;
-    if (!lastConnected) {
-      todayPending = true;
+    const known = connectedNow();
+    const calendar = known?.googlecalendar === true && mausbotMayUse(bot, "googlecalendar");
+    const gmail = known?.gmail === true && mausbotMayUse(bot, "gmail");
+    if (!calendar && !gmail) {
+      todayPending = !lastConnected;
       return;
     }
-    const calendar = lastConnected.googlecalendar && mausbotMayUse(bot, "googlecalendar");
-    const gmail = lastConnected.gmail && mausbotMayUse(bot, "gmail");
-    if (!calendar && !gmail) return;
-    if (calendar && calendarReadAt === undefined) {
-      todayPending = true;
-      return;
-    }
-    const shown = todayMeetings(day, at, zone);
+    const waiting = calendar && calendarReadAt === undefined;
+    const shown: TodayMeetings = waiting ? "checking" : todayMeetings(day, at, zone);
     let team: TodayPost["team"];
     try {
       team = deps.team(at - 24 * HOUR) ?? undefined;
@@ -550,8 +560,16 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const emails = flagged.map((email) => ({ from: email.from, subject: email.subject }));
     flagged = [];
     const messageId = post(bot, threadId, todayCard({ now: at, timeZone: zone, meetings: shown, emails, ...(team ? { team } : {}) }));
-    const stale = calendar && calendarReadAt !== undefined && at - calendarReadAt > deps.checkMs;
-    if (messageId && stale) todayRefresh = { messageId, threadId, day, key: meetingsKey(shown), emails, ...(team ? { team } : {}) };
+    if (!messageId) return;
+    const posted = { messageId, threadId, day, emails, ...(team ? { team } : {}) };
+    if (typeof shown === "string") todayRefresh = posted;
+    else if (calendar && at - calendarReadAt! > deps.checkMs) todayRefresh = { ...posted, key: meetingsKey(shown) };
+  }
+
+  function editToday(bot: BotRecord, posted: TodayPost, meetings: TodayMeetings): void {
+    const widget = todayCard({ now: now(), timeZone: deps.timeZone(), meetings, emails: posted.emails, ...(posted.team ? { team: posted.team } : {}) }).card;
+    const updated = createAgentCard({ store: deps.store, bot, threadId: posted.threadId, input: { tool: "update_widget", widget_id: posted.messageId, widget } });
+    if (!updated.ok) console.warn(`assistant: Today was not updated: ${updated.error}`);
   }
 
   function refreshToday(bot: BotRecord): void {
@@ -561,10 +579,17 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const zone = deps.timeZone();
     if (!posted || localDate(at, zone) !== posted.day) return;
     const shown = todayMeetings(posted.day, at, zone);
-    if (meetingsKey(shown) === posted.key) return;
-    const widget = todayCard({ now: at, timeZone: zone, meetings: shown, emails: posted.emails, ...(posted.team ? { team: posted.team } : {}) }).card;
-    const updated = createAgentCard({ store: deps.store, bot, threadId: posted.threadId, input: { tool: "update_widget", widget_id: posted.messageId, widget } });
-    if (!updated.ok) console.warn(`assistant: Today was not updated: ${updated.error}`);
+    if (meetingsKey(shown) !== posted.key) editToday(bot, posted, shown);
+  }
+
+  /** A Today still waiting for its first read says the calendar could not be read, once, and offers Retry unless the
+   * Reconnect card is already there; a later good read still fills it in. */
+  function todayUnread(bot: BotRecord, reason: string): void {
+    const posted = todayRefresh;
+    if (!posted || posted.key !== undefined || posted.failed) return;
+    posted.failed = true;
+    editToday(bot, posted, "unreadable");
+    if (!current().reconnectShown?.googlecalendar) failCard(bot, posted.threadId, `today:${posted.day}`, TODAY_FAILED, reason);
   }
 
   function recover(bot: BotRecord, threadId: string): void {
@@ -591,9 +616,11 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       if (!lastConnected || !context()) return;
       quietly("a lost connection was not reported", () => noteConnections(bot, threadId, lastConnected!));
       const at = now();
+      let calendarProblem: string | undefined = CALENDAR_DISCONNECTED;
       if (lastConnected.googlecalendar && mausbotMayUse(bot, "googlecalendar")) {
         const fresh = await readService(bot, threadId, "googlecalendar", () => deps.sources.events(at - HOUR, at + LOOKAHEAD_MS));
         if (!context()) return;
+        calendarProblem = fresh ? undefined : CALENDAR_UNREAD;
         if (fresh) {
           events = fresh.filter((event) => storable(event.id) && storable(event.seriesId));
           calendarReadAt = at;
@@ -614,6 +641,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       });
       quietly("old work threads were not swept", () => sweep(bot, at));
       if (todayPending) quietly("Today was not posted", () => today(bot, threadId));
+      if (calendarProblem) quietly("Today was not updated", () => todayUnread(bot, calendarProblem));
     } finally {
       void work();
     }
@@ -645,6 +673,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const here = context();
     if (!here) return "no";
     const kind = kindOf(item);
+    if (kind === "today") return todayRefresh?.day === subjectOf(item) && mausbotMayUse(here.bot, "googlecalendar") && lastConnected?.googlecalendar !== false ? "yes" : "no";
     if (kind === "triage") return mausbotMayUse(here.bot, "gmail") && lastConnected?.gmail !== false ? "yes" : "no";
     if (!RETRY_CLEARS[kind] || !mausbotMayUse(here.bot, "googlecalendar") || lastConnected?.googlecalendar === false) return "no";
     if (calendarReadAt === undefined) return "unknown";

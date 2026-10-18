@@ -11,13 +11,15 @@ export interface FakeConnectedApps {
   /** Composio GMAIL_FETCH_EMAILS messages. */
   emails: unknown[];
   calls: Array<{ tool: string; arguments: unknown }>;
+  /** While set, calendar reads wait for it before they answer. */
+  holdCalendar?: Promise<void>;
   close(): Promise<void>;
 }
 
 type Frame = { id?: unknown; method?: string; params?: { name?: string; arguments?: { tools?: Array<{ tool_slug?: string; arguments?: unknown }> } } };
 
 export async function startFakeConnectedApps(): Promise<FakeConnectedApps> {
-  const fake = { connected: { gmail: true, googlecalendar: true } as Record<string, boolean>, events: [] as unknown[], emails: [] as unknown[], calls: [] as FakeConnectedApps["calls"] };
+  const fake: Omit<FakeConnectedApps, "url" | "token" | "close"> = { connected: { gmail: true, googlecalendar: true }, events: [], emails: [], calls: [] };
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
@@ -39,6 +41,7 @@ export async function startFakeConnectedApps(): Promise<FakeConnectedApps> {
         const tool = body.params?.name === "COMPOSIO_MULTI_EXECUTE_TOOL" ? body.params.arguments?.tools?.[0] : { tool_slug: body.params?.name, arguments: body.params?.arguments };
         const slug = String(tool?.tool_slug ?? "");
         fake.calls.push({ tool: slug, arguments: tool?.arguments });
+        if (slug === "GOOGLECALENDAR_EVENTS_LIST" && fake.holdCalendar) await fake.holdCalendar;
         const data = slug === "GOOGLECALENDAR_EVENTS_LIST" ? { items: fake.events } : slug === "GMAIL_FETCH_EMAILS" ? { messages: fake.emails } : {};
         const text = JSON.stringify({ successful: true, data: { results: [{ tool_slug: slug, response: { successful: true, data, error: null } }] }, error: null });
         return res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text }] } }));

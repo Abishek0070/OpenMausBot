@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,7 @@ import { removeTempDir } from "../testing/cleanup.ts";
 import { fingerprint } from "./assistant-plan.ts";
 import { MAX_JUDGED } from "./assistant-state.ts";
 import type { JobResult } from "./assistant-turns.ts";
-import { createAssistantWatch, DISCONNECTED_TEXT, NO_CONNECTOR_TOOLS, NO_WEB_SEARCH, RECONNECT_TEXT, RETRY, type AssistantWatchDeps } from "./assistant-watch.ts";
+import { createAssistantWatch, DISCONNECTED_TEXT, NO_CONNECTOR_TOOLS, NO_WEB_SEARCH, RECONNECT_TEXT, RETRY, TODAY_FAILED, type AssistantWatchDeps } from "./assistant-watch.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -400,6 +400,72 @@ describe("Today", () => {
     expect(w.sources.events).toHaveBeenCalledTimes(2);
     expect(w.todays()[0]!.widget).not.toHaveProperty("rev");
     expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Meeting b");
+  });
+
+  it("after a restart posts Today at the first presence while the calendar is still being read, then turns that same card into the real Today, with one notification", async () => {
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
+    await w.settle();
+    w.notify.mockClear();
+    w.noteCard.mockClear();
+    w.tick(24 * HOUR);
+    w.live.events = [meeting("b", w.now() + 6 * HOUR)];
+    const connected = gate();
+    const calendar = gate();
+    w.sources.connected.mockImplementationOnce(async () => { await connected.closed; return w.live.connected; });
+    w.sources.events.mockImplementationOnce(async () => { await calendar.closed; return w.live.events; });
+    const restarted = w.make();
+    restarted.start();
+    restarted.onPresence({ source: "desktop", returned: false });
+    expect(w.todays()).toHaveLength(1);
+    const placeholder = w.todays()[0]!;
+    expect(JSON.stringify(placeholder.widget)).toContain("Checking your calendar…");
+    expect(w.notify).toHaveBeenCalledTimes(1);
+    expect(w.noteCard).toHaveBeenCalledWith({ botId: "m", threadId: "m-main" });
+    connected.open();
+    calendar.open();
+    await restarted.idle();
+    expect(w.todays()).toHaveLength(1);
+    expect(w.todays()[0]!.id).toBe(placeholder.id);
+    expect(w.todays()[0]!.widget).toMatchObject({ rev: 1 });
+    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Meeting b");
+    expect(JSON.stringify(w.todays()[0]!.widget)).not.toContain("Checking your calendar");
+    expect(w.notify).toHaveBeenCalledTimes(1);
+    expect(w.noteCard).toHaveBeenCalledTimes(1);
+    expect(readFileSync(join(w.dataDir, "assistant.json"), "utf8")).not.toContain("Meeting b");
+    restarted.stop();
+  });
+
+  it("says on a waiting Today that the calendar could not be read, offers one Retry, and fills the card in once a read works", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ events: [meeting("b", NOW + 6 * HOUR)] });
+    w.watch.state.patch({ connectedSeen: { gmail: true, googlecalendar: true } });
+    w.watch.onPresence({ source: "desktop", returned: false });
+    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Checking your calendar…");
+    w.live.calendarFailures = 2;
+    await w.settle();
+    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("I couldn't read your calendar.");
+    expect(w.retries().map((line) => line.card!.title)).toEqual([TODAY_FAILED]);
+    await w.settle();
+    expect(w.retries()).toHaveLength(1);
+    expect(w.watch.answerCard("m-main", w.retries()[0]!.card!.requestId!, "answer", RETRY, member)).toBe("unavailable");
+    expect(w.watch.answerCard("m-main", w.retries()[0]!.card!.requestId!, "answer", RETRY, owner)).toBe("answered");
+    await w.watch.idle();
+    expect(w.todays()).toHaveLength(1);
+    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Meeting b");
+    expect(w.notify).toHaveBeenCalledTimes(2);
+    expect(w.noteCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the Reconnect card, not Retry, when the waiting Today's calendar turns out to be disconnected", async () => {
+    const w = world({ events: [meeting("b", NOW + 6 * HOUR)] });
+    w.watch.state.patch({ connectedSeen: { gmail: true, googlecalendar: true } });
+    w.live.connected = { gmail: true, googlecalendar: false };
+    w.watch.onPresence({ source: "desktop", returned: false });
+    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Checking your calendar…");
+    await w.settle();
+    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("I couldn't read your calendar.");
+    expect(w.texts()).toContain(DISCONNECTED_TEXT.googlecalendar);
+    expect(w.retries()).toEqual([]);
   });
 
   it("posts no Today when neither Gmail nor Calendar is connected", async () => {

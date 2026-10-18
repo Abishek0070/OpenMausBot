@@ -177,9 +177,15 @@ export function cancelledCard(input: { title: string; start: number; allDay?: bo
   };
 }
 
-export function todayCard(input: { now: number; timeZone?: string; meetings: TodayMeeting[]; emails: Array<{ from: string; subject: string }>; team?: { text: string; open: Target } }): BuiltCard {
+/** Today's meetings, or why they are not shown yet: the calendar is being read, or could not be read. */
+export type TodayMeetings = TodayMeeting[] | "checking" | "unreadable";
+const TODAY_CALENDAR = { checking: "Checking your calendar…", unreadable: "I couldn't read your calendar." } as const;
+const TODAY_CALENDAR_SUMMARY = { checking: "checking your calendar…", unreadable: "your calendar could not be read" } as const;
+
+export function todayCard(input: { now: number; timeZone?: string; meetings: TodayMeetings; emails: Array<{ from: string; subject: string }>; team?: { text: string; open: Target } }): BuiltCard {
   const date = plain(new Date(input.now).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: zoneOf(input.timeZone) }));
-  const meetings = input.meetings.slice(0, 12).map((meeting): Node => ({
+  const list = typeof input.meetings === "string" ? [] : input.meetings;
+  const meetings = list.slice(0, 12).map((meeting): Node => ({
     type: "Row", gap: 3, align: "center",
     children: [
       { type: "Col", flex: 1, children: [
@@ -191,14 +197,14 @@ export function todayCard(input: { now: number; timeZone?: string; meetings: Tod
   }));
   const children: Node[] = [
     { type: "Title", value: "Meetings", size: "sm" },
-    ...(meetings.length ? meetings : [text("No meetings today.")]),
+    ...(typeof input.meetings === "string" ? [text(TODAY_CALENDAR[input.meetings])] : meetings.length ? meetings : [text("No meetings today.")]),
     ...(input.emails.length ? [{ type: "Title", value: "Email", size: "sm" }, ...input.emails.slice(0, 5).map((email) => ({ type: "Text", value: clip(`${email.from}: ${email.subject}`, 200), truncate: true }))] : []),
     ...(input.team ? [{ type: "Title", value: "Team", size: "sm" }, {
       type: "Row", gap: 3, align: "center",
       children: [{ type: "Col", flex: 1, children: [text(input.team.text, 200)] }, button("Open", { type: "open_thread", payload: input.team.open })],
     }] : []),
   ];
-  const meetingCount = `${input.meetings.length} meeting${input.meetings.length === 1 ? "" : "s"}`;
+  const meetingCount = typeof input.meetings === "string" ? TODAY_CALENDAR_SUMMARY[input.meetings] : `${list.length} meeting${list.length === 1 ? "" : "s"}`;
   const emailCount = input.emails.length ? `, ${input.emails.length} important email${input.emails.length === 1 ? "" : "s"}` : "";
   return { card: root("Today", date, children), summary: `Today: ${meetingCount}${emailCount}` };
 }

@@ -83,6 +83,19 @@ describe("MausBot's cards", () => {
     expect(built.summary).toBe("Today: 1 meeting, 1 important email");
     expect(JSON.stringify(valid(todayCard({ now: NOW, timeZone: ZONE, meetings: [], emails: [] })).root)).toContain("No meetings today.");
   });
+
+  it("lays out Today while the calendar is still being read, and once it could not be read, with its email and team", () => {
+    const team = { text: "Chief of Staff: nothing new from the team", open: { botId: "chief", threadId: "chief-main" } };
+    const checking = todayCard({ now: NOW, timeZone: ZONE, meetings: "checking", emails: [{ from: "Ada", subject: "Q3" }], team });
+    const shown = JSON.stringify(valid(checking).root);
+    expect(shown).toContain("Checking your calendar…");
+    expect(shown).toContain("Ada: Q3");
+    expect(shown).not.toContain("No meetings today.");
+    expect(checking.summary).toBe("Today: checking your calendar…, 1 important email");
+    const unreadable = JSON.stringify(valid(todayCard({ now: NOW, timeZone: ZONE, meetings: "unreadable", emails: [], team })).root);
+    expect(unreadable).toContain("I couldn't read your calendar.");
+    expect(unreadable).toContain("Chief of Staff: nothing new from the team");
+  });
 });
 
 describe("untrusted links and all-day events", () => {
