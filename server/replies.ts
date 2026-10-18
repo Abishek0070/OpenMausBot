@@ -79,7 +79,6 @@ export function promptWithReply(text: string, target: ReplyTarget | undefined, u
   ].join("\n");
 }
 
-/** A row as a later turn replays it. */
 export function transcriptText(message: Message, messagesById: ReadonlyMap<string, Message>, userName = "User"): string {
   if (message.serverCard) return cardRecords(message.text ?? "");
   if (!message.text || !message.replyToId) return message.text ?? "";

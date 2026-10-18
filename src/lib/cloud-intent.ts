@@ -12,7 +12,6 @@ export function setupMessage(job: string): string {
 
 type SetupCandidate = { hidden?: boolean; chiefOfStaff?: boolean; builtIn?: string };
 
-/** The first job is set up by the Chief of Staff, else the first visible bot that is not built in: MausBot cannot become a job bot. */
 export function setupTarget<T extends SetupCandidate>(bots: readonly T[]): T | undefined {
   const candidates = bots.filter((bot) => !bot.hidden && bot.builtIn === undefined);
   return candidates.find((bot) => bot.chiefOfStaff) ?? candidates[0];

@@ -94,7 +94,6 @@ export function createMausBotHost(deps: MausBotHostDeps) {
     return isMausBot(bot) ? watch.pressRecords(action) : null;
   }
 
-  /** MausBot's first message, posted on the owner's first presence; the watcher posts nothing until it is saved. */
   function introduce(): void {
     void intro.introduce();
   }

@@ -74,8 +74,7 @@ const FAILED: Record<Job["kind"], (title: string) => string> = {
 
 type Target = { botId: string; threadId: string };
 type Outcome = NonNullable<NonNullable<AssistantState["retryCards"]>[string]["outcome"]>;
-/** A posted Today whose meetings the next calendar read corrects: `key` names the meetings it shows, absent while it waits
- * for the first read; `failed` once a read for it failed and was reported. */
+/** `key` is absent while the card waits for its first calendar read. */
 type TodayPost = { messageId: string; threadId: string; day: string; key?: string; failed?: boolean; emails: Array<{ from: string; subject: string }>; team?: { text: string; open: Target } };
 
 export interface AssistantWatchDeps {
@@ -537,8 +536,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       .map((event) => ({ allDay: event.allDay, title: event.title, start: event.start, end: event.end, status: statusOf(event, at, zone), ...(event.joinUrl ? { joinUrl: event.joinUrl } : {}) }));
   }
 
-  /** What this process last heard from connected apps, else the services an earlier run saw connected. */
-  function connectedNow(): Record<AssistantService, boolean> | null {
+  function lastKnownConnections(): Record<AssistantService, boolean> | null {
     if (lastConnected) return lastConnected;
     const seen = current().connectedSeen;
     return seen?.gmail || seen?.googlecalendar ? { gmail: seen.gmail === true, googlecalendar: seen.googlecalendar === true } : null;
@@ -550,7 +548,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const zone = deps.timeZone();
     const day = todayDue({ now: at, timeZone: zone, lastTodayDate: current().lastTodayDate });
     if (!day) return;
-    const known = connectedNow();
+    const known = lastKnownConnections();
     const calendar = known?.googlecalendar === true && mausbotMayUse(bot, "googlecalendar");
     const gmail = known?.gmail === true && mausbotMayUse(bot, "gmail");
     if (!calendar && !gmail) {
@@ -591,8 +589,6 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     if (meetingsKey(shown) !== posted.key) editToday(bot, posted, shown);
   }
 
-  /** A Today still waiting for its first read says the calendar could not be read, once, and offers Retry unless the
-   * Reconnect card is already there; a later good read still fills it in. */
   function todayUnread(bot: BotRecord, reason: string): void {
     const posted = todayRefresh;
     if (!posted || posted.key !== undefined || posted.failed) return;
@@ -656,7 +652,6 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     }
   }
 
-  /** A presence-driven check counts a failed read toward Reconnect at most once per check interval. */
   function check(trigger: "scheduled" | "presence" = "scheduled"): Promise<void> {
     if (deps.hosted) return Promise.resolve();
     if (trigger === "scheduled") scheduledCheck = true;

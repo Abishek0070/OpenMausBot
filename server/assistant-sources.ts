@@ -168,7 +168,6 @@ export function emailsFromData(data: unknown): EmailHeader[] {
   return headers;
 }
 
-/** One read, all three relay calls of it, gets this long; a read past it is that service's failure. */
 export const READ_TIMEOUT_MS = 60_000;
 
 export interface ComposioSourceDeps {
