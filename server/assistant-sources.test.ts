@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
-import { CALENDAR_LIST_TOOL, createComposioSources, emailsFromData, eventsFromData, GMAIL_FETCH_TOOL, SourceError, toolData } from "./assistant-sources.ts";
+import { CALENDAR_LIST_TOOL, createComposioSources, emailsFromData, eventsFromData, GMAIL_FETCH_TOOL, READ_TIMEOUT_MS, SourceError, toolData } from "./assistant-sources.ts";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./testing/fixtures/${name}`, import.meta.url), "utf8"));
 const encode = (value: unknown) => new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value));
@@ -141,6 +141,23 @@ describe("createComposioSources", () => {
     }
     const refused = createComposioSources({ configured: () => true, connectedServices: services, relay: async () => ({ status: 401, bytes: encode({}) }) });
     await expect(refused.events(0, 1)).rejects.toMatchObject({ service: "googlecalendar" });
+  });
+
+  it("gives every relay call of one read the read's own short deadline, and a read past it fails as that service's", async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    const stalled = vi.fn((payload: any, _session?: string, signal?: AbortSignal) => {
+      signals.push(signal);
+      if (payload.method !== "tools/call") return Promise.resolve({ status: 200, bytes: encode({ jsonrpc: "2.0", id: payload.id, result: {} }), transportSessionId: "s1" });
+      return new Promise<never>((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
+    });
+    const sources = createComposioSources({ configured: () => true, connectedServices: services, relay: stalled, readTimeoutMs: 20 });
+    await expect(sources.events(0, 1)).rejects.toMatchObject({ name: "SourceError", service: "googlecalendar", message: expect.stringContaining("did not answer") });
+    await expect(sources.emails(0, 20)).rejects.toMatchObject({ service: "gmail", message: expect.stringContaining("did not answer") });
+    expect(signals).toHaveLength(6);
+    expect(new Set(signals.slice(0, 3)).size).toBe(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[3]).not.toBe(signals[0]);
+    expect(READ_TIMEOUT_MS).toBe(60_000);
   });
 
   it("refuses a non-finite time before any relay call", async () => {

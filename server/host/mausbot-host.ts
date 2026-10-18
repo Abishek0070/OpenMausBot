@@ -77,7 +77,7 @@ export function createMausBotHost(deps: MausBotHostDeps) {
     sources: createComposioSources({
       configured: () => composio.configured(cfg),
       connectedServices: () => composio.connectedServices(cfg),
-      relay: (payload, session) => composio.relayMcp(cfg, payload as Parameters<typeof composio.relayMcp>[1], session),
+      relay: (payload, session, signal) => composio.relayMcp(cfg, payload as Parameters<typeof composio.relayMcp>[1], session, undefined, signal),
     }),
     runJob: (bot, title, prompt) => turns.run(bot.id, title, prompt),
     noteCard: (card) => brief.noteAssistantCard(card),

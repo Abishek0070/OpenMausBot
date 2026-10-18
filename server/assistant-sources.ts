@@ -168,31 +168,39 @@ export function emailsFromData(data: unknown): EmailHeader[] {
   return headers;
 }
 
+/** One read, all three relay calls of it, gets this long; a read past it is that service's failure. */
+export const READ_TIMEOUT_MS = 60_000;
+
 export interface ComposioSourceDeps {
   configured(): boolean;
   connectedServices(): Promise<Record<string, { connected: boolean }>>;
-  relay(payload: unknown, transportSessionId?: string): Promise<{ status: number; bytes: Uint8Array; transportSessionId?: string }>;
+  relay(payload: unknown, transportSessionId: string | undefined, signal: AbortSignal): Promise<{ status: number; bytes: Uint8Array; transportSessionId?: string }>;
+  readTimeoutMs?: number;
 }
 
 export function createComposioSources(deps: ComposioSourceDeps): AssistantSources {
+  const readTimeoutMs = deps.readTimeoutMs ?? READ_TIMEOUT_MS;
+
   async function call(service: AssistantService, slug: string, args: Record<string, unknown>): Promise<unknown> {
+    const signal = AbortSignal.timeout(readTimeoutMs);
     try {
       const init = await deps.relay({
         jsonrpc: "2.0", id: "omb-assistant-init", method: "initialize",
         params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "openmausbot-assistant", version: "1" } },
-      });
+      }, undefined, signal);
       if (init.status !== 200) throw new Error(`connected apps answered HTTP ${init.status}`);
       const session = init.transportSessionId;
       // Streamable-HTTP MCP servers expect the initialized notification before the first request.
-      await deps.relay({ jsonrpc: "2.0", method: "notifications/initialized" }, session).catch(() => undefined);
+      await deps.relay({ jsonrpc: "2.0", method: "notifications/initialized" }, session, signal).catch(() => undefined);
       const answer = await deps.relay({
         jsonrpc: "2.0", id: CALL_ID, method: "tools/call",
         params: { name: MULTI_EXECUTE, arguments: { tools: [{ tool_slug: slug, arguments: args }] } },
-      }, session);
+      }, session, signal);
       if (answer.status !== 200) throw new Error(`${slug} answered HTTP ${answer.status}`);
       return toolData(slug, parseMcpResponse(new TextDecoder().decode(answer.bytes), CALL_ID));
     } catch (error) {
       if (error instanceof SourceError) throw error;
+      if (signal.aborted) throw new SourceError(service, `${slug} did not answer within ${Math.round(readTimeoutMs / 1000)} seconds`);
       throw new SourceError(service, error instanceof Error ? error.message : String(error));
     }
   }
