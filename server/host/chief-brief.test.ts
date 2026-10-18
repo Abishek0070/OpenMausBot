@@ -22,7 +22,10 @@ afterEach(async () => {
 type WorldBot = { id: string; name: string; section?: string; chiefOfStaff?: boolean; hidden?: boolean; visibility?: BotVisibility };
 type WorldRoom = { id: string; threadId: string; memberIds: string[]; audienceFloor?: BotVisibility };
 
-function world(bots: WorldBot[], options: { recap?: boolean; runs?: (since: number) => RoutineRun[]; patchTaskFails?: boolean; rooms?: WorldRoom[]; hosted?: boolean; mausbot?: string; onPresence?: ChiefBriefDeps["onPresence"] } = {}) {
+function world(bots: WorldBot[], options: {
+  recap?: boolean; runs?: (since: number) => RoutineRun[]; patchTaskFails?: boolean; rooms?: WorldRoom[]; hosted?: boolean; mausbot?: string;
+  onPresence?: ChiefBriefDeps["onPresence"]; beforePresence?: ChiefBriefDeps["beforePresence"];
+} = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "omb-chief-brief-"));
   dirs.push(dataDir);
   const messages = new Map<string, Message[]>();
@@ -69,6 +72,7 @@ function world(bots: WorldBot[], options: { recap?: boolean; runs?: (since: numb
     routineRuns: options.runs ?? (() => []),
     mausbot: () => (options.mausbot ? store.bot(options.mausbot) : null),
     onPresence: options.onPresence,
+    beforePresence: options.beforePresence,
   });
   const brief = start();
   // A finished turn: its digest row, and the thread's `updatedAt` moved to it, as the store does on append.
@@ -503,6 +507,30 @@ describe("MausBot in the recap composition", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("intro exploded"));
     const hosted = vi.fn();
     world([MAUSBOT], { mausbot: "mausbot", hosted: true, onPresence: hosted }).brief.active("desktop");
+    expect(hosted).not.toHaveBeenCalled();
+  });
+
+  it("runs beforePresence first on each owner activation, so MausBot's intro precedes the recap it posts, survives it throwing, and never on a hosted workspace", () => {
+    const order: string[] = [];
+    const w = world([MAUSBOT, { id: "scout", name: "Scout" }], {
+      mausbot: "mausbot",
+      beforePresence: () => { order.push("before"); w.store.appendMessage("mausbot-main", { role: "bot", kind: "text", text: "Hi, I'm MausBot." }); },
+      onPresence: () => { order.push("presence"); },
+    });
+    w.brief.active("desktop");
+    w.tick(4 * HOUR);
+    w.digestFor("scout", NOW + HOUR);
+    expect(w.brief.active("desktop")).toMatchObject({ returned: true, open: { botId: "mausbot", threadId: "mausbot-main" } });
+    expect(order).toEqual(["before", "presence", "before", "presence"]);
+    const rows = w.store.messagesFor("mausbot-main");
+    expect(rows.map((row) => row.kind)).toEqual(["text", "text", "widget"]);
+    expect(rows[2]!.text).toContain("**Since you last looked**");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failing = world([MAUSBOT], { mausbot: "mausbot", beforePresence: () => { throw new Error("intro exploded"); } });
+    expect(failing.brief.active("desktop")).toEqual({ returned: false });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("intro exploded"));
+    const hosted = vi.fn();
+    world([MAUSBOT], { mausbot: "mausbot", hosted: true, beforePresence: hosted }).brief.active("desktop");
     expect(hosted).not.toHaveBeenCalled();
   });
 

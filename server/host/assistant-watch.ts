@@ -133,6 +133,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   let todayPending = false;
   let todayRefresh: TodayPost | undefined;
   let recovered = false;
+  let missedCheck = false;
   let flagged: EmailHeader[] = [];
   const cardEvents = new Map<string, CalendarEvent>();
   const cardEmails = new Map<string, EmailHeader>();
@@ -565,6 +566,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   async function runCheck(): Promise<void> {
     const here = context();
+    missedCheck = !here;
     if (!here) return;
     const { bot, threadId } = here;
     if (!recovered) {
@@ -696,7 +698,8 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const here = context();
     if (!here) return;
     quietly("Today was not posted", () => today(here.bot, here.threadId));
-    if (event.returned || todayRefresh) void check();
+    if (missedCheck) void Promise.resolve(checking).then(() => check());
+    else if (event.returned || todayRefresh) void check();
   }
 
   function deleteUnrecordedJobThreads(): void {

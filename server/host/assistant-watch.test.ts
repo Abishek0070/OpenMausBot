@@ -329,6 +329,21 @@ describe("catch-up", () => {
     expect(w.sources.events).toHaveBeenCalledTimes(2);
     w.watch.stop();
   });
+
+  it("reads at once on the first presence after a check it was held back from, so an intro posted at that presence is not left waiting", async () => {
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
+    w.switchOff();
+    w.watch.start();
+    w.switchOn();
+    w.watch.onPresence({ source: "desktop", returned: false });
+    await expect.poll(() => w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a"]);
+    await w.watch.idle();
+    expect(w.sources.events).toHaveBeenCalledTimes(1);
+    w.watch.onPresence({ source: "desktop", returned: false });
+    await w.watch.idle();
+    expect(w.sources.events).toHaveBeenCalledTimes(1);
+    w.watch.stop();
+  });
 });
 
 describe("Today", () => {

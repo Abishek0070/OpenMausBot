@@ -105,6 +105,7 @@ export function createMausBotIntro(deps: MausBotIntroDeps) {
   async function introduce(): Promise<void> {
     if (deps.hosted) return;
     try {
+      if (Object.keys(unsaved).length) remember({});
       const bot = findMausBot(deps.store.bots);
       const threadId = bot && deps.mainThread(bot);
       if (!bot || !threadId) return;

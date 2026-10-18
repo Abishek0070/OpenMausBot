@@ -66,7 +66,7 @@ export function createMausBotHost(deps: MausBotHostDeps) {
   const watch = createAssistantWatch({
     store, dataDir: deps.dataDir, hosted: deps.hosted, notify: deps.notify, threadBusy: deps.threadBusy, newId: deps.newId,
     checkMs: deps.checkMs ?? assistantCheckMs(process.env.OMB_ASSISTANT_CHECK_MS),
-    enabled: () => assistantActsEnabled(cfg.features),
+    enabled: () => assistantActsEnabled(cfg.features) && brief.state.get().mausbotIntro !== undefined,
     mausbot: () => findMausBot(store.bots.filter((bot) => !bot.hidden)),
     mainThread: (bot) => brief.chiefThread(bot),
     timeZone: () => brief.state.get().timeZone ?? (deps.cloudHome ? undefined : hostTimeZone()),
@@ -94,8 +94,12 @@ export function createMausBotHost(deps: MausBotHostDeps) {
     return isMausBot(bot) ? watch.pressRecords(action) : null;
   }
 
-  function onPresence(event: { source: string; returned: boolean }): void {
+  /** MausBot's first message, posted on the owner's first presence; the watcher posts nothing until it is saved. */
+  function introduce(): void {
     void intro.introduce();
+  }
+
+  function onPresence(event: { source: string; returned: boolean }): void {
     watch.onPresence(event);
   }
 
@@ -104,5 +108,5 @@ export function createMausBotHost(deps: MausBotHostDeps) {
   }
 
   const harnessCards: HarnessCard[] = [intro.answerCard, watch.answerCard];
-  return { start: watch.start, stop: watch.stop, onPresence, onEvent, pressRecords, harnessCards };
+  return { start: watch.start, stop: watch.stop, introduce, onPresence, onEvent, pressRecords, harnessCards };
 }

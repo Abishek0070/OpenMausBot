@@ -363,6 +363,7 @@ it("runs a job at Ask without exec, browser or phone and answers its requests it
   const s = await start(fake, { home: first.home });
   const mausbot = await s.mausbot();
   expect(mausbot.id).toBe(seeded.id);
+  expect((await s.api("POST", "/api/presence/active", { source: "desktop" })).status).toBe(200);
   expect((await s.api("PATCH", "/api/config", { features: { browser: true }, browserProfiles: [{ id: "work", name: "Work" }] })).status).toBe(200);
   expect((await s.api("PATCH", `/api/bots/${mausbot.id}`, { browserProfile: "work" })).status).toBe(200);
   writeFileSync(join(s.home, "modes.json"), JSON.stringify({ [mausbot.id]: "hang" }));
@@ -428,6 +429,7 @@ it("files no incident for a failed job turn, while an ordinary failed turn reach
   const mausbot = await s.mausbot();
   const chief = (await s.bots()).find((bot) => bot.chiefOfStaff);
   const ordinary = (await s.api("POST", "/api/bots", { name: "Ada" })).body.bot;
+  expect((await s.api("POST", "/api/presence/active", { source: "desktop" })).status).toBe(200);
   writeFileSync(join(s.home, "modes.json"), JSON.stringify({ [mausbot.id]: "exit-early", [ordinary.id]: "exit-early" }));
   fake.events = [demo("demo-1", Date.now() + 2 * HOUR)];
   await expect.poll(async () => (await s.lines(mausbot.threadId))
@@ -444,7 +446,7 @@ it("files no incident for a failed job turn, while an ordinary failed turn reach
   expect(reports.filter((row) => row.role === "user" && row.peerAsk?.incident).map((row) => row.peerAsk.incident.threadId)).toEqual([ordinary.threadId]);
 }, 180_000);
 
-it("does nothing on a hosted team workspace, while the same server unhosted reads on its own clock", async () => {
+it("does nothing on a hosted team workspace, while the same server unhosted reads on its own clock once MausBot is introduced", async () => {
   const hostedApps = await startFakeConnectedApps();
   const plainApps = await startFakeConnectedApps();
   cleanups.push(() => hostedApps.close(), () => plainApps.close());
@@ -455,7 +457,9 @@ it("does nothing on a hosted team workspace, while the same server unhosted read
   expect(bots.some((bot) => bot.chiefOfStaff)).toBe(false);
   expect((await hosted.api("POST", "/api/presence/active", { source: "desktop" })).body).toEqual({ ok: true, returned: false });
 
-  await start(plainApps);
+  const plain = await start(plainApps);
+  await plain.mausbot();
+  expect((await plain.api("POST", "/api/presence/active", { source: "desktop" })).status).toBe(200);
   const reads = (tool: string) => plainApps.calls.filter((call) => call.tool === tool).length;
   await expect.poll(() => reads("GOOGLECALENDAR_EVENTS_LIST"), { timeout: STEP_MS }).toBeGreaterThanOrEqual(2);
   expect(reads("GMAIL_FETCH_EMAILS")).toBeGreaterThanOrEqual(1);

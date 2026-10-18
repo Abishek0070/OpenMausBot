@@ -25,6 +25,8 @@ export interface ChiefBriefDeps {
   routineRuns(since: number): RoutineRun[];
   /** MausBot, which posts the recap when there is no Chief. */
   mausbot?(): BotRecord | null;
+  /** Each owner activation, before a return's recap: MausBot's intro comes before anything else posted for it. */
+  beforePresence?(): void;
   /** Each owner activation, after a return's recap and before the answer chooses what to open. */
   onPresence?(event: { source: PresenceSource; returned: boolean }): void;
 }
@@ -202,6 +204,11 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
   function active(source: PresenceSource, timeZone?: string): PresenceAnswer {
     if (deps.hosted) return { returned: false };
     if (timeZone && timeZone !== state.get().timeZone) savePatch({ timeZone });
+    try {
+      deps.beforePresence?.();
+    } catch (error) {
+      console.warn(`brief: the before-presence hook failed: ${failure(error)}`);
+    }
     const outcome = presence.active(source);
     try {
       deps.onPresence?.({ source, returned: outcome.returned });

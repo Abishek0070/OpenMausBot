@@ -10,6 +10,7 @@ import { findMausBot, seedBots } from "../mausbot.ts";
 import { Store, type Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { DEFAULT_CHECK_MS } from "./assistant-plan.ts";
+import { createBriefState } from "./brief-state.ts";
 import { assistantCheckMs, createMausBotHost, jobReply, type MausBotHostDeps } from "./mausbot-host.ts";
 
 const sonnet: ModelSelection = { instanceId: "claude", model: "claude-sonnet-5" };
@@ -68,23 +69,24 @@ function connectedApps(): MausBotHostDeps["composio"] {
   };
 }
 
-function setup(options: { cloudHome?: boolean; ownerOnly?: (threadId: string) => boolean } = {}) {
+function setup(options: { cloudHome?: boolean; ownerOnly?: (threadId: string) => boolean; introduced?: boolean } = {}) {
   const store = new Store(() => sonnet);
   seedBots(store, { hosted: false });
   const mausbot = findMausBot(store.bots)!;
   const scout = store.createBot({ name: "Scout" });
   const dataDir = mkdtempSync(join(tmpdir(), "omb-mausbot-host-"));
   dirs.push(dataDir);
+  const briefState = createBriefState(join(dataDir, "brief.json"));
+  briefState.patch({ timeZone: "UTC", ...(options.introduced === false ? {} : { mausbotIntro: { at: 1, threadId: mausbot.threadId } }) });
+  const composio = connectedApps();
+  const connectedServices = vi.spyOn(composio, "connectedServices");
   const started: Array<{ botId: string; text: string; opts: { threadId: string; unattended: true; trigger: unknown } }> = [];
   const createTask = vi.spyOn(store, "createTask");
   const patchTask = vi.spyOn(store, "patchTask");
   const host = createMausBotHost({
-    store, cfg: { features: {} } as AppConfig, composio: connectedApps(), dataDir, hosted: false, cloudHome: options.cloudHome ?? false, maxBots: 50,
+    store, cfg: { features: {} } as AppConfig, composio, dataDir, hosted: false, cloudHome: options.cloudHome ?? false, maxBots: 50,
     registry: { get: () => ({ adapter: { capabilities: { agentsMcp: true, composioMcp: true } } }) } as unknown as MausBotHostDeps["registry"],
-    brief: {
-      state: { get: () => ({ version: 1, timeZone: "UTC" }), patch: vi.fn() } as unknown as MausBotHostDeps["brief"]["state"],
-      chiefThread: (bot) => bot.threadId, turnsByBot: () => new Map(), noteAssistantCard: vi.fn(), teamLine: () => null,
-    },
+    brief: { state: briefState, chiefThread: (bot) => bot.threadId, turnsByBot: () => new Map(), noteAssistantCard: vi.fn(), teamLine: () => null },
     notify: vi.fn(), threadBusy: () => false, newId: () => `id-${Math.random().toString(36).slice(2)}`,
     startTurn: async (botId, text, opts) => { started.push({ botId, text, opts }); },
     interruptDirectThread: vi.fn(async () => {}),
@@ -101,10 +103,26 @@ function setup(options: { cloudHome?: boolean; ownerOnly?: (threadId: string) =>
     store.appendMessage(threadId, { role: "bot", kind: "text", text: reply, turnId: "turn-1" });
     host.onEvent({ type: "turn.completed", threadId, turnId: "turn-1", ok: true } as RuntimeEvent);
   };
-  return { store, mausbot, scout, host, started, createTask, patchTask, cards, finish };
+  return { store, mausbot, scout, host, started, createTask, patchTask, cards, finish, connectedServices, briefState };
 }
 
 describe("createMausBotHost", () => {
+  it("stays silent until its intro is posted, then the first presence posts the intro before any watcher card", async () => {
+    const w = setup({ introduced: false });
+    w.host.start();
+    expect(w.connectedServices).not.toHaveBeenCalled();
+    expect(w.store.messagesFor(w.mausbot.threadId)).toEqual([]);
+    w.host.introduce();
+    expect(w.briefState.get().mausbotIntro).toMatchObject({ threadId: w.mausbot.threadId });
+    w.host.onPresence({ source: "desktop", returned: false });
+    await expect.poll(() => w.started.length).toBe(1);
+    w.finish(w.started[0]!.opts.threadId, JSON.stringify({ brief: "Who: Jake Price.", relatedThreadId: "", noWebSearch: false }));
+    await expect.poll(() => w.cards().map((card) => card.title)).toContain("Prep: Supamaus demo with Jake");
+    const rows = w.store.messagesFor(w.mausbot.threadId);
+    expect(rows[0]).toMatchObject({ kind: "text", text: expect.stringContaining("Hi, I'm MausBot") });
+    expect(rows.findIndex((row) => row.kind === "widget")).toBeGreaterThan(0);
+  });
+
   it("runs a job in one hidden Ask thread created in a single write, unattended, and posts the card from that turn's reply alone", async () => {
     const w = setup();
     w.host.start();
