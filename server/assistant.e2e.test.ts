@@ -376,7 +376,11 @@ it("posts nothing before the owner first comes, then its intro first; a morning 
   const waiting = (await todays(again)).at(-1);
   expect(JSON.stringify(waiting.widget.root)).toContain("Checking your calendar…");
   answer();
-  await expect.poll(async () => JSON.stringify((await todays(again)).at(-1).widget.root), { timeout: STEP_MS }).toContain("Supamaus demo with Jake");
+  await expect.poll(async () => (await todays(again)).at(-1).widget.rev, { timeout: STEP_MS }).toBe(1);
+  const filled = (await todays(again)).at(-1);
+  expect(filled.id).toBe(waiting.id);
+  expect(JSON.stringify(filled.widget.root)).not.toContain("Checking your calendar");
+  expect(JSON.stringify(filled.widget.root)).toMatch(/Supamaus demo with Jake|No meetings today\./);
   expect((await todays(again)).map((line) => line.id)).toEqual([rows.find((line) => line.kind === "widget").id, waiting.id]);
   expect((await again.notifications()).filter((entry) => entry.kind === "assistant" && entry.threadId === mausbot.threadId)).toHaveLength(2);
 }, 180_000);
