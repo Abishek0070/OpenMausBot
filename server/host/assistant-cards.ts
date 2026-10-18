@@ -43,8 +43,12 @@ const zoneOf = (timeZone: string | undefined): string => validZone(timeZone) ?? 
 // ICU puts a narrow no-break space before AM/PM; cards and tests read plain spaces.
 const plain = (text: string): string => text.replace(/[\u202f\u00a0]/g, " ");
 
+const bareClock = (ms: number, timeZone: string | undefined): string =>
+  plain(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: zoneOf(timeZone) }));
+
+/** Labelled UTC when no zone is known. */
 export function clockTime(ms: number, timeZone: string | undefined): string {
-  return plain(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: zoneOf(timeZone) }));
+  return validZone(timeZone) ? bareClock(ms, timeZone) : `${bareClock(ms, timeZone)} UTC`;
 }
 
 // An all-day event starts at UTC midnight whatever the zone, so it is read by that date, never as a clock time.
@@ -57,7 +61,7 @@ function dayLabel(start: number, timeZone: string | undefined, now: number, allD
 
 export function meetingWhen(start: number, end: number, timeZone: string | undefined, now: number, allDay = false): string {
   const day = dayLabel(start, timeZone, now, allDay);
-  return allDay ? `${day}, all day` : `${day}, ${clockTime(start, timeZone)} to ${clockTime(end, timeZone)}`;
+  return allDay ? `${day}, all day` : `${day}, ${bareClock(start, timeZone)} to ${clockTime(end, timeZone)}`;
 }
 
 export function attendeeNames(event: CalendarEvent): string {

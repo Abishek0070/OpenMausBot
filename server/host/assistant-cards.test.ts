@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { parseWidgetInput, WIDGET_LIMITS, widgetActions } from "../../shared/widget.ts";
 import type { CalendarEvent } from "../assistant-sources.ts";
-import { attendeeNames, BRIEF_MAX, clip, cancelledCard, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, todayCard, updateCard, type BuiltCard } from "./assistant-cards.ts";
+import { attendeeNames, BRIEF_MAX, clip, clockTime, cancelledCard, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, todayCard, updateCard, type BuiltCard } from "./assistant-cards.ts";
 
 const MINUTE = 60_000;
 const DAY_MS = 24 * 60 * MINUTE;
@@ -27,6 +27,16 @@ describe("MausBot's cards", () => {
     expect(meetingWhen(demo.start + 24 * 60 * MINUTE, demo.end + 24 * 60 * MINUTE, ZONE, NOW)).toBe("Tomorrow, 10:30 PM to 11:00 PM");
     expect(attendeeNames(demo)).toBe("Jake Price");
     expect(attendeeNames({ ...demo, attendees: [...demo.attendees, { email: "ada@example.test", self: false, organizer: false }, { email: "bo@example.test", self: false, organizer: false }] })).toBe("Jake Price and 2 others");
+  });
+
+  it("labels a time UTC when no zone is known, once per meeting, and never a time in a known zone", () => {
+    expect(meetingWhen(demo.start, demo.end, undefined, NOW)).toBe("Today, 5:00 PM to 5:30 PM UTC");
+    expect(meetingWhen(demo.start, demo.end, "Not/A_Zone", NOW)).toBe("Today, 5:00 PM to 5:30 PM UTC");
+    expect(clockTime(demo.start, undefined)).toBe("5:00 PM UTC");
+    expect(clockTime(demo.start, "UTC")).toBe("5:00 PM");
+    expect(clockTime(demo.start, ZONE)).toBe("10:30 PM");
+    expect(JSON.stringify(valid(todayCard({ now: NOW, meetings: [{ title: "Demo", start: demo.start, end: demo.end, status: "Prep ready" }], emails: [] })).root)).toContain("5:00 PM UTC · Demo");
+    expect(JSON.stringify(valid(cancelledCard({ title: "Demo", start: demo.start, now: NOW })).root)).toContain("Was Today, 5:00 PM UTC");
   });
 
   it("preps with the brief, Join from the calendar, Open for a known chat and Draft a follow-up", () => {
