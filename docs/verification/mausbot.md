@@ -28,7 +28,12 @@ The posted lines are in `server/host/mausbot-intro.ts`.
   and "ask" in every payload.
 - The Chief offer is posted once. Only the owner or an admin can answer it, and
   "Not now" settles it for good.
-- With no Chief, MausBot posts the recap in its own chat.
+- With no Chief, MausBot posts the recap in its own chat, after its intro.
+- MausBot cannot be set up for a job: its composer and settings offer no
+  `/setup`, and a `/setup` sent to it anyway answers 409 with a pointer to the
+  Chief of Staff. A new Cloud home sends its first job's `/setup` to the Chief
+  of Staff (else the first visible bot that is not built in) and opens that
+  chat; a desktop install still opens on MausBot.
 - Built-in bots do not count toward the 100-bot workspace limit.
 - `launchVerificationServer` renames the seeded Chief of Staff to "Fixture
   Starter" and un-appoints it, so a fixture starts with one plain bot plus a
