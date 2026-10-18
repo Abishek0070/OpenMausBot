@@ -73,7 +73,8 @@ export function planMeetings(input: { now: number; events: CalendarEvent[]; meet
         ? { kind: "repeat", event, previousStart: previous.start }
         : { kind: "prep", event, short: now - (event.start - PREP_LEAD_MS) > input.checkMs });
     }
-    if (record?.remindedAt === undefined && event.start - now <= REMINDER_LEAD_MS) jobs.push({ kind: "remind", event });
+    const reminded = record?.remindedAt !== undefined && record.remindedAt >= event.start - REMINDER_LEAD_MS;
+    if (!reminded && event.start - now <= REMINDER_LEAD_MS) jobs.push({ kind: "remind", event });
   }
   return jobs;
 }

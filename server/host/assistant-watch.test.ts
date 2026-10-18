@@ -240,6 +240,28 @@ describe("reminders", () => {
     w.watch.reminders();
     expect(w.titles()).toEqual(["Prep: Meeting a", "Changed: Meeting a", "Call with Jake Price in 9 minutes"]);
   });
+
+  it("reminds again before the new time when a meeting moves later after its reminder, but not for a slip its reminder still covers", async () => {
+    const original = meeting("a", NOW + 3 * HOUR);
+    const w = world({ events: [original] });
+    await w.settle();
+    w.tick(3 * HOUR - 9 * MINUTE);
+    w.watch.reminders();
+    const reminders = () => w.titles().filter((title) => title.startsWith("Call with"));
+    expect(reminders()).toEqual(["Call with Jake Price in 9 minutes"]);
+    w.live.events = [{ ...original, start: original.start + MINUTE, end: original.end + MINUTE }];
+    await w.settle();
+    w.watch.reminders();
+    expect(reminders()).toHaveLength(1);
+    w.live.events = [{ ...original, start: original.start + 30 * MINUTE, end: original.end + 30 * MINUTE }];
+    await w.settle();
+    w.watch.reminders();
+    expect(reminders()).toHaveLength(1);
+    w.tick(30 * MINUTE);
+    w.watch.reminders();
+    w.watch.reminders();
+    expect(reminders()).toEqual(["Call with Jake Price in 9 minutes", "Call with Jake Price in 9 minutes"]);
+  });
 });
 
 describe("email", () => {
