@@ -7,7 +7,7 @@ import { createQuotaSwitchHost, type HarnessCard, type QuotaSwitchHostDeps } fro
 const owner: RequestAuth = { kind: "loopback", scopes: ["admin", "client"] };
 
 function host(harnessCards: HarnessCard[]) {
-  const card = { id: "m1", at: 1, role: "bot", kind: "options", card: { title: "Make me your Chief of Staff?", subtitle: "", options: ["Yes", "Not now"], requestId: "rq1" } } as Message;
+  const card = { id: "m1", at: 1, role: "bot", kind: "options", card: { title: "A card a host module answers", subtitle: "", options: ["Yes", "Not now"], requestId: "rq1" } } as Message;
   const store = { messagesFor: (threadId: string) => (threadId === "t1" ? [card] : []), botByThread: () => null, patchMessage: vi.fn() };
   return createQuotaSwitchHost({ store, harnessCards } as unknown as QuotaSwitchHostDeps);
 }

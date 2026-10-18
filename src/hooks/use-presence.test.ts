@@ -11,7 +11,7 @@ vi.mock("react", async (original) => ({
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => fixture.showThreads }));
 vi.mock("@/state/store", async (original) => ({ ...await original<typeof import("@/state/store")>(), api: fixture.api }));
 
-import { useChiefPresence } from "./use-presence";
+import { usePresence } from "./use-presence";
 
 const chief: Bot = {
   id: "chief", threadId: "chief-main", name: "Chief", title: "", description: "", notifications: true,
@@ -28,13 +28,13 @@ const toChief = { ok: true, returned: true, open: { botId: "chief", threadId: "c
 function render(state: AppState, dispatch: (action: Action) => void) {
   fixture.effects = [];
   fixture.refAt = 0;
-  useChiefPresence(state, dispatch);
+  usePresence(state, dispatch);
   return fixture.effects.map((effect) => effect());
 }
 /** A render whose `state.hydrated` is unchanged: React keeps the effect, so it is not run again. */
 function rerender(state: AppState, dispatch: (action: Action) => void) {
   fixture.refAt = 0;
-  useChiefPresence(state, dispatch);
+  usePresence(state, dispatch);
 }
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -62,7 +62,7 @@ afterEach(() => {
   fixture.api.mockReset();
 });
 
-describe("useChiefPresence", () => {
+describe("usePresence", () => {
   it("posts presence once the bots are loaded, and opens the Chief's chat when a card landed while away", async () => {
     stubDom();
     fixture.api.mockResolvedValue(toChief);

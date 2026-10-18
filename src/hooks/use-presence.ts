@@ -13,8 +13,8 @@ function selection(state: AppState): string {
   return `${state.selectedId}\n${threadId ?? ""}`;
 }
 
-/** Tells the server the person is here, and opens the Chief's chat when a recap or brief landed while they were away. */
-export function useChiefPresence(state: AppState, dispatch: (action: Action) => void): void {
+/** Tells the server the person is here, and opens the chat the answer names: a card MausBot or the Chief posted while they were away. */
+export function usePresence(state: AppState, dispatch: (action: Action) => void): void {
   const showThreads = useShowThreads();
   const lastPing = useRef<number | null>(null);
   const latest = useRef({ state, dispatch, showThreads });

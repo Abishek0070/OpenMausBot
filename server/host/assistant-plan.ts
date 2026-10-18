@@ -1,4 +1,3 @@
-// server/host/assistant-plan.ts
 import { createHash } from "node:crypto";
 
 import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
