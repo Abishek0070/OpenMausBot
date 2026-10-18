@@ -151,6 +151,8 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   const queue: Job[] = [];
   let working: Promise<void> | undefined;
   let checking: Promise<void> | undefined;
+  let scheduledCheck = false;
+  const failureCountedAt: Partial<Record<AssistantService, number>> = {};
   const timers: Array<{ cancel(): void }> = [];
 
   const current = () => state.get();
@@ -255,6 +257,12 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       }
       return value;
     } catch (error) {
+      const at = now();
+      if (!scheduledCheck && at - (failureCountedAt[service] ?? -Infinity) < deps.checkMs) {
+        console.warn(`assistant: reading ${service} failed again within one check interval: ${failure(error)}`);
+        return null;
+      }
+      failureCountedAt[service] = at;
       const count = (current().failures?.[service] ?? 0) + 1;
       state.patch({ failures: { ...current().failures, [service]: count } });
       console.warn(`assistant: reading ${service} failed (${count} in a row): ${failure(error)}`);
@@ -647,11 +655,13 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     }
   }
 
-  function check(): Promise<void> {
+  /** A presence-driven check counts a failed read toward Reconnect at most once per check interval. */
+  function check(trigger: "scheduled" | "presence" = "scheduled"): Promise<void> {
     if (deps.hosted) return Promise.resolve();
+    if (trigger === "scheduled") scheduledCheck = true;
     checking ??= runCheck()
       .catch((error) => console.warn(`assistant: the check failed: ${failure(error)}`))
-      .finally(() => { checking = undefined; });
+      .finally(() => { checking = undefined; scheduledCheck = false; });
     return checking;
   }
 
@@ -741,8 +751,8 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const here = context();
     if (!here) return;
     quietly("Today was not posted", () => today(here.bot, here.threadId));
-    if (missedCheck) void Promise.resolve(checking).then(() => check());
-    else if (event.returned || todayRefresh) void check();
+    if (missedCheck) void Promise.resolve(checking).then(() => check("presence"));
+    else if (event.returned || todayRefresh) void check("presence");
   }
 
   function deleteUnrecordedJobThreads(): void {

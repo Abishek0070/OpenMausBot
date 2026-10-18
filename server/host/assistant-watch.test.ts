@@ -493,6 +493,29 @@ describe("connected-app failures", () => {
     expect(w.texts().filter((text) => text === RECONNECT_TEXT.googlecalendar)).toHaveLength(2);
   });
 
+  it("counts a failed read from a presence-driven check at most once per check interval, so Reconnect still takes three scheduled checks", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ events: [meeting("a", NOW + 6 * HOUR)] });
+    w.live.calendarFailures = 100;
+    await w.settle();
+    for (let ping = 0; ping < 5; ping += 1) {
+      w.tick(MINUTE);
+      w.watch.onPresence({ source: "desktop", returned: true });
+      await w.watch.idle();
+    }
+    expect(w.sources.events).toHaveBeenCalledTimes(6);
+    expect(w.watch.state.get().failures?.googlecalendar).toBe(1);
+    w.tick(10 * MINUTE);
+    w.watch.onPresence({ source: "desktop", returned: true });
+    await w.watch.idle();
+    expect(w.watch.state.get().failures?.googlecalendar).toBe(2);
+    expect(w.texts()).not.toContain(RECONNECT_TEXT.googlecalendar);
+    w.tick(MINUTE);
+    await w.settle();
+    expect(w.watch.state.get().failures?.googlecalendar).toBe(3);
+    expect(w.texts().filter((text) => text === RECONNECT_TEXT.googlecalendar)).toHaveLength(1);
+  });
+
   it("posts one Reconnect card when a service it saw connected is reported not connected, and again only after it reconnected and was lost again", async () => {
     const w = world({ events: [meeting("a", NOW + 6 * HOUR)] });
     const connectors = () => w.messages.filter((line) => line.kind === "connector").map((line) => line.connector?.slug);
