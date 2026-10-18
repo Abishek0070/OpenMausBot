@@ -156,7 +156,7 @@ export function createBotPackageExport(input: {
   routines: Routine[];
   skillsByBot?: ReadonlyMap<string, readonly ExportablePackageSkill[]>;
 }): ParsedBotPackage {
-  const bots = input.bots.filter((bot) => !bot.hidden && !bot.builtIn);
+  const bots = input.bots.filter((bot) => !bot.hidden && bot.builtIn === undefined);
   if (!bots.length) throw new Error("Create a bot before exporting your package");
 
   const packageKeys = new Set<string>();
@@ -484,7 +484,7 @@ function refuseSkillConflicts(bots: readonly BotRecord[], skillsByBot: ReadonlyM
 /** One team without its chat history; every text part is redacted and the result goes through the import parser. */
 export function createTeamPackageExport(input: TeamExportInput): TeamExportResult {
   const team = teamOf(input.team);
-  const bots = input.bots.filter((bot) => !bot.hidden && !bot.builtIn && teamOf(bot.section) === team);
+  const bots = input.bots.filter((bot) => !bot.hidden && bot.builtIn === undefined && teamOf(bot.section) === team);
   if (!bots.length) throw new TeamExportError("Add a bot to this team before sharing it.");
   const skipped: TeamExportSkip[] = [...(input.skipped ?? [])];
 

@@ -46,7 +46,8 @@ export interface WidgetAction {
   payload?: JsonValue;
 }
 
-const THREAD_ID = /^[\w-]{1,128}$/;
+/** The shape of a thread id a widget action may name. */
+export const THREAD_ID = /^[\w-]{1,128}$/;
 
 /** `open_thread` is handled on the device. The ids are written by a bot: untrusted, and only their shape is checked here. */
 export function threadActionTarget(action: WidgetAction): { botId?: string; groupId?: string; threadId: string } | undefined {
@@ -314,8 +315,11 @@ const action: Reader = (raw, path) => {
   return out;
 };
 
+/** The longest url a widget action or image may carry. */
+export const WEB_URL_MAX = 2_000;
+
 function isWebUrl(value: unknown, protocols: string[]): value is string {
-  if (typeof value !== "string" || value.length > 2_000) return false;
+  if (typeof value !== "string" || value.length > WEB_URL_MAX) return false;
   try {
     return protocols.includes(new URL(value).protocol);
   } catch {

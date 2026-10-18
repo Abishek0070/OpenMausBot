@@ -19,7 +19,7 @@ import type { ModelSelection } from "../contracts.ts";
 import type { createApprovalModeSupport } from "../harness-capabilities.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
 import type { hostedModelPolicy } from "../hosted-models.ts";
-import { mausbotPatchRefusal } from "../mausbot.ts";
+import { isMausBot, mausbotPatchRefusal } from "../mausbot.ts";
 import { MAX_MCP_SERVERS, mcpServerNameError } from "../mcp-registry.ts";
 import type { MemoryUpkeep } from "../memory-upkeep.ts";
 import { profileSnapshot } from "../profile-revision.ts";
@@ -160,7 +160,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         }
       }
       if (body.color !== undefined && !isPickableColor(body.color) &&
-          !(body.color === MAUSBOT_COLOR && existingBot?.builtIn === "mausbot" && existingBot.color === MAUSBOT_COLOR)) {
+          !(body.color === MAUSBOT_COLOR && isMausBot(existingBot) && existingBot.color === MAUSBOT_COLOR)) {
         return json(res, 400, { error: "color must be one of the mascot colours" });
       }
       for (const key of ["unread", "cloudBackend", "color", "mascotExpression", "mascotBody", "pinned", "hidden"] as const) {

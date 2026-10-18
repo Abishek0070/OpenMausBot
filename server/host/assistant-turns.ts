@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { failure } from "../failure.ts";
+
 export const JOB_DEADLINE_MS = 15 * 60_000;
 const JOB_PREFIX = "mausbot-";
 
@@ -17,8 +19,6 @@ export interface AssistantTurnsDeps {
   deadlineMs?: number;
   setTimer?(run: () => void, ms: number): { cancel(): void };
 }
-
-const failure = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export function createAssistantTurns(deps: AssistantTurnsDeps) {
   const deadlineMs = deps.deadlineMs ?? JOB_DEADLINE_MS;

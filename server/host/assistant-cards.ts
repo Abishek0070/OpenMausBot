@@ -1,4 +1,4 @@
-import { WIDGET_LIMITS, type WidgetRoot } from "../../shared/widget.ts";
+import { WEB_URL_MAX, WIDGET_LIMITS, type WidgetRoot } from "../../shared/widget.ts";
 import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
 import { localDate } from "./assistant-plan.ts";
 import { validZone } from "./brief-recap.ts";
@@ -36,8 +36,6 @@ const summary = (value: string): string => oneLine(value, SUMMARY_MAX);
 /** The prep brief's cap, and the most lines it shows (each line is a node; a card holds 250). */
 export const BRIEF_MAX = WIDGET_LIMITS.markdown;
 const BRIEF_LINES = 120;
-/** isWebUrl in shared/widget.ts refuses a longer url; the constant there is private. */
-const WEB_URL_MAX = 2_000;
 
 const zoneOf = (timeZone: string | undefined): string => validZone(timeZone) ?? "UTC";
 // ICU puts a narrow no-break space before AM/PM; cards and tests read plain spaces.

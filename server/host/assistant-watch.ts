@@ -5,8 +5,9 @@ import { audienceWithin } from "../bot-visibility.ts";
 import { createAgentCard } from "../chat-widgets.ts";
 import { connectorCardText } from "../connector-card-text.ts";
 import type { RequestOutcome } from "../contracts.ts";
+import { failure } from "../failure.ts";
 import { buildNotification, type Notification } from "../notify.ts";
-import type { RequestAuth } from "../request-auth.ts";
+import { ownerOrAdmin, type RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
 import { cancelledCard, clip, clockTime, emailCard, prepCard, reminderCard, todayCard, updateCard, type BuiltCard, type TodayMeeting, type TodayMeetings } from "./assistant-cards.ts";
 import {
@@ -18,7 +19,6 @@ import {
   ASSISTANT_STATE_FILE, createAssistantState, MAX_ID_LENGTH, MAX_IN_FLIGHT, MAX_JUDGED, MAX_WORK_THREADS, type AssistantState, type AssistantStateStore, type MeetingRecord,
 } from "./assistant-state.ts";
 import { isAssistantJobThread, type JobResult } from "./assistant-turns.ts";
-import { presenceOwner } from "./chief-brief.ts";
 import { mausbotMayUse } from "./mausbot-intro.ts";
 
 const MINUTE = 60_000;
@@ -100,7 +100,6 @@ export interface AssistantWatchDeps {
   every?(run: () => void, ms: number): { cancel(): void };
 }
 
-const failure = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const kindOf = (item: string): string => item.slice(0, item.indexOf(":"));
 const subjectOf = (item: string): string => item.slice(item.indexOf(":") + 1);
 const triageItem = (batch: readonly EmailHeader[]): string => `triage:${Math.min(...batch.map((email) => email.at))}:${batch.map((email) => email.id).join(",")}`;
@@ -714,7 +713,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       if (!card || card.threadId !== threadId) return undefined;
       const row = deps.store.messagesFor(threadId).find((line: Message) => line.id === card.messageId);
       if (!row?.card) return undefined;
-      if (!presenceOwner(auth)) return "unavailable";
+      if (!ownerOrAdmin(auth)) return "unavailable";
       if (card.outcome) return card.outcome;
       const again = behavior === "answer" && message === RETRY;
       const verdict = again ? retryable(card.item) : "no";

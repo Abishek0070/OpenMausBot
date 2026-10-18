@@ -47,7 +47,7 @@ function messageText(message: Message): string {
 }
 
 export function createTeamBackup(store: Store, routines: Routine[], name: string): TeamBackup {
-  const backedUp = store.bots.filter((bot) => !bot.builtIn);
+  const backedUp = store.bots.filter((bot) => bot.builtIn === undefined);
   const botIds = new Set(backedUp.map((bot) => bot.id));
   const warnings: string[] = [];
   const history = (record: BotRecord | GroupRecord): BackupTask[] => {
@@ -93,7 +93,7 @@ export function createTeamBackup(store: Store, routines: Routine[], name: string
     };
   });
   const validRoutines = routines.filter((routine) => {
-    if (store.bot(routine.botId)?.builtIn) return false;
+    if (store.bot(routine.botId)?.builtIn !== undefined) return false;
     const room = groups.find((group) => group.key === routine.groupId);
     const valid = botIds.has(routine.botId) && (routine.target !== "room-goal" || (room && !room.dm && room.memberIds.includes(routine.botId)));
     if (!valid) warnings.push(`Routine “${routine.name}” is not included because its bot, room or coordinator was deleted.`);

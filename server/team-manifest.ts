@@ -261,7 +261,7 @@ function memberKey(name: string, index: number, used: Set<string>): string {
 export function createTeamManifest(team: ExportableTeam, bots: ExportableBot[]): TeamManifestV2 {
   const byId = new Map(bots.map((bot) => [bot.id, bot]));
   const usedKeys = new Set<string>();
-  const members = team.memberIds.filter((id) => !byId.get(id)?.builtIn).map((id, index): TeamManifestMember => {
+  const members = team.memberIds.filter((id) => byId.get(id)?.builtIn === undefined).map((id, index): TeamManifestMember => {
     const bot = byId.get(id);
     if (!bot) throw new Error(`Team member ${id} no longer exists`);
     const key = memberKey(bot.name, index, usedKeys);

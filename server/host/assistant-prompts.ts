@@ -1,3 +1,4 @@
+import { THREAD_ID } from "../../shared/widget.ts";
 import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
 import { clean, recordsBlock } from "../records-block.ts";
 import { BRIEF_MAX, clip, meetingWhen } from "./assistant-cards.ts";
@@ -5,7 +6,6 @@ import { CARDS_PER_TRIAGE } from "./assistant-plan.ts";
 import type { MeetingRecord } from "./assistant-state.ts";
 
 const PEOPLE_MAX = 30;
-const THREAD_ID = /^[\w-]{1,128}$/;
 const NEVER_ACT = "Never send, book, accept, decline, delete or change anything; you may read, and you may only draft.";
 
 export interface TurnTools {

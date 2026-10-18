@@ -6,10 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotVisibility, ThreadOwner } from "../bot-visibility.ts";
 import type { ModelSelection } from "../contracts.ts";
 import type { RoutineRun } from "../routines.ts";
+import { ownerOrAdmin } from "../request-auth.ts";
 import { Store, type Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { usageFileFor } from "../usage-ledger.ts";
-import { activePathTail, createChiefBrief, presenceOwner, type ChiefBriefDeps } from "./chief-brief.ts";
+import { activePathTail, createChiefBrief, type ChiefBriefDeps } from "./chief-brief.ts";
 
 const HOUR = 60 * 60_000;
 const NOW = Date.UTC(2026, 9, 15, 8, 0, 0);
@@ -98,13 +99,13 @@ function world(bots: WorldBot[], options: {
   return { brief, restart: start, store, messages, widgets, digestFor, branchesFor, usage, unreadThreads: () => unread, tick: (ms: number) => { now += ms; }, dataDir };
 }
 
-describe("presenceOwner", () => {
+describe("ownerOrAdmin", () => {
   it("is the desktop app or an admin session, never a service, a bot's shell or a guest", () => {
-    expect(presenceOwner({ kind: "loopback", scopes: ["admin", "client"] })).toBe(true);
-    expect(presenceOwner({ kind: "loopback", scopes: ["client"], trust: "service" })).toBe(false);
-    expect(presenceOwner({ kind: "loopback", scopes: ["admin", "client"], trust: "service" })).toBe(false);
-    expect(presenceOwner({ kind: "session", scopes: ["admin", "client"], via: "bearer", session: {} as never })).toBe(true);
-    expect(presenceOwner({ kind: "session", scopes: ["client"], via: "cookie", session: {} as never })).toBe(false);
+    expect(ownerOrAdmin({ kind: "loopback", scopes: ["admin", "client"] })).toBe(true);
+    expect(ownerOrAdmin({ kind: "loopback", scopes: ["client"], trust: "service" })).toBe(false);
+    expect(ownerOrAdmin({ kind: "loopback", scopes: ["admin", "client"], trust: "service" })).toBe(false);
+    expect(ownerOrAdmin({ kind: "session", scopes: ["admin", "client"], via: "bearer", session: {} as never })).toBe(true);
+    expect(ownerOrAdmin({ kind: "session", scopes: ["client"], via: "cookie", session: {} as never })).toBe(false);
   });
 });
 

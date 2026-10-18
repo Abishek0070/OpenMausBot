@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { WidgetRoot } from "../../shared/widget.ts";
 import { audienceWithin, roomFeeds, type ThreadOwner } from "../bot-visibility.ts";
 import { createAgentCard } from "../chat-widgets.ts";
+import { failure } from "../failure.ts";
 import { mainThread } from "../main-thread.ts";
 import type { RoutineRun } from "../routines.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "../store.ts";
@@ -10,8 +11,6 @@ import { readUsage } from "../usage-ledger.ts";
 import { buildRecap, type RecapDeps } from "./brief-recap.ts";
 import { createBriefState, type BriefState, type BriefStateStore } from "./brief-state.ts";
 import { createPresence, type PresenceSource } from "./presence.ts";
-
-export { ownerOrAdmin as presenceOwner } from "../request-auth.ts";
 
 export interface ChiefBriefDeps {
   store: Pick<Store, "bots" | "bot" | "group" | "tasks" | "messagesFor" | "messagesTail" | "appendMessage" | "patchMessage" | "patchTask" | "groupByThread">;
@@ -55,8 +54,6 @@ export function activePathTail(store: Pick<Store, "messagesTail">, threadId: str
   }
   return path.reverse();
 }
-
-const failure = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export function createChiefBrief(deps: ChiefBriefDeps) {
   const now = deps.now ?? Date.now;

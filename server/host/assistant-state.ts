@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 
 import { writeFileAtomic } from "../atomic.ts";
+import { failure } from "../failure.ts";
 
 export const ASSISTANT_STATE_FILE = "assistant.json";
 export const MAX_JUDGED = 500;
@@ -63,8 +64,6 @@ export interface AssistantStateStore {
   /** A key given as undefined is removed. */
   patch(changes: AssistantStatePatch): AssistantState;
 }
-
-const failure = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export function createAssistantState(file: string): AssistantStateStore {
   let state: AssistantState = { version: 1 };

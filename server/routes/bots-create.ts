@@ -129,7 +129,7 @@ export function createBotCreateRoutes(deps: BotCreateRouteDeps): RouteHandler {
       }
       if (hostedModels && !hostedModels.allows(selection)) return json(res, 400, { error: hostedModels.error() });
       // The capacity check sits beside the synchronous write, after every await.
-      if (store.bots.filter((bot) => !bot.builtIn).length >= MAX_WORKSPACE_BOTS) {
+      if (store.bots.filter((bot) => bot.builtIn === undefined).length >= MAX_WORKSPACE_BOTS) {
         return json(res, 409, { error: `this workspace is limited to ${MAX_WORKSPACE_BOTS} bots` });
       }
       // Apply the audience before creation can announce the bot to members.

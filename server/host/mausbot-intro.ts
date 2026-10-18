@@ -1,10 +1,10 @@
 import { connectorCardText } from "../connector-card-text.ts";
 import type { RequestOutcome } from "../contracts.ts";
+import { failure } from "../failure.ts";
 import { CHIEF_OF_STAFF_NAME, findMausBot, isMausBot } from "../mausbot.ts";
-import type { RequestAuth } from "../request-auth.ts";
+import { ownerOrAdmin, type RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Store } from "../store.ts";
 import type { BriefState, BriefStateStore } from "./brief-state.ts";
-import { presenceOwner } from "./chief-brief.ts";
 
 export const MAUSBOT_INTRO = "Hi, I'm MausBot, your assistant. Before each meeting I look up who you're meeting, why the meeting exists and what's still open, and suggest a next step. I point out the emails you shouldn't miss, remind you ten minutes before a call, and have a Today card ready when you start your day. I only draft: nothing is sent, booked or accepted without your OK.";
 export const MAUSBOT_NO_APPS = "Connected apps aren't set up on this server yet, so for now I can help you here in chat.";
@@ -36,8 +36,6 @@ export interface MausBotIntroDeps {
 }
 
 type Remembered = Pick<BriefState, "mausbotIntro" | "chiefOffer" | "connectOffer">;
-
-const failure = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export function mausbotMayUse(bot: Pick<BotRecord, "composio" | "connectorTools">, slug: string): boolean {
   return bot.composio !== false && (bot.connectorTools === undefined || Object.hasOwn(bot.connectorTools, slug));
@@ -160,7 +158,7 @@ export function createMausBotIntro(deps: MausBotIntroDeps) {
     if (!offer || offer.requestId !== requestId || offer.threadId !== threadId) return undefined;
     const row = deps.store.messagesFor(threadId).find((line) => line.id === offer.messageId);
     if (!row?.card) return undefined;
-    if (!presenceOwner(auth)) return "unavailable";
+    if (!ownerOrAdmin(auth)) return "unavailable";
     if (offer.answered) return offer.answered === "no" ? "rejected" : "answered";
     const choice = behavior === "answer" && typeof message === "string" && row.card.options.includes(message) ? message : NOT_NOW;
     if (choice !== NOT_NOW && visibleChief()) {
@@ -171,7 +169,7 @@ export function createMausBotIntro(deps: MausBotIntroDeps) {
     }
     let answered: "create" | "appoint" | "no" = "no";
     if (choice === CREATE_CHIEF) {
-      if (deps.store.bots.filter((bot) => !bot.builtIn).length >= deps.maxBots || !createChief()) return "unavailable";
+      if (deps.store.bots.filter((bot) => bot.builtIn === undefined).length >= deps.maxBots || !createChief()) return "unavailable";
       answered = "create";
     } else if (choice !== NOT_NOW) {
       if (!appointCandidate(offer.candidateId)) return "unavailable";

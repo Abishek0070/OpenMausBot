@@ -3,8 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { json, readBody } from "../harness/http.ts";
-import { presenceOwner } from "../host/chief-brief.ts";
-import type { RequestAuth } from "../request-auth.ts";
+import { ownerOrAdmin, type RequestAuth } from "../request-auth.ts";
 import { createPresenceRoutes } from "./presence.ts";
 import { dispatchRoutes } from "./table.ts";
 
@@ -68,13 +67,13 @@ describe("presence route", () => {
 
   it("with the real owner rule, a service-trust loopback caller or a guest changes nothing and the desktop app counts", async () => {
     for (const auth of [SERVICE, GUEST]) {
-      const { deps, base } = await serve(auth, presenceOwner);
+      const { deps, base } = await serve(auth, ownerOrAdmin);
       const res = await post(base, { source: "desktop", timeZone: "Asia/Kolkata" });
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ ok: true, returned: false });
       expect(deps.active).not.toHaveBeenCalled();
     }
-    const { deps, base } = await serve(OWNER, presenceOwner);
+    const { deps, base } = await serve(OWNER, ownerOrAdmin);
     expect((await post(base, { source: "desktop" })).status).toBe(200);
     expect(deps.active).toHaveBeenCalledWith("desktop", undefined);
   });
