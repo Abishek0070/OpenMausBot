@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { BRIEF_MAX } from "./assistant-cards.ts";
 import type { CalendarEvent } from "../assistant-sources.ts";
-import { clean, jobMarker, lineReply, prepPrompt, prepReply, RECORDS_END, recordsBlock, repeatPrompt, triagePrompt, triageReply, updatePrompt } from "./assistant-prompts.ts";
+import { clean, RECORDS_END, recordsBlock } from "../records-block.ts";
+import { jobMarker, lineReply, prepPrompt, prepReply, repeatPrompt, triagePrompt, triageReply, updatePrompt } from "./assistant-prompts.ts";
 
 const NOW = Date.UTC(2026, 9, 17, 11, 0, 0);
 const event: CalendarEvent = {
