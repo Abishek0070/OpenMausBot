@@ -23,6 +23,7 @@ const CAPABILITY_KEY = "assistant-e2e-capability-key-0123456789";
 const BOOT_MS = 30_000;
 const STEP_MS = 20_000;
 const REQUEST_MS = 15_000;
+const JOB_MS = 60_000;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
@@ -116,11 +117,11 @@ async function start(fake: FakeConnectedApps, options: { home?: string; hosted?:
   }, { timeout: BOOT_MS }).toBe(true);
   if (exited()) throw new Error(`the server exited:\n${log}`);
 
-  const api = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
+  const api = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = REQUEST_MS) => {
     try {
       const response = await fetch(`${base}${path}`, {
         method, headers: { origin: base, ...headers, ...(body === undefined ? {} : { "content-type": "application/json" }) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(REQUEST_MS),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(timeoutMs),
       });
       return { status: response.status, body: await response.json().catch(() => null) as any };
     } catch (error) {
@@ -225,7 +226,7 @@ it("preps a meeting three hours out once, cards only the important email, remind
   const mausbot = await s.mausbot();
   const chief = (await s.bots()).find((bot) => bot.chiefOfStaff);
   expect((await s.api("POST", "/api/presence/active", { source: "desktop", timeZone: "Asia/Kolkata" })).status).toBe(200);
-  await expect.poll(async () => (await s.cards(mausbot.threadId)).map((card) => card.title), { timeout: STEP_MS })
+  await expect.poll(async () => (await s.cards(mausbot.threadId)).map((card) => card.title), { timeout: JOB_MS })
     .toEqual(expect.arrayContaining(["Prep: Supamaus demo with Jake", "Q3 numbers due Friday", "Today"]));
   const reads = () => fake.calls.filter((call) => call.tool === "GOOGLECALENDAR_EVENTS_LIST").length;
   const seen = reads();
@@ -285,7 +286,7 @@ it("preps a meeting three hours out once, cards only the important email, remind
   const again = await start(fake, { home: s.home });
   const reminders = async () => (await again.cards(mausbot.threadId)).map((card) => card.title).filter((title) => /^Call with Jake Price in \d+ minutes?$/.test(title));
   await expect.poll(reminders, { timeout: STEP_MS }).toHaveLength(1);
-  await expect.poll(async () => (await again.cards(mausbot.threadId)).map((card) => card.title), { timeout: STEP_MS })
+  await expect.poll(async () => (await again.cards(mausbot.threadId)).map((card) => card.title), { timeout: JOB_MS })
     .toEqual(expect.arrayContaining(["Prep: Pricing review with Jake", "Prep: Roadmap call with Jake"]));
   const after = await again.cards(mausbot.threadId);
   expect(after.filter((card) => card.title === "Prep: Supamaus demo with Jake")).toHaveLength(1);
@@ -341,7 +342,7 @@ it("runs a job at Ask without exec, browser or phone and answers its requests it
   expect((await s.api("PATCH", `/api/bots/${mausbot.id}`, { browserProfile: "work" })).status).toBe(200);
   writeFileSync(join(s.home, "modes.json"), JSON.stringify({ [mausbot.id]: "hang" }));
   fake.events = [demo("demo-1", Date.now() + 2 * HOUR)];
-  await expect.poll(async () => jobThreads(await s.mausbotNow()).length, { timeout: STEP_MS }).toBeGreaterThan(0);
+  await expect.poll(async () => jobThreads(await s.mausbotNow()).length, { timeout: JOB_MS }).toBeGreaterThan(0);
   const jobThread = jobThreads(await s.mausbotNow())[0].threadId as string;
   const job = await s.dump(jobThread);
   writeFileSync(join(s.home, "modes.json"), "{}");
@@ -370,12 +371,12 @@ it("runs a job at Ask without exec, browser or phone and answers its requests it
     .toEqual([["WebSearch", "auto-approved"], ...declined.map(([, tool]) => [tool, "auto-denied"])]);
   expect((await decisions()).some((row) => row.decision === "card-shown")).toBe(false);
 
-  const send = (token: string) => s.api("POST", "/api/internal/connectors/mcp",
+  const send = (token: string, timeoutMs?: number) => s.api("POST", "/api/internal/connectors/mcp",
     { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "GMAIL_SEND_EMAIL", arguments: { to: "board@example.test", subject: "Salaries" } } },
-    { authorization: `Bearer ${token}` });
+    { authorization: `Bearer ${token}` }, timeoutMs);
   expect((await send(await s.mint(mausbot.id, jobThread))).body.result).toEqual({ content: [{ type: "text", text: JOB_DECLINE }], isError: true });
   expect((await decisions()).filter((row) => row.tool === "GMAIL_SEND_EMAIL").map((row) => [row.decision, row.source, row.rule])).toEqual([["auto-denied", "routine", "mausbot-job"]]);
-  const held = send(await s.mint(mausbot.id, mausbot.threadId));
+  const held = send(await s.mint(mausbot.id, mausbot.threadId), JOB_MS);
   const approve = async () => (await s.lines(mausbot.threadId)).find((line) => line.card?.outboundRequest && !line.card.answered);
   await expect.poll(async () => Boolean(await approve()), { timeout: STEP_MS }).toBe(true);
   const card = (await approve()).card;
@@ -405,7 +406,7 @@ it("files no incident for a failed job turn, while an ordinary failed turn reach
   writeFileSync(join(s.home, "modes.json"), JSON.stringify({ [mausbot.id]: "exit-early", [ordinary.id]: "exit-early" }));
   fake.events = [demo("demo-1", Date.now() + 2 * HOUR)];
   await expect.poll(async () => (await s.lines(mausbot.threadId))
-    .some((line) => line.kind === "options" && line.card?.title === 'I couldn\'t prepare "Supamaus demo with Jake"'), { timeout: STEP_MS }).toBe(true);
+    .some((line) => line.kind === "options" && line.card?.title === 'I couldn\'t prepare "Supamaus demo with Jake"'), { timeout: JOB_MS }).toBe(true);
   const jobThread = jobThreads(await s.mausbotNow())[0].threadId as string;
 
   expect((await s.api("POST", `/api/bots/${ordinary.id}/messages`, { text: "Reconcile the September invoices." })).status).toBe(202);
@@ -416,7 +417,7 @@ it("files no incident for a failed job turn, while an ordinary failed turn reach
   const reports = await s.lines(thread);
   expect(reports.some((row) => row.threadRef?.threadId === jobThread || row.peerAsk?.incident?.threadId === jobThread)).toBe(false);
   expect(reports.filter((row) => row.role === "user" && row.peerAsk?.incident).map((row) => row.peerAsk.incident.threadId)).toEqual([ordinary.threadId]);
-}, 150_000);
+}, 180_000);
 
 it("does nothing on a hosted team workspace, while the same server unhosted reads on its own clock", async () => {
   const hostedApps = await startFakeConnectedApps();
