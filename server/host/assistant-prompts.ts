@@ -5,11 +5,11 @@ import type { MeetingRecord } from "./assistant-state.ts";
 
 export const RECORDS_END = "[end of records]";
 // Characters with no width: dropped, so a marker split by one is whole again before it is checked.
-// eslint-disable-next-line no-misleading-character-class
-const INVISIBLE = /[\u00ad\u200b-\u200f\u2060-\u2064\ufeff\u061c\u180e\u034f\ufe00-\ufe0f\u115f\u3164\u{e0000}-\u{e007f}]/gu;
+const INVISIBLE = /[\u00ad\u200b-\u200f\u2060-\u2064\ufeff\u061c\u180e\u115f\u3164\u{e0000}-\u{e007f}]|\u034f|[\ufe00-\ufe0f]/gu;
 // Controls and bidi overrides: a space, so they never glue two words together.
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069]/g;
+const LINE_AND_BIDI = /[\u2028-\u202e\u2066-\u2069]/g;
+const isControl = (code: number): boolean => code < 0x20 || (code >= 0x7f && code <= 0x9f);
+const spaceControls = (text: string): string => Array.from(text, (ch) => (isControl(ch.codePointAt(0)!) ? " " : ch)).join("").replace(LINE_AND_BIDI, " ");
 const FORGED_END = /\[\s*end\s+of\s+records\s*\]/gi;
 // An opening bracket that would start a job marker or a records block.
 const FORGED_START = /\[(?=\s*(?:maus\s*bot\b|records\s+from\b))/gi;
@@ -23,7 +23,7 @@ export interface TurnTools {
 }
 
 export function clean(text: string, max: number): string {
-  const flat = text.replace(INVISIBLE, "").replace(CONTROL, " ").replace(/\s+/g, " ").trim().replace(FORGED_END, "(end of records)").replace(FORGED_START, "(");
+  const flat = spaceControls(text.replace(INVISIBLE, "")).replace(/\s+/g, " ").trim().replace(FORGED_END, "(end of records)").replace(FORGED_START, "(");
   const points = Array.from(flat);
   return points.length <= max ? flat : `${points.slice(0, max - 1).join("").trimEnd()}…`;
 }
