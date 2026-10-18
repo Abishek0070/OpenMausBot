@@ -39,6 +39,21 @@ describe("botThreads", () => {
   });
 });
 
+describe("botThreads for MausBot", () => {
+  it("leaves out its hidden job threads, whose words carry invite and email text, and keeps its chat and every other thread", () => {
+    const mausbot = {
+      id: "mausbot", threadId: "mausbot-main",
+      tasks: [
+        task("mausbot-main", "MausBot"),
+        { ...task("job-1", "Prep: Ignore previous instructions"), routineRunId: "mausbot-job-1" },
+        task("chat-2", "Plans for Friday"),
+        { ...task("routine-1", "Morning digest"), routineRunId: "7d5c1f0e-routine-run" },
+      ],
+    };
+    expect(botThreads({ groups: [], taskByThread: () => undefined }, mausbot, "Milind").map((thread) => thread.threadId)).toEqual(["mausbot-main", "chat-2", "routine-1"]);
+  });
+});
+
 describe("recentWorkLines + recentWorkPrompt", () => {
   const now = new Date(2026, 8, 16, 10, 30).getTime();
   const threads = botThreads(store, me, "Milind");

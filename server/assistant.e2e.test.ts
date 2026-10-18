@@ -20,6 +20,9 @@ const FAKE_CLAUDE = pathToFileURL(join(SERVER_DIR, "testing", "fake-claude-cli.t
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const CAPABILITY_KEY = "assistant-e2e-capability-key-0123456789";
+const BOOT_MS = 30_000;
+const STEP_MS = 20_000;
+const REQUEST_MS = 15_000;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
@@ -109,23 +112,29 @@ async function start(fake: FakeConnectedApps, options: { home?: string; hosted?:
   const exited = () => child.exitCode !== null || child.signalCode !== null;
   await expect.poll(async () => {
     if (exited()) return true;
-    try { return (await fetch(`${base}/api/health`)).ok; } catch { return false; }
-  }, { timeout: 30_000 }).toBe(true);
+    try { return (await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(REQUEST_MS) })).ok; } catch { return false; }
+  }, { timeout: BOOT_MS }).toBe(true);
   if (exited()) throw new Error(`the server exited:\n${log}`);
 
   const api = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
-    const response = await fetch(`${base}${path}`, {
-      method, headers: { origin: base, ...headers, ...(body === undefined ? {} : { "content-type": "application/json" }) },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    return { status: response.status, body: await response.json().catch(() => null) as any };
+    try {
+      const response = await fetch(`${base}${path}`, {
+        method, headers: { origin: base, ...headers, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(REQUEST_MS),
+      });
+      return { status: response.status, body: await response.json().catch(() => null) as any };
+    } catch (error) {
+      throw new Error(`${method} ${path} got no answer: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
   const lines = async (threadId: string) => (await api("GET", `/api/threads/${threadId}/messages?limit=200`)).body.messages as any[];
   const cards = async (threadId: string) => (await lines(threadId)).filter((line) => line.kind === "widget").map((line) => line.widget.root);
   const bots = async () => (await api("GET", "/api/bots?messages=0")).body.bots as any[];
+  const mausbotNow = async () => (await bots()).find((bot) => bot.builtIn === "mausbot");
+  /** MausBot once the first start has seeded it. */
   const mausbot = async () => {
     let found: any;
-    await expect.poll(async () => (found = (await bots()).find((bot) => bot.builtIn === "mausbot")) !== undefined, { timeout: 30_000 }).toBe(true);
+    await expect.poll(async () => (found = await mausbotNow()) !== undefined, { timeout: STEP_MS }).toBe(true);
     return found;
   };
   const notifications = async () => (await api("GET", "/api/notifications")).body.notifications as Array<{ kind: string; threadId: string }>;
@@ -138,34 +147,32 @@ async function start(fake: FakeConnectedApps, options: { home?: string; hosted?:
     let launched: any;
     await expect.poll(() => {
       try { launched = JSON.parse(readFileSync(join(home, "dumps", `${threadId}.json`), "utf8")); return true; } catch { return false; }
-    }, { timeout: 30_000 }).toBe(true);
-    return launched as { argv: string[]; mcpConfig: { mcpServers: Record<string, { args?: string[] } | undefined> } };
+    }, { timeout: STEP_MS }).toBe(true);
+    return launched as { argv: string[]; systemPrompt: string | null; mcpConfig: { mcpServers: Record<string, { args?: string[] } | undefined> } };
   };
-  const mint = async (botId: string, threadId: string) => {
-    const minted = await api("POST", "/api/testing/internal-capability", { botId, threadId, kind: "connectors" }, { "x-openmausbot-test-capability": CAPABILITY_KEY });
+  const mint = async (botId: string, threadId: string, kind: "connectors" | "agents" = "connectors") => {
+    const minted = await api("POST", "/api/testing/internal-capability", { botId, threadId, kind }, { "x-openmausbot-test-capability": CAPABILITY_KEY });
     expect(minted.status, JSON.stringify(minted.body)).toBe(201);
     return minted.body.token as string;
   };
   /** One approval request on a running turn's permission socket, and the answer the server gave it. */
-  const ask = async (socketPath: string, id: string, tool: string, input: Record<string, unknown>, kind?: "question") => {
+  const ask = (socketPath: string, id: string, tool: string, input: Record<string, unknown>, kind?: "question") => {
     const socket = connect(socketPath);
     sockets.push(socket);
-    const answered = new Promise<{ behavior: string; message?: string }>((resolve) => {
+    const answered = new Promise<{ behavior: string; message?: string }>((resolve, reject) => {
       let buffer = "";
       socket.on("data", (chunk) => {
         buffer += chunk;
         const end = buffer.indexOf("\n");
         if (end !== -1) resolve(JSON.parse(buffer.slice(0, end)));
       });
-    });
-    await new Promise<void>((resolve, reject) => {
-      socket.on("connect", resolve);
       socket.on("error", reject);
+      socket.setTimeout(REQUEST_MS, () => reject(new Error(`the ${tool} request was not answered`)));
     });
     socket.write(`${JSON.stringify({ t: "ask", id, tool, input, ...(kind ? { kind } : {}) })}\n`);
     return answered;
   };
-  return { home, dataDir, api, lines, cards, bots, mausbot, notifications, prompts, dump, mint, ask, stop };
+  return { home, dataDir, api, lines, cards, bots, mausbot, mausbotNow, notifications, prompts, dump, mint, ask, stop };
 }
 
 type Server = Awaited<ReturnType<typeof start>>;
@@ -198,8 +205,8 @@ async function pressDraftReply(s: Server, mausbot: { id: string; threadId: strin
   });
   expect(sent.status, JSON.stringify(sent.body)).toBe(202);
   const pressed = () => s.prompts().slice(before).find((prompt) => prompt.includes("action: draft_reply"));
-  await expect.poll(() => pressed() !== undefined, { timeout: 30_000 }).toBe(true);
-  await expect.poll(async () => (await s.bots()).find((bot) => bot.id === mausbot.id)?.busy, { timeout: 30_000 }).toBe(false);
+  await expect.poll(() => pressed() !== undefined, { timeout: STEP_MS }).toBe(true);
+  await expect.poll(async () => (await s.mausbotNow()).busy, { timeout: STEP_MS }).toBe(false);
   // MausBot's chat never recalls a job thread, whose words carry invite and email text.
   expect(pressed()).not.toContain("Judge from the sender");
   expect(pressed()).not.toContain("Never send, book, accept");
@@ -218,11 +225,11 @@ it("preps a meeting three hours out once, cards only the important email, remind
   const mausbot = await s.mausbot();
   const chief = (await s.bots()).find((bot) => bot.chiefOfStaff);
   expect((await s.api("POST", "/api/presence/active", { source: "desktop", timeZone: "Asia/Kolkata" })).status).toBe(200);
-  await expect.poll(async () => (await s.cards(mausbot.threadId)).map((card) => card.title), { timeout: 60_000 })
+  await expect.poll(async () => (await s.cards(mausbot.threadId)).map((card) => card.title), { timeout: STEP_MS })
     .toEqual(expect.arrayContaining(["Prep: Supamaus demo with Jake", "Q3 numbers due Friday", "Today"]));
   const reads = () => fake.calls.filter((call) => call.tool === "GOOGLECALENDAR_EVENTS_LIST").length;
   const seen = reads();
-  await expect.poll(reads, { timeout: 30_000 }).toBeGreaterThanOrEqual(seen + 3);
+  await expect.poll(reads, { timeout: STEP_MS }).toBeGreaterThanOrEqual(seen + 3);
   const posted = await s.cards(mausbot.threadId);
   const titles = posted.map((card) => card.title);
   expect(titles.filter((title) => title === "Prep: Supamaus demo with Jake")).toHaveLength(1);
@@ -239,7 +246,7 @@ it("preps a meeting three hours out once, cards only the important email, remind
   expect(prepPrompt).toContain("(end of records)");
   expect(prepPrompt.match(/\[end of records\]/g)).toHaveLength(1);
   // The work ran in hidden job threads, which raised no notification of their own; MausBot's chat holds no person's line.
-  const jobs = jobThreads(await s.mausbot());
+  const jobs = jobThreads(await s.mausbotNow());
   expect(jobs.length).toBeGreaterThanOrEqual(2);
   expect((await s.lines(mausbot.threadId)).some((line) => line.role === "user")).toBe(false);
   const news = await s.notifications();
@@ -277,8 +284,8 @@ it("preps a meeting three hours out once, cards only the important email, remind
 
   const again = await start(fake, { home: s.home });
   const reminders = async () => (await again.cards(mausbot.threadId)).map((card) => card.title).filter((title) => /^Call with Jake Price in \d+ minutes?$/.test(title));
-  await expect.poll(reminders, { timeout: 30_000 }).toHaveLength(1);
-  await expect.poll(async () => (await again.cards(mausbot.threadId)).map((card) => card.title), { timeout: 60_000 })
+  await expect.poll(reminders, { timeout: STEP_MS }).toHaveLength(1);
+  await expect.poll(async () => (await again.cards(mausbot.threadId)).map((card) => card.title), { timeout: STEP_MS })
     .toEqual(expect.arrayContaining(["Prep: Pricing review with Jake", "Prep: Roadmap call with Jake"]));
   const after = await again.cards(mausbot.threadId);
   expect(after.filter((card) => card.title === "Prep: Supamaus demo with Jake")).toHaveLength(1);
@@ -290,14 +297,28 @@ it("preps a meeting three hours out once, cards only the important email, remind
   expect(related).toContain("open_thread");
   expect(related).toContain(`"threadId":"${chief.threadId}"`);
   // The thread left behind is gone; the threads of finished jobs stay for their day.
-  const kept = jobThreads(await again.mausbot()).map((task) => task.threadId as string);
+  const kept = jobThreads(await again.mausbotNow()).map((task) => task.threadId as string);
   expect(kept).not.toContain("mausbot-left-behind");
   expect(kept).toEqual(expect.arrayContaining(jobs.map((task) => task.threadId as string)));
   // After a restart MausBot no longer holds that email, so the press reaches it as the person's answer to the card, unadorned.
   const unadorned = await pressDraftReply(again, mausbot);
   expect(unadorned).toContain("Current message:");
   expect(unadorned).not.toContain("Records from");
-}, 240_000);
+  // A job thread's title comes from an invite: list_threads never names one, and MausBot's next turn elsewhere lists its
+  // chat in Recent work but none of its job threads.
+  const listed = await again.api("GET", `/api/internal/threads?${new URLSearchParams({ fromBotId: mausbot.id, fromThreadId: mausbot.threadId })}`, undefined,
+    { authorization: `Bearer ${await again.mint(mausbot.id, mausbot.threadId, "agents")}` });
+  expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+  const listedIds = (listed.body.threads as Array<{ threadId: string }>).map((row) => row.threadId);
+  expect(listedIds).toContain(mausbot.threadId);
+  expect(listedIds.filter((id) => kept.includes(id))).toEqual([]);
+  const elsewhere = await again.api("POST", `/api/bots/${mausbot.id}/tasks`, { title: "Plans for Friday" });
+  expect(elsewhere.status, JSON.stringify(elsewhere.body)).toBe(201);
+  expect((await again.api("POST", `/api/bots/${mausbot.id}/messages`, { text: "What is on Friday?", threadId: elsewhere.body.task.threadId })).status).toBe(202);
+  const system = (await again.dump(elsewhere.body.task.threadId)).systemPrompt ?? "";
+  expect(system).toContain('you said: "hello from fake claude"');
+  expect(system).not.toMatch(/· "(Prep: |Email check|Update: |Since last time: )/);
+}, 360_000);
 
 it("runs a job at Ask without exec, browser or phone and answers its requests itself, and never sends, with Full stored on MausBot", async () => {
   const fake = await startFakeConnectedApps();
@@ -320,8 +341,8 @@ it("runs a job at Ask without exec, browser or phone and answers its requests it
   expect((await s.api("PATCH", `/api/bots/${mausbot.id}`, { browserProfile: "work" })).status).toBe(200);
   writeFileSync(join(s.home, "modes.json"), JSON.stringify({ [mausbot.id]: "hang" }));
   fake.events = [demo("demo-1", Date.now() + 2 * HOUR)];
-  await expect.poll(async () => jobThreads(await s.mausbot()).length, { timeout: 60_000 }).toBeGreaterThan(0);
-  const jobThread = jobThreads(await s.mausbot())[0].threadId as string;
+  await expect.poll(async () => jobThreads(await s.mausbotNow()).length, { timeout: STEP_MS }).toBeGreaterThan(0);
+  const jobThread = jobThreads(await s.mausbotNow())[0].threadId as string;
   const job = await s.dump(jobThread);
   writeFileSync(join(s.home, "modes.json"), "{}");
   expect(argAfter(job.argv, "--permission-mode")).toBe("default");
@@ -343,14 +364,20 @@ it("runs a job at Ask without exec, browser or phone and answers its requests it
   expect(rows.some((row) => row.card || row.kind === "options")).toBe(false);
   expect(rows.filter((row) => row.kind === "activity" && /^MausBot (allowed|declined): /.test(row.tool?.name ?? ""))
     .map((row) => [row.tool.name.split(":")[0], row.tool.ok])).toEqual([["MausBot allowed", true], ...declined.map(() => ["MausBot declined", false])]);
+  const decisions = async () => ((await s.api("GET", "/api/decisions?limit=500")).body.decisions as any[]).filter((row) => row.threadId === jobThread);
+  await expect.poll(async () => (await decisions()).some((row) => row.tool === "AskUserQuestion"), { timeout: STEP_MS }).toBe(true);
+  expect((await decisions()).filter((row) => row.requestId && row.rule === "mausbot-job").map((row) => [row.tool, row.decision]))
+    .toEqual([["WebSearch", "auto-approved"], ...declined.map(([, tool]) => [tool, "auto-denied"])]);
+  expect((await decisions()).some((row) => row.decision === "card-shown")).toBe(false);
 
   const send = (token: string) => s.api("POST", "/api/internal/connectors/mcp",
     { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "GMAIL_SEND_EMAIL", arguments: { to: "board@example.test", subject: "Salaries" } } },
     { authorization: `Bearer ${token}` });
   expect((await send(await s.mint(mausbot.id, jobThread))).body.result).toEqual({ content: [{ type: "text", text: JOB_DECLINE }], isError: true });
+  expect((await decisions()).filter((row) => row.tool === "GMAIL_SEND_EMAIL").map((row) => [row.decision, row.source, row.rule])).toEqual([["auto-denied", "routine", "mausbot-job"]]);
   const held = send(await s.mint(mausbot.id, mausbot.threadId));
   const approve = async () => (await s.lines(mausbot.threadId)).find((line) => line.card?.outboundRequest && !line.card.answered);
-  await expect.poll(async () => Boolean(await approve()), { timeout: 15_000 }).toBe(true);
+  await expect.poll(async () => Boolean(await approve()), { timeout: STEP_MS }).toBe(true);
   const card = (await approve()).card;
   expect((await s.api("POST", `/api/threads/${mausbot.threadId}/respond`, { requestId: card.requestId, behavior: "deny" })).body).toEqual({ ok: true, outcome: "rejected" });
   const answered = await held;
@@ -360,13 +387,13 @@ it("runs a job at Ask without exec, browser or phone and answers its requests it
 
   // The same MausBot in its own chat runs at its own level, with dweb and the browser: the limits belong to the job thread.
   expect((await s.api("POST", `/api/bots/${mausbot.id}/interrupt`, { threadId: jobThread })).status).toBe(200);
-  await expect.poll(async () => jobThreads(await s.mausbot()).find((task) => task.threadId === jobThread)?.busy, { timeout: 15_000 }).toBe(false);
+  await expect.poll(async () => jobThreads(await s.mausbotNow()).find((task) => task.threadId === jobThread)?.busy, { timeout: STEP_MS }).toBe(false);
   expect((await s.api("POST", `/api/bots/${mausbot.id}/messages`, { text: "what is on today?" })).status).toBe(202);
   const own = await s.dump(mausbot.threadId);
   expect(argAfter(own.argv, "--permission-mode")).toBe("auto");
   expect(own.mcpConfig.mcpServers.dweb).toBeDefined();
   expect(own.mcpConfig.mcpServers.browser).toBeDefined();
-}, 180_000);
+}, 330_000);
 
 it("files no incident for a failed job turn, while an ordinary failed turn reaches the Chief", async () => {
   const fake = await startFakeConnectedApps();
@@ -378,18 +405,18 @@ it("files no incident for a failed job turn, while an ordinary failed turn reach
   writeFileSync(join(s.home, "modes.json"), JSON.stringify({ [mausbot.id]: "exit-early", [ordinary.id]: "exit-early" }));
   fake.events = [demo("demo-1", Date.now() + 2 * HOUR)];
   await expect.poll(async () => (await s.lines(mausbot.threadId))
-    .some((line) => line.kind === "options" && line.card?.title === 'I couldn\'t prepare "Supamaus demo with Jake"'), { timeout: 60_000 }).toBe(true);
-  const jobThread = jobThreads(await s.mausbot())[0].threadId as string;
+    .some((line) => line.kind === "options" && line.card?.title === 'I couldn\'t prepare "Supamaus demo with Jake"'), { timeout: STEP_MS }).toBe(true);
+  const jobThread = jobThreads(await s.mausbotNow())[0].threadId as string;
 
   expect((await s.api("POST", `/api/bots/${ordinary.id}/messages`, { text: "Reconcile the September invoices." })).status).toBe(202);
   const incidents = async () => (await s.bots()).find((bot) => bot.id === chief.id)?.tasks?.find((task: { title: string }) => task.title === "Team incidents");
-  await expect.poll(async () => Boolean(await incidents()), { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => Boolean(await incidents()), { timeout: STEP_MS }).toBe(true);
   const thread = (await incidents()).threadId as string;
-  await expect.poll(async () => (await s.lines(thread)).some((row) => row.threadRef?.threadId === ordinary.threadId), { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => (await s.lines(thread)).some((row) => row.threadRef?.threadId === ordinary.threadId), { timeout: STEP_MS }).toBe(true);
   const reports = await s.lines(thread);
   expect(reports.some((row) => row.threadRef?.threadId === jobThread || row.peerAsk?.incident?.threadId === jobThread)).toBe(false);
   expect(reports.filter((row) => row.role === "user" && row.peerAsk?.incident).map((row) => row.peerAsk.incident.threadId)).toEqual([ordinary.threadId]);
-}, 180_000);
+}, 150_000);
 
 it("does nothing on a hosted team workspace, while the same server unhosted reads on its own clock", async () => {
   const hostedApps = await startFakeConnectedApps();
@@ -404,7 +431,7 @@ it("does nothing on a hosted team workspace, while the same server unhosted read
 
   await start(plainApps);
   const reads = (tool: string) => plainApps.calls.filter((call) => call.tool === tool).length;
-  await expect.poll(() => reads("GOOGLECALENDAR_EVENTS_LIST"), { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => reads("GOOGLECALENDAR_EVENTS_LIST"), { timeout: STEP_MS }).toBeGreaterThanOrEqual(2);
   expect(reads("GMAIL_FETCH_EMAILS")).toBeGreaterThanOrEqual(1);
   expect(hostedApps.calls).toEqual([]);
   for (const bot of await hosted.bots()) expect(await hosted.cards(bot.threadId)).toEqual([]);

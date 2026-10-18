@@ -1,5 +1,6 @@
 import { chiefTidies } from "../chief-of-staff.ts";
 import type { Coordinator } from "../coordinator.ts";
+import { isAssistantJobThread } from "../host/assistant-turns.ts";
 import { reachablePeers } from "../peer-roster.ts";
 import type { BotRecord, Store, TaskRecord } from "../store.ts";
 import { PASS, type RouteHandler } from "./table.ts";
@@ -28,6 +29,7 @@ export function createInternalThreadRoutes(deps: {
   const { store, coordinator, from, fromThreadId } = deps;
   return async ({ res, path, method, json }) => {
     // list_threads: the caller's own threads plus, on reachable peers, only threads it opened; a peer's other threads are its own business.
+    // Security invariant: a MausBot job thread's title comes from an invite, so it is never listed.
     if (method === "GET" && path === "/api/internal/threads") {
       if (!deps.ownsThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source conversation does not belong to sender" });
@@ -43,7 +45,7 @@ export function createInternalThreadRoutes(deps: {
         return "idle" as const;
       };
       for (const task of store.tasks(from.id)) {
-        if (!deps.shown(task.threadId)) continue;
+        if (!deps.shown(task.threadId) || isAssistantJobThread(task.routineRunId)) continue;
         rows.push({
           threadId: task.threadId, botId: from.id, botName: from.name, title: task.title,
           state: stateOf(from, task), unread: task.unread === true, openedAt: task.openedBy?.at ?? task.createdAt,
@@ -53,7 +55,7 @@ export function createInternalThreadRoutes(deps: {
       for (const peer of reachablePeers(store.bots, from)) {
         for (const task of store.tasks(peer.id)) {
           const opener = task.openedBy;
-          if (!opener || !deps.shown(task.threadId)) continue;
+          if (!opener || !deps.shown(task.threadId) || isAssistantJobThread(task.routineRunId)) continue;
           const mine = opener.botId === from.id;
           if (!mine && !chiefTidies(from, task, store.bot(opener.botId))) continue;
           rows.push({

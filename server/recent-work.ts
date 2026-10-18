@@ -1,3 +1,4 @@
+import { isAssistantJobThread } from "./host/assistant-turns.ts";
 import { latestSaidByBot, type ThreadLatest } from "./message-db.ts";
 import type { BotRecord, GroupRecord, TaskRecord } from "./store.ts";
 
@@ -19,6 +20,7 @@ export interface RecentWorkStore {
   taskByThread(botId: string, threadId: string): TaskRecord | undefined;
 }
 
+/** Security invariant: a MausBot job thread holds invite and email text, so it is never one of the bot's threads here. */
 export function botThreads(store: RecentWorkStore, bot: Pick<BotRecord, "id" | "threadId" | "tasks">, userName: string): BotThread[] {
   const out: BotThread[] = [];
   const seen = new Set<string>();
@@ -28,8 +30,9 @@ export function botThreads(store: RecentWorkStore, bot: Pick<BotRecord, "id" | "
     out.push(thread);
   };
   const direct = `1:1 with ${userName}`;
-  add({ threadId: bot.threadId, where: direct, title: store.taskByThread(bot.id, bot.threadId)?.title ?? null, private: true });
-  for (const task of bot.tasks ?? []) add({ threadId: task.threadId, where: direct, title: task.title, private: true });
+  const main = store.taskByThread(bot.id, bot.threadId);
+  if (!isAssistantJobThread(main?.routineRunId)) add({ threadId: bot.threadId, where: direct, title: main?.title ?? null, private: true });
+  for (const task of bot.tasks ?? []) if (!isAssistantJobThread(task.routineRunId)) add({ threadId: task.threadId, where: direct, title: task.title, private: true });
   for (const group of store.groups) {
     if (!group.memberIds.includes(bot.id)) continue;
     const where = `room ${JSON.stringify(group.name)}`;
