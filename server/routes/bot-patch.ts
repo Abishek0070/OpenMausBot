@@ -160,7 +160,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         }
       }
       if (body.color !== undefined && !isPickableColor(body.color) &&
-          !(body.color === MAUSBOT_COLOR && isMausBot(existingBot) && existingBot.color === MAUSBOT_COLOR)) {
+          !(body.color === MAUSBOT_COLOR && isMausBot(existingBot) && existingBot?.color === MAUSBOT_COLOR)) {
         return json(res, 400, { error: "color must be one of the mascot colours" });
       }
       for (const key of ["unread", "cloudBackend", "color", "mascotExpression", "mascotBody", "pinned", "hidden"] as const) {
