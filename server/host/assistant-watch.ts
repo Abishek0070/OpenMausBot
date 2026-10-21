@@ -169,6 +169,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       const here = context();
       return here !== null && createAgentCard({ store: deps.store, bot: here.bot, threadId: card.threadId, input: { tool: "update_widget", widget_id: card.messageId, widget: built.card } }).ok;
     },
+    stored: (card) => deps.store.messagesFor(card.threadId).find((row) => row.id === card.messageId && row.kind === "widget")?.widget?.root,
   });
 
   function setMeeting(id: string, changes: Partial<MeetingRecord>, event?: CalendarEvent): void {
@@ -716,13 +717,13 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   /** Security invariant: only the owner or an admin may dismiss, and only on MausBot's main thread; the press starts no
    * turn. Null for any other press, which then goes to MausBot as usual. */
-  function serverPress(threadId: string, _pressedCard: string, action: { type: string; payload?: unknown }, auth: RequestAuth): "handled" | "refused" | null {
+  function serverPress(threadId: string, pressedCard: string, action: { type: string; payload?: unknown }, auth: RequestAuth): "handled" | "refused" | null {
     const here = context();
     if (!here || action.type !== DISMISS_ACTION || threadId !== here.threadId) return null;
     if (!ownerOrAdmin(auth)) return "refused";
     const payload = action.payload && typeof action.payload === "object" ? action.payload as Record<string, unknown> : {};
     const { account, messageId } = payload;
-    if (typeof account === "string" && typeof messageId === "string") quietly("an email was not dismissed", () => brief.dismiss(account, messageId));
+    if (typeof account === "string" && typeof messageId === "string") quietly("an email was not dismissed", () => brief.dismiss(account, messageId, { messageId: pressedCard, threadId }));
     return "handled";
   }
 

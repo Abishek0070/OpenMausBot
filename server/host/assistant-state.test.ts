@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { removeTempDir } from "../testing/cleanup.ts";
+import { copyGroupOf } from "./assistant-plan.ts";
 import { createAssistantState, MAX_ACCOUNTS, MAX_MISSED_LISTINGS, MAX_PENDING_EMAILS } from "./assistant-state.ts";
 
 const dirs: string[] = [];
@@ -65,8 +66,11 @@ describe("createAssistantState", () => {
         pendingEmails: [pending],
         lastBriefDate: "2026-10-21",
         lastBriefAt: 7,
+        lastBriefCard: "msg-brief",
       });
-      expect(createAssistantState(file).get()).toMatchObject({ version: 2, accounts: { ca_g1: { address: "admin@example.test", implied: true, alias: "work" } }, pendingEmails: [{ messageId: "m1" }], lastBriefAt: 7 });
+      expect(createAssistantState(file).get()).toMatchObject({
+        version: 2, accounts: { ca_g1: { address: "admin@example.test", implied: true, alias: "work" } }, pendingEmails: [{ messageId: "m1" }], lastBriefAt: 7, lastBriefCard: "msg-brief",
+      });
     });
 
     it("has no room for a subject, a sender or a body in an account or a pending email", () => {
@@ -75,6 +79,14 @@ describe("createAssistantState", () => {
         expect(() => store.patch({ pendingEmails: [{ ...pending, ...extra } as never] })).toThrow();
         expect(() => store.patch({ accounts: { ca_g1: { service: "gmail", ...extra } as never } })).toThrow();
       }
+    });
+
+    it("keeps a pending email's copy group only as a hash, never the Message-ID header itself", () => {
+      const { store } = setup();
+      const group = copyGroupOf("<q3@pin.example>");
+      expect(store.patch({ pendingEmails: [{ ...pending, copyGroup: group }] }).pendingEmails?.[0]?.copyGroup).toBe(group);
+      expect(() => store.patch({ pendingEmails: [{ ...pending, copyGroup: "<q3@pin.example>" }] })).toThrow();
+      expect(() => store.patch({ pendingEmails: [{ ...pending, copyGroup: `${group}0` }] })).toThrow();
     });
 
     it("starts fresh from a version 1 file", () => {

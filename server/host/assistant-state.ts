@@ -49,7 +49,12 @@ const accountRecordSchema = z.object({
   missedListings: z.number().int().min(1).max(MAX_MISSED_LISTINGS).optional(),
 }).strict();
 
-const pendingEmailSchema = z.object({ account: id, messageId: id, threadId: id, judgedAt: at, needsReply: z.boolean() }).strict();
+export const COPY_GROUP_LENGTH = 32;
+
+const pendingEmailSchema = z.object({
+  account: id, messageId: id, threadId: id, judgedAt: at, needsReply: z.boolean(),
+  copyGroup: z.string().regex(new RegExp(`^[0-9a-f]{${COPY_GROUP_LENGTH}}$`)).optional(),
+}).strict();
 
 export const assistantStateSchema = z.object({
   version: z.literal(2),
@@ -57,6 +62,7 @@ export const assistantStateSchema = z.object({
   pendingEmails: z.array(pendingEmailSchema).max(MAX_PENDING_EMAILS).optional(),
   lastBriefDate: day.optional(),
   lastBriefAt: at.optional(),
+  lastBriefCard: id.optional(),
   meetings: z.record(id, meetingSchema).optional(),
   lastTriageAt: at.optional(),
   turnDay: day.optional(),

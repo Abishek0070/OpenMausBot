@@ -195,6 +195,8 @@ export interface BriefFacts {
 /** UTF-16 units per field and the longest link a row carries: a brief with every section full stays under the widget's byte cap. */
 const BRIEF_TEXT = { line: 120, caption: 160, half: 52, account: 80, sender: 40, labelName: 32, labelAccount: 16, link: 600 } as const;
 const CHECKING_EMAIL = "Checking your email…";
+const NEEDS_YOU = "Needs you";
+const NOTHING_NEEDS_YOU = "Nothing needs you right now.";
 const UNREACHABLE = "Couldn't reach your connected apps. I'll try again soon.";
 
 const caption = (value: string): Node => ({ type: "Caption", value: clip(value, BRIEF_TEXT.caption) });
@@ -291,8 +293,8 @@ function buildBrief(facts: BriefFacts, presses: boolean): BuiltCard {
 
   const children: Node[] = [
     ...capped(missing, missing.length),
-    { type: "Title", value: "Needs you", size: "sm" },
-    ...(needLines.length ? needLines : [text(facts.repliesChecking ? CHECKING_EMAIL : "Nothing needs you right now.")]),
+    { type: "Title", value: NEEDS_YOU, size: "sm" },
+    ...(needLines.length ? needLines : [text(facts.repliesChecking ? CHECKING_EMAIL : NOTHING_NEEDS_YOU)]),
     ...(needLines.length && facts.repliesChecking ? [caption(CHECKING_EMAIL)] : []),
     ...(facts.meetings === null ? [] : briefSection("Your day", meetingRows, meetings.length, facts.meetings === "checking" ? "Checking your calendar…" : "No meetings today.")),
     ...(importantRows.length ? briefSection("Important emails", importantRows, facts.important.length) : []),
@@ -308,6 +310,27 @@ function buildBrief(facts: BriefFacts, presses: boolean): BuiltCard {
     facts.routines.length && plural(facts.routines.length, "routine result"),
   ].filter(Boolean);
   return { card: root(BRIEF_TITLE, longDate(facts.now, zone), children), summary: summary(`${BRIEF_TITLE}: ${parts.length ? parts.join(", ") : "nothing needs you right now"}`) };
+}
+
+const isSection = (node: Node): boolean => node.type === "Title";
+
+/** The brief as it was shown, less the row holding the Dismiss of one email; null when no row holds it. */
+export function briefWithoutRow(card: WidgetRoot, email: { account: string; messageId: string }): WidgetRoot | null {
+  const children = ((card as unknown as Node).children ?? []) as Node[];
+  const dismisses = (node: Node): boolean => {
+    const action = node.onClickAction as { type?: unknown; payload?: Record<string, unknown> } | undefined;
+    if (node.type === "Button" && action?.type === DISMISS_ACTION && action.payload?.account === email.account && action.payload?.messageId === email.messageId) return true;
+    return Array.isArray(node.children) && (node.children as Node[]).some(dismisses);
+  };
+  const at = children.findIndex(dismisses);
+  if (at < 0) return null;
+  const kept = children.filter((_node, index) => index !== at);
+  const tidy = kept.flatMap((node, index): Node[] => {
+    const emptied = isSection(node) && (index + 1 === kept.length || isSection(kept[index + 1]!));
+    if (!emptied) return [node];
+    return node.value === NEEDS_YOU ? [node, text(NOTHING_NEEDS_YOU)] : [];
+  });
+  return { ...card, children: tidy } as unknown as WidgetRoot;
 }
 
 export const briefCard = (facts: BriefFacts): BuiltCard => buildBrief(facts, true);

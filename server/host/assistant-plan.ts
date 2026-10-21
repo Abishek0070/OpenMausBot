@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { CalendarEvent, EmailHeader, ThreadMessage } from "../assistant-sources.ts";
-import type { MeetingRecord, PendingEmail } from "./assistant-state.ts";
+import { COPY_GROUP_LENGTH, type MeetingRecord, type PendingEmail } from "./assistant-state.ts";
 import { validZone } from "./brief-recap.ts";
 
 const MINUTE = 60_000;
@@ -34,6 +34,8 @@ export function fingerprint(event: CalendarEvent): string {
   const others = event.attendees.filter((attendee) => !attendee.self).map((attendee) => attendee.email.toLowerCase()).sort();
   return createHash("sha256").update(others.join("\n")).digest("hex").slice(0, 32);
 }
+
+export const copyGroupOf = (messageIdHeader: string): string => createHash("sha256").update(messageIdHeader).digest("hex").slice(0, COPY_GROUP_LENGTH);
 
 export function localDate(ms: number, timeZone: string | undefined): string {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: validZone(timeZone) ?? "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(ms));

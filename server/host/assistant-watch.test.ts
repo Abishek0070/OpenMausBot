@@ -540,6 +540,27 @@ describe("every account", () => {
     expect(w.jobs).toHaveLength(1);
   });
 
+  it("after a restart, a Dismiss on today's brief edits that card: the row goes and both copies leave state", async () => {
+    const waitsOnMe = (title: string, prompt: string): JobResult => {
+      const answer = defaultReply(title, prompt);
+      return answer.ok && title === "Email check" ? { ...answer, reply: answer.reply.replaceAll('"action":', '"needsReply": true, "action":') } : answer;
+    };
+    const w = twoInboxes({ emails: [IN_G1], reply: waitsOnMe });
+    w.live.inboxes.g2 = [IN_G2];
+    await w.settle();
+    w.watch.onPresence({ source: "desktop", returned: false }); await w.settle();
+    const [brief] = w.briefs();
+    expect(JSON.stringify(brief!.widget)).toContain("Subject important-1");
+    expect(w.watch.state.get().pendingEmails?.map((one) => one.messageId)).toEqual(["important-1", "important-1-copy"]);
+    const rev = brief!.widget!.rev ?? 0;
+    const restarted = w.make();
+    expect(restarted.serverPress("m-main", brief!.id, { type: "dismiss_email", payload: { messageId: "important-1", account: "g1" } }, owner)).toBe("handled");
+    expect(restarted.state.get().pendingEmails ?? []).toEqual([]);
+    expect(w.briefs()[0]!.widget!.rev).toBe(rev + 1);
+    expect(JSON.stringify(w.briefs()[0]!.widget)).not.toContain("Subject important-1");
+    expect(w.briefs()).toHaveLength(1);
+  });
+
   it("un-judges both copies of an email in two inboxes on Retry, and cards it once", async () => {
     const w = twoInboxes({ emails: [IN_G1], reply: () => ({ ok: true, threadId: "", reply: "I looked at your mail." }), briefed: true });
     w.live.inboxes.g2 = [IN_G2];

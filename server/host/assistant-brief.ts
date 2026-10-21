@@ -1,7 +1,8 @@
 import type { AssistantSources, EmailHeader, SourceAccount } from "../assistant-sources.ts";
 import type { AssistantAccounts } from "./assistant-accounts.ts";
-import { briefCard, briefFallbackCard, type BriefClash, type BriefEmail, type BriefFacts, type BriefMeeting, type BuiltCard } from "./assistant-cards.ts";
-import { answered, briefDue, clashes, emailKey, keepNewest, localDate, prunePending, type Meeting } from "./assistant-plan.ts";
+import type { WidgetRoot } from "../../shared/widget.ts";
+import { briefCard, briefFallbackCard, briefWithoutRow, type BriefClash, type BriefEmail, type BriefFacts, type BriefMeeting, type BuiltCard } from "./assistant-cards.ts";
+import { answered, briefDue, clashes, copyGroupOf, emailKey, keepNewest, localDate, prunePending, type Meeting } from "./assistant-plan.ts";
 import { MAX_PENDING_EMAILS, storableId, type AssistantStateStore, type PendingEmail } from "./assistant-state.ts";
 import type { RoutineRow } from "./brief-recap.ts";
 
@@ -29,7 +30,8 @@ export interface AssistantBriefDeps {
   /** Null when the card was refused or could not be posted. */
   post(built: BuiltCard): CardRef | null;
   /** False when the edit was refused. */
-  edit(card: CardRef, built: BuiltCard): boolean;
+  edit(card: CardRef, built: Pick<BuiltCard, "card">): boolean;
+  stored(card: CardRef): WidgetRoot | undefined;
 }
 
 interface PostedBrief extends CardRef {
@@ -40,13 +42,14 @@ interface PostedBrief extends CardRef {
   live: boolean;
   mailOpen: boolean;
   pendingChecked: boolean;
-  /** The JSON of the last card built for it. */
-  shown?: string;
+  shownJson?: string;
 }
 
 const refKey = (ref: EmailRef): string => emailKey({ account: ref.account, id: ref.messageId });
 const storable = (email: EmailHeader): boolean => storableId(email.account) && storableId(email.id) && storableId(email.threadId);
-const refOf = (email: EmailHeader, judgedAt: number): EmailRef => ({ account: email.account, messageId: email.id, threadId: email.threadId, judgedAt });
+const refOf = (email: EmailHeader, judgedAt: number): EmailRef => ({
+  account: email.account, messageId: email.id, threadId: email.threadId, judgedAt, ...(email.messageIdHeader === undefined ? {} : { copyGroup: copyGroupOf(email.messageIdHeader) }),
+});
 const emailsOf = (pick: TriagePick): EmailHeader[] => [pick.email, ...pick.copies];
 
 function mergeRefs<T extends EmailRef>(list: readonly T[], added: readonly T[], merge: (kept: T, again: T) => T = (kept) => kept): T[] {
@@ -90,21 +93,27 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     if (entries.length) savePending(mergeRefs(pending(), entries, (kept, again) => (again.needsReply && !kept.needsReply ? { ...kept, needsReply: true } : kept)));
   }
 
-  const sameEmail = (email: EmailHeader): string => (email.messageIdHeader === undefined ? `key ${emailKey(email)}` : `header ${email.messageIdHeader}`);
-  const groupOf = (key: string): string => {
-    const known = headers.get(key)?.email;
-    return known ? sameEmail(known) : `key ${key}`;
+  const groupOf = (key: string, stored?: string): string => {
+    const header = headers.get(key)?.email.messageIdHeader;
+    const group = stored ?? (header === undefined ? undefined : copyGroupOf(header));
+    return group === undefined ? `key ${key}` : `group ${group}`;
+  };
+  const refGroup = (ref: EmailRef): string => groupOf(refKey(ref), ref.copyGroup);
+  const groupOfKey = (key: string): string => {
+    const ref = [...pending(), ...(brief?.important ?? [])].find((one) => refKey(one) === key);
+    return ref ? refGroup(ref) : groupOf(key);
   };
 
   /** One row per email, so a message in two inboxes shows once, under the account it was first judged in. */
-  function rows(refs: readonly EmailRef[]): Array<{ email: EmailHeader; why?: string }> {
+  function rows(refs: readonly EmailRef[]): Array<{ email: EmailHeader; why?: string; group: string }> {
     const seen = new Set<string>();
-    const shown: Array<{ email: EmailHeader; why?: string }> = [];
+    const shown: Array<{ email: EmailHeader; why?: string; group: string }> = [];
     for (const ref of refs) {
       const known = headers.get(refKey(ref));
-      if (!known || seen.has(sameEmail(known.email))) continue;
-      seen.add(sameEmail(known.email));
-      shown.push(known);
+      const group = refGroup(ref);
+      if (!known || seen.has(group)) continue;
+      seen.add(group);
+      shown.push({ ...known, group });
     }
     return shown.sort((a, b) => b.email.at - a.email.at);
   }
@@ -137,7 +146,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     const counted = new Set(shown);
     const counts = new Map<string, number>();
     for (const entry of unread) {
-      const group = groupOf(refKey(entry));
+      const group = refGroup(entry);
       if (counted.has(group)) continue;
       counted.add(group);
       counts.set(entry.account, (counts.get(entry.account) ?? 0) + 1);
@@ -170,7 +179,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       ],
       replies: replies.map(briefEmail),
       repliesChecking: !unreachable && !posted.pendingChecked && [...waiting, ...posted.important].some((ref) => gmail.has(ref.account)),
-      repliesUnreadable: unshownCounts(unreadWaiting, new Set(replies.map((row) => sameEmail(row.email)))),
+      repliesUnreadable: unshownCounts(unreadWaiting, new Set(replies.map((row) => row.group))),
       failedRoutines: posted.routines.filter((row) => row.status !== "completed"),
       clashes: clashes(meetings, { now: at, timeZone: deps.timeZone() }).map(([first, second]) => ({ first: side(first), second: side(second) })),
       meetings: Array.isArray(day) ? day.map(meeting) : day,
@@ -192,8 +201,8 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
 
   /** An important email that needs no reply is held in assistant.json until a delivered card shows it or a copy of it. */
   function stillHeld(list: readonly PendingEmail[], shown: BriefFacts): PendingEmail[] {
-    const onCard = new Set(shown.important.map((email) => groupOf(emailKey({ account: email.accountId, id: email.messageId }))));
-    return list.filter((entry) => entry.needsReply || !onCard.has(groupOf(refKey(entry))));
+    const onCard = new Set(shown.important.map((email) => groupOfKey(emailKey({ account: email.accountId, id: email.messageId }))));
+    return list.filter((entry) => entry.needsReply || !onCard.has(refGroup(entry)));
   }
 
   function releaseShown(shown: BriefFacts): void {
@@ -210,8 +219,8 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     const built = briefCard(shown);
     const json = JSON.stringify(built.card);
     const card = { messageId: posted.messageId, threadId: posted.threadId };
-    if (json !== posted.shown && !deliver("updated", built, () => briefFallbackCard(shown), (next) => deps.edit(card, next))) return;
-    posted.shown = json;
+    if (json !== posted.shownJson && !deliver("updated", built, () => briefFallbackCard(shown), (next) => deps.edit(card, next))) return;
+    posted.shownJson = json;
     releaseShown(shown);
   }
 
@@ -240,8 +249,8 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       return;
     }
     postFailedAt = undefined;
-    deps.state.patch({ lastBriefDate: day, lastBriefAt: at, pendingEmails: stillHeld(pending(), shown) });
-    brief = { ...draft, messageId: card.messageId, threadId: card.threadId, shown: JSON.stringify(built.card) };
+    deps.state.patch({ lastBriefDate: day, lastBriefAt: at, lastBriefCard: card.messageId, pendingEmails: stillHeld(pending(), shown) });
+    brief = { ...draft, messageId: card.messageId, threadId: card.threadId, shownJson: JSON.stringify(built.card) };
   }
 
   function judged(picks: TriagePick[]): TriagePick[] {
@@ -300,7 +309,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
 
     const groups = new Map<string, PendingEmail[]>();
     for (const entry of waiting.filter((one) => !drop.has(refKey(one)))) {
-      const group = groupOf(refKey(entry));
+      const group = refGroup(entry);
       groups.set(group, [...(groups.get(group) ?? []), entry]);
     }
     const addresses = accounts.addresses();
@@ -329,9 +338,9 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     return rereading;
   }
 
-  function dismiss(accountId: string, messageId: string): void {
-    const pressed = groupOf(emailKey({ account: accountId, id: messageId }));
-    const same = (ref: EmailRef): boolean => groupOf(refKey(ref)) === pressed;
+  function forget(accountId: string, messageId: string): boolean {
+    const group = groupOfKey(emailKey({ account: accountId, id: messageId }));
+    const same = (one: EmailRef): boolean => refGroup(one) === group;
     let dropped = false;
     const before = pending();
     const kept = before.filter((entry) => !same(entry));
@@ -339,12 +348,26 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       savePending(kept);
       dropped = true;
     }
-    const important = brief?.important.filter((ref) => !same(ref));
+    const important = brief?.important.filter((one) => !same(one));
     if (brief && important && important.length !== brief.important.length) {
       brief.important = important;
       dropped = true;
     }
-    if (dropped) refresh(true);
+    return dropped;
+  }
+
+  function dismiss(accountId: string, messageId: string, pressed: CardRef): void {
+    const dropped = forget(accountId, messageId);
+    const at = deps.now();
+    if (todays(at)) {
+      if (dropped) refresh(true);
+      return;
+    }
+    const { lastBriefDate, lastBriefCard } = deps.state.get();
+    if (lastBriefCard !== pressed.messageId || lastBriefDate !== localDate(at, deps.timeZone())) return;
+    const shown = deps.stored(pressed);
+    const edited = shown && briefWithoutRow(shown, { account: accountId, messageId });
+    if (edited && !deps.edit(pressed, { card: edited })) console.warn("assistant: the daily brief was not updated after a Dismiss");
   }
 
   return {
@@ -368,6 +391,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       refresh(true);
       posted.live = false;
     },
+    forget,
     dismiss,
     email: (accountId: string, messageId: string): EmailHeader | undefined => headers.get(emailKey({ account: accountId, id: messageId }))?.email,
   };
