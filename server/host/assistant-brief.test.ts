@@ -241,14 +241,18 @@ describe("MausBot's daily brief", () => {
     expect(card).not.toContain("Checking your email…");
   });
 
-  it("adds the first email check after the brief to that card in place, and hands later picks back for their own cards", () => {
+  it("adds every email check that lands while the mail window is open to that card in place, and hands picks back for their own cards once it closed", () => {
     const w = briefWorld();
     w.brief.post();
     expect(w.brief.judged([pick("m1", false)])).toEqual([]);
     expect(w.edits).toHaveLength(1);
     expect(w.lastCard()).toContain("Subject m1");
-    expect(w.brief.judged([pick("m2", false)]).map((one) => one.email.id)).toEqual(["m2"]);
-    expect(w.edits).toHaveLength(1);
+    expect(w.brief.judged([pick("m2", false)])).toEqual([]);
+    expect(w.edits).toHaveLength(2);
+    expect(w.lastCard()).toContain("Subject m2");
+    w.brief.mailChecked();
+    expect(w.brief.judged([pick("m3", false)]).map((one) => one.email.id)).toEqual(["m3"]);
+    expect(w.edits).toHaveLength(2);
   });
 
   it("closes the mail window when an email check after the brief finds nothing to judge", () => {
@@ -265,7 +269,7 @@ describe("MausBot's daily brief", () => {
       expect(w.lastCard()).toContain("Subject m1");
     }
     w.threads["ca_g1/thread-m1"] = [{ id: "r", at: w.now(), from: "admin@example.test" }];
-    w.brief.dismiss("ca_g1", "m2", w.posts.at(-1)!.messageId);
+    w.brief.dismiss("ca_g1", "m2");
     w.tick(5 * DAY); w.brief.post(); await w.brief.checkPending(true);
     expect(w.pending()).toEqual([]); // m1 answered, m2 dismissed, m3 older than a week
   });
@@ -386,7 +390,7 @@ describe("MausBot's daily brief", () => {
     expect(w.edits).toHaveLength(1);
     expect(w.lastCard()).not.toContain("Late run");
     await w.brief.checkPending(true);
-    w.tick(5 * HOUR); w.brief.dismiss("ca_g1", "m1", w.posts[0]!.messageId);
+    w.tick(5 * HOUR); w.brief.dismiss("ca_g1", "m1");
     expect(w.lastCard()).not.toContain("Subject m1");
     expect(w.lastCard()).not.toContain("Late run");
     expect(w.routinesAskedSince).toEqual([NOW - DAY]);
@@ -407,36 +411,49 @@ describe("MausBot's daily brief", () => {
     expect(w.lastCard()).not.toContain("Your day");
   });
 
-  it("dismisses an email from the brief it was pressed on, editing that card, and only drops the record from an older card", async () => {
+  it("dismisses an email from whichever card was pressed, and takes its row off today's brief", async () => {
     const w = briefWorld();
     w.brief.judged([pick("m1", true), pick("m2", true)]); w.brief.post(); await w.brief.checkPending(true);
     const today = w.posts.at(-1)!.messageId;
     const edits = w.edits.length;
-    w.brief.dismiss("ca_g1", "m1", today);
+    w.brief.dismiss("ca_g1", "m1");
     expect(w.edits).toHaveLength(edits + 1);
     expect(w.lastCard()).not.toContain("Subject m1");
-    w.brief.dismiss("ca_g1", "m2", "an-older-card");
-    expect(w.edits).toHaveLength(edits + 1);
+    w.brief.dismiss("ca_g1", "m2");
+    expect(w.edits).toHaveLength(edits + 2);
+    expect(w.edits.slice(edits).map((edit) => edit.messageId)).toEqual([today, today]);
+    expect(w.lastCard()).not.toContain("Subject m2");
     expect(w.pending()).toEqual([]);
+  });
+
+  it("dismisses an email still waiting from yesterday, with its copies, and takes the row off today's brief", async () => {
+    const w = briefWorld();
+    w.brief.judged([{ ...pick("m1", true), copies: [copy("m1b", "ca_g2", "m1")] }]); w.brief.post(); await w.brief.checkPending(true);
+    w.tick(DAY); w.brief.post(); await w.brief.checkPending(true);
+    const today = w.posts.at(-1)!.messageId;
+    expect(w.lastCard()).toContain("Subject m1");
+    const edits = w.edits.length;
+    w.brief.dismiss("ca_g1", "m1");
+    expect(w.pending()).toEqual([]);
+    expect(w.edits.slice(edits).map((edit) => edit.messageId)).toEqual([today]);
+    expect(w.lastCard()).not.toContain("Subject m1");
   });
 
   it("dismisses every copy of an email and an important one", async () => {
     const w = briefWorld();
     w.brief.judged([{ ...pick("m1", true), copies: [copy("m1b", "ca_g2", "m1")] }, pick("m2", false)]); w.brief.post(); await w.brief.checkPending(true);
-    const card = w.posts.at(-1)!.messageId;
-    w.brief.dismiss("ca_g2", "m1b", card);
+    w.brief.dismiss("ca_g2", "m1b");
     expect(w.pending()).toEqual([]);
-    w.brief.dismiss("ca_g1", "m2", card);
+    w.brief.dismiss("ca_g1", "m2");
     expect(w.lastCard()).not.toContain("Subject m");
   });
 
   it("edits only today's brief: a Dismiss on yesterday's drops the record and leaves that card as it was", async () => {
     const w = briefWorld();
     w.brief.judged([pick("m1", true)]); w.brief.post(); await w.brief.checkPending(true);
-    const yesterday = w.posts[0]!.messageId;
     const edits = w.edits.length;
     w.tick(DAY);
-    w.brief.dismiss("ca_g1", "m1", yesterday);
+    w.brief.dismiss("ca_g1", "m1");
     expect(w.edits).toHaveLength(edits);
     expect(w.pending()).toEqual([]);
   });
@@ -444,10 +461,9 @@ describe("MausBot's daily brief", () => {
   it("changes nothing on a second Dismiss of the same email", async () => {
     const w = briefWorld();
     w.brief.judged([pick("m1", true)]); w.brief.post(); await w.brief.checkPending(true);
-    const card = w.posts.at(-1)!.messageId;
-    w.brief.dismiss("ca_g1", "m1", card);
+    w.brief.dismiss("ca_g1", "m1");
     const edits = w.edits.length;
-    w.brief.dismiss("ca_g1", "m1", card);
+    w.brief.dismiss("ca_g1", "m1");
     expect(w.edits).toHaveLength(edits);
   });
 
@@ -518,7 +534,7 @@ describe("MausBot's daily brief", () => {
     expect(w.lastCard()).toContain("Subject m1");
     expect(w.lastCard()).not.toContain('"Button"');
     expect(w.state.get().lastBriefDate).toBe("2026-10-21");
-    w.brief.dismiss("ca_g1", "m1", w.posts[0]!.messageId);
+    w.brief.dismiss("ca_g1", "m1");
     expect(w.edits).toHaveLength(1);
     expect(w.lastCard()).not.toContain("Subject m1");
     expect(w.lastCard()).not.toContain('"Button"');

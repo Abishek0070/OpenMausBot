@@ -263,6 +263,16 @@ describe("the daily brief", () => {
     expect(text).toContain("Three stories on AI chips.");
   });
 
+  it("says in Needs you that connected apps could not be reached, with no line saying it is still checking", () => {
+    const built = briefCard({ ...empty, meetings: null, unreachable: true });
+    const text = JSON.stringify(valid(built).root);
+    expect(text).toContain("Couldn't reach your connected apps. I'll try again soon.");
+    expect(text.indexOf("Couldn't reach")).toBeGreaterThan(text.indexOf("Needs you"));
+    expect(text).not.toContain("Checking");
+    expect(text).not.toContain("Nothing needs you right now.");
+    expect(built.summary).toBe("Daily brief: couldn't reach your connected apps");
+  });
+
   it("names every account an item came from, and each account it could not read, at the top", () => {
     const text = JSON.stringify(valid(briefCard({ ...full, missing: [{ account: "admin@example.test", what: "calendar" }, { account: "me@example.test", what: "email" }] })).root);
     expect(text.indexOf("I couldn't read the calendar of admin@example.test.")).toBeLessThan(text.indexOf("Needs you"));

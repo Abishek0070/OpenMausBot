@@ -138,11 +138,13 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   const sinceLastTime = new Map<string, string>();
   const queue: Job[] = [];
   let working: Promise<void> | undefined;
+  let performing: Job | undefined;
   let checking: Promise<void> | undefined;
   let scheduledCheck = false;
   const timers: Array<{ cancel(): void }> = [];
 
   const current = () => state.get();
+  const triageOutstanding = (): boolean => performing?.kind === "triage" || queue.some((job) => job.kind === "triage");
   const meetings = (): Record<string, MeetingRecord> => current().meetings ?? {};
   const accounts = createAssistantAccounts({
     state, sources: deps.sources, now, checkMs: deps.checkMs, reconnect,
@@ -382,9 +384,8 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       next[account] = { ...record, judged: keepNewest([...(record.judged ?? []), ...seen], MAX_JUDGED), emailCursor };
     }
     state.patch({ accounts: next, ...(plan.batch.length ? { lastTriageAt: at } : {}) });
-    if (!plan.batch.length) return false;
-    enqueue({ kind: "triage", item: triageItem([...plan.batch, ...plan.copies]), batch: plan.batch, copies: plan.copies, handled: new Set() });
-    return true;
+    if (plan.batch.length) enqueue({ kind: "triage", item: triageItem([...plan.batch, ...plan.copies]), batch: plan.batch, copies: plan.copies, handled: new Set() });
+    return plan.pending.length > 0;
   }
 
   function meetingToday(): string[] {
@@ -495,13 +496,14 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     working ??= (async () => {
       while (queue.length) {
         const job = queue.shift()!;
+        performing = job;
         try {
           await perform(job);
         } catch (error) {
           console.warn(`assistant: ${job.kind} failed: ${failure(error)}`);
           quietly(`a failed ${job.kind} was not settled`, () => threw(job));
         } finally {
-          if (job.kind === "triage") brief.mailChecked();
+          performing = undefined;
         }
       }
     })().finally(() => {
@@ -586,7 +588,10 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     }
     try {
       accounts.newCheck();
-      if (!await accounts.refresh() || !context()) return;
+      const listed = await accounts.refresh();
+      if (!context()) return;
+      quietly("the daily brief was not updated", () => brief.appsReached(listed !== null));
+      if (!listed) return;
       const at = now();
       const fresh = await readCalendars(at);
       if (!context()) return;
@@ -599,8 +604,8 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       if (!context()) return;
       const mail = await readMail(at);
       if (!context()) return;
-      const queued = mail.length > 0 && emailDue(mail, at);
-      if (!queued) brief.mailChecked();
+      const putOff = mail.length > 0 && emailDue(mail, at);
+      if (!putOff && !triageOutstanding()) brief.mailChecked();
       quietly("old meetings were not forgotten", () => {
         const kept = pruneMeetings(meetings(), at);
         if (Object.keys(kept).length !== Object.keys(meetings()).length) state.patch({ meetings: kept });
@@ -711,13 +716,13 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   /** Security invariant: only the owner or an admin may dismiss, and only on MausBot's main thread; the press starts no
    * turn. Null for any other press, which then goes to MausBot as usual. */
-  function serverPress(threadId: string, messageId: string, action: { type: string; payload?: unknown }, auth: RequestAuth): "handled" | "refused" | null {
+  function serverPress(threadId: string, _pressedCard: string, action: { type: string; payload?: unknown }, auth: RequestAuth): "handled" | "refused" | null {
     const here = context();
     if (!here || action.type !== DISMISS_ACTION || threadId !== here.threadId) return null;
     if (!ownerOrAdmin(auth)) return "refused";
     const payload = action.payload && typeof action.payload === "object" ? action.payload as Record<string, unknown> : {};
-    const { account, messageId: emailId } = payload;
-    if (typeof account === "string" && typeof emailId === "string") quietly("an email was not dismissed", () => brief.dismiss(account, emailId, messageId));
+    const { account, messageId } = payload;
+    if (typeof account === "string" && typeof messageId === "string") quietly("an email was not dismissed", () => brief.dismiss(account, messageId));
     return "handled";
   }
 

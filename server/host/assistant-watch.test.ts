@@ -715,18 +715,103 @@ describe("the daily brief", () => {
     expect(w.titles()).toContain("Subject important-2");
   });
 
-  it("closes the brief's mail window when its first email check fails, so later mail gets a card of its own", async () => {
+  it("keeps the brief's mail window open through a failed email check, and closes it at the first check with nothing left to judge", async () => {
     let fail = true;
     const day = world({ emails: [mail("important-1", NOW - MINUTE)], reply: (title, prompt) => (fail ? { ok: false, error: "engine down" } : defaultReply(title, prompt)) });
     day.watch.state.patch(SEEN);
     day.watch.onPresence({ source: "desktop", returned: false });
     await day.settle();
     expect(day.retries().map((line) => line.card?.title)).toEqual(["I couldn't check your new email"]);
+    day.tick(5 * MINUTE);
+    await day.settle();
     fail = false;
     day.live.emails.push(mail("important-2", day.now()));
     day.tick(15 * MINUTE);
     await day.settle();
     expect(day.titles()).toEqual(["Daily brief", "Subject important-2"]);
+  });
+
+  it("folds into the brief the mail of an email check still running when the presence's check finishes, with no card or notification", async () => {
+    const hold = gate();
+    const day = world({ emails: [mail("important-1", NOW - MINUTE)], reply: async (title, prompt) => {
+      if (title === "Email check") await hold.closed;
+      return defaultReply(title, prompt);
+    } });
+    void day.watch.check();
+    await expect.poll(() => day.jobs.map((job) => job.title)).toEqual(["Email check"]);
+    day.watch.onPresence({ source: "desktop", returned: true });
+    await day.watch.check();
+    expect(JSON.stringify(day.briefs()[0]!.widget)).not.toContain("Subject important-1");
+    hold.open();
+    await day.watch.idle();
+    expect(JSON.stringify(day.briefs()[0]!.widget)).toContain("Subject important-1");
+    expect(day.titles()).toEqual(["Daily brief"]);
+    expect(day.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("folds into the brief the mail put off past the first twenty, when its email check lands inside the half hour", async () => {
+    const overnight = Array.from({ length: 25 }, (_, index) => mail(index === 3 ? "important-3" : index === 22 ? "important-22" : `plain-${index}`, NOW - (index + 1) * MINUTE));
+    const day = world({ emails: overnight });
+    day.watch.state.patch({ accounts: { ...SEEN.accounts, g1: { ...SEEN.accounts!.g1!, emailCursor: NOW - 2 * HOUR } } });
+    await day.settle();
+    day.watch.onPresence({ source: "desktop", returned: false });
+    await day.settle();
+    day.tick(15 * MINUTE);
+    await day.settle();
+    expect(day.jobs.filter((job) => job.title === "Email check")).toHaveLength(2);
+    const brief = JSON.stringify(day.briefs()[0]!.widget);
+    expect(brief).toContain("Subject important-3");
+    expect(brief).toContain("Subject important-22");
+    expect(day.titles()).toEqual(["Daily brief"]);
+    expect(day.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("cards mail judged half an hour after the brief, though no check has closed its mail window", async () => {
+    const day = world();
+    day.watch.state.patch(SEEN);
+    day.watch.onPresence({ source: "desktop", returned: false });
+    day.tick(31 * MINUTE);
+    day.live.emails.push(mail("important-1", day.now()));
+    await day.settle();
+    expect(day.titles()).toEqual(["Daily brief", "Subject important-1"]);
+  });
+
+  it("says on the brief that connected apps could not be reached in place of 'Checking…', and puts the sections back once they answer", async () => {
+    const day = world({ events: [meeting("b", NOW + 6 * HOUR)], emails: [mail("waiting-1", NOW - HOUR)], listed: null });
+    const waiting: PendingEmail = { account: "g1", messageId: "waiting-1", threadId: "thread-waiting-1", judgedAt: NOW - HOUR, needsReply: true };
+    day.watch.state.patch({ ...SEEN, pendingEmails: [waiting] });
+    day.watch.onPresence({ source: "desktop", returned: false });
+    const posted = JSON.stringify(day.briefs()[0]!.widget);
+    expect(posted).toContain("Checking your calendar…");
+    expect(posted).toContain("Checking your email…");
+    await day.settle();
+    const unreachable = JSON.stringify(day.briefs()[0]!.widget);
+    expect(unreachable).toContain("Couldn't reach your connected apps. I'll try again soon.");
+    expect(unreachable).not.toContain("Checking");
+    day.live.listed = [G1, C1];
+    day.tick(15 * MINUTE);
+    await day.settle();
+    const restored = JSON.stringify(day.briefs()[0]!.widget);
+    expect(restored).not.toContain("Couldn't reach");
+    expect(restored).toContain("Meeting b");
+    expect(restored).toContain("Subject waiting-1");
+    expect(day.briefs()).toHaveLength(1);
+  });
+
+  it("posts Reconnect at the third failing check of an account, however many of its reads fail in each", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const down = world();
+    const waiting: PendingEmail = { account: "g1", messageId: "waiting-1", threadId: "thread-waiting-1", judgedAt: NOW - HOUR, needsReply: true };
+    down.watch.state.patch({ ...SEEN, pendingEmails: [waiting] });
+    down.live.broken.add("g1");
+    for (let check = 1; check <= 3; check += 1) {
+      down.watch.onPresence({ source: "desktop", returned: false });
+      await down.settle();
+      expect(down.sources.message).toHaveBeenCalledTimes(check);
+      expect(down.sources.emails).toHaveBeenCalledTimes(check);
+      expect(down.texts()).toEqual(check < 3 ? [] : [reconnectText("gmail", "me@example.test")]);
+      down.tick(24 * HOUR);
+    }
   });
 
   it("dismisses an email from the brief without a turn, and refuses a dismiss from someone who is not the owner or an admin", async () => {
@@ -740,6 +825,21 @@ describe("the daily brief", () => {
     expect(w.runJob).toHaveBeenCalledTimes(jobsBefore);
     expect(w.watch.serverPress("m-main", briefId, { type: "draft_reply", payload: {} }, owner)).toBeNull();
     expect(w.watch.serverPress("scout-main", briefId, dismiss, owner)).toBeNull();
+  });
+
+  it("dismisses an email pressed on yesterday's brief: it leaves state, today's brief drops its row, and yesterday's card stays as it was", async () => {
+    const day = world({ emails: [mail("waiting-1", NOW - HOUR)] });
+    const waiting: PendingEmail = { account: "g1", messageId: "waiting-1", threadId: "thread-waiting-1", judgedAt: NOW - HOUR, needsReply: true };
+    day.watch.state.patch({ ...SEEN, pendingEmails: [waiting] });
+    day.watch.onPresence({ source: "desktop", returned: false }); await day.settle();
+    day.tick(24 * HOUR);
+    day.watch.onPresence({ source: "desktop", returned: false }); await day.settle();
+    const [yesterday, today] = day.briefs();
+    expect(JSON.stringify(today!.widget)).toContain("Subject waiting-1");
+    expect(day.watch.serverPress("m-main", yesterday!.id, { type: "dismiss_email", payload: { messageId: "waiting-1", account: "g1" } }, owner)).toBe("handled");
+    expect(day.watch.state.get().pendingEmails ?? []).toEqual([]);
+    expect(JSON.stringify(day.briefs()[1]!.widget)).not.toContain("Subject waiting-1");
+    expect(day.briefs()[0]!.widget).toEqual(yesterday!.widget);
   });
 
   it("posts no brief and answers no press with the switch off or on a hosted workspace", async () => {
@@ -1214,6 +1314,7 @@ describe("cards and the open rule", () => {
     w.watch.onPresence({ source: "desktop", returned: false });
     await w.settle();
     expect(JSON.stringify(w.briefs()[0]!.widget)).toContain("Subject important-1");
+    await w.settle();
     w.live.emails.push(mail("important-2", w.now()));
     w.tick(15 * MINUTE);
     await w.settle();

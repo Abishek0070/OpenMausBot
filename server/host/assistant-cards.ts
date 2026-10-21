@@ -186,6 +186,8 @@ export interface BriefFacts {
   clashes: BriefClash[];
   /** null: no Calendar account, so Your day is left out. */
   meetings: BriefMeeting[] | "checking" | null;
+  /** The account listing failed, so connected apps could not be reached. */
+  unreachable?: boolean;
   important: BriefEmail[];
   routines: RoutineRow[];
 }
@@ -193,6 +195,7 @@ export interface BriefFacts {
 /** UTF-16 units per field and the longest link a row carries: a brief with every section full stays under the widget's byte cap. */
 const BRIEF_TEXT = { line: 120, caption: 160, half: 52, account: 80, sender: 40, labelName: 32, labelAccount: 16, link: 600 } as const;
 const CHECKING_EMAIL = "Checking your email…";
+const UNREACHABLE = "Couldn't reach your connected apps. I'll try again soon.";
 
 const caption = (value: string): Node => ({ type: "Caption", value: clip(value, BRIEF_TEXT.caption) });
 const briefLink = (url: string | undefined): Node | undefined => (url && url.length <= BRIEF_TEXT.link ? openUrl(url) : undefined);
@@ -283,7 +286,7 @@ function buildBrief(facts: BriefFacts, presses: boolean): BuiltCard {
   const routineRows = facts.routines.slice(0, BRIEF_ROWS).map((routine) => rowWithPressesBeside(routine.name, routine.line, offer([open(routine)])));
   const missing = facts.missing.map(({ account: name, what }) => text(`I couldn't read the ${what} of ${clip(name, BRIEF_TEXT.account)}.`));
   const unreadable = facts.repliesUnreadable.map(({ account: name, count }) => text(`${plural(count, "email")} waiting in ${clip(name, BRIEF_TEXT.account)}, which can't be read right now`));
-  const needLines = [...(needRows.length ? capped(needRows, needs.length) : []), ...capped(unreadable, unreadable.length)];
+  const needLines = [...(facts.unreachable ? [text(UNREACHABLE)] : []), ...(needRows.length ? capped(needRows, needs.length) : []), ...capped(unreadable, unreadable.length)];
   const needCount = needs.length + facts.repliesUnreadable.reduce((sum, { count }) => sum + count, 0);
 
   const children: Node[] = [
@@ -296,6 +299,7 @@ function buildBrief(facts: BriefFacts, presses: boolean): BuiltCard {
     ...(routineRows.length ? briefSection("Routines", routineRows, facts.routines.length) : []),
   ];
   const parts = [
+    facts.unreachable && "couldn't reach your connected apps",
     facts.missing.length && `${plural(facts.missing.length, "account")} unreadable`,
     needCount && `${needCount} ${needCount === 1 ? "needs" : "need"} you`,
     facts.repliesChecking && CHECKING_EMAIL.toLowerCase(),

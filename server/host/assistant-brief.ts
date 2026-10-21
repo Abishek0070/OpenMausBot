@@ -66,6 +66,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
   const headers = new Map<string, { email: EmailHeader; why?: string }>();
   let brief: PostedBrief | undefined;
   let waitingForListing = false;
+  let unreachable = false;
   let postFailedAt: number | undefined;
   let rereading: Promise<void> | undefined;
 
@@ -125,7 +126,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
   function yourDay(at: number): Meeting[] | "checking" | null {
     if (!accounts.usable("googlecalendar").length) return null;
     const all = deps.meetings();
-    if (all === null) return "checking";
+    if (all === null) return unreachable ? null : "checking";
     const today = localDate(at, deps.timeZone());
     const listed = all.filter((meeting) => onYourDay(meeting, at, today));
     return listed.length === 0 && accounts.unreadable("googlecalendar").length > 0 ? null : listed;
@@ -158,13 +159,14 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
         ...unreadableMail.map((account) => ({ account: accounts.label(account.id), what: "email" as const })),
       ],
       replies: rows(waiting).map(briefEmail),
-      repliesChecking: !posted.pendingChecked && [...waiting, ...posted.important].some((ref) => gmail.has(ref.account)),
+      repliesChecking: !unreachable && !posted.pendingChecked && [...waiting, ...posted.important].some((ref) => gmail.has(ref.account)),
       repliesUnreadable: unshownCounts(waiting, new Set(unreadableMail.map((account) => account.id))),
       failedRoutines: posted.routines.filter((row) => row.status !== "completed"),
       clashes: clashes(meetings, { now: at, timeZone: deps.timeZone() }).map(([first, second]) => ({ first: side(first), second: side(second) })),
       meetings: Array.isArray(day) ? day.map(meeting) : day,
       important: rows(posted.important.filter((ref) => known.has(ref.account))).map(briefEmail),
       routines: posted.routines.filter((row) => row.status === "completed"),
+      ...(unreachable ? { unreachable: true } : {}),
     };
   }
 
@@ -250,7 +252,6 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       return picks;
     }
     addPending(held);
-    posted.mailOpen = false;
     posted.important = mergeRefs(posted.important, others);
     refresh(true);
     return unheld;
@@ -306,7 +307,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     return rereading;
   }
 
-  function dismiss(accountId: string, messageId: string, cardMessageId: string): void {
+  function dismiss(accountId: string, messageId: string): void {
     const pressed = groupOf(emailKey({ account: accountId, id: messageId }));
     const same = (ref: EmailRef): boolean => groupOf(refKey(ref)) === pressed;
     let dropped = false;
@@ -321,7 +322,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       brief.important = important;
       dropped = true;
     }
-    if (dropped && brief?.messageId === cardMessageId) refresh(true);
+    if (dropped) refresh(true);
   }
 
   return {
@@ -331,6 +332,11 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     judged,
     mailChecked(): void {
       if (brief) brief.mailOpen = false;
+    },
+    /** False when the account listing failed: the brief says so in place of what it is still checking. */
+    appsReached(reached: boolean): void {
+      unreachable = !reached;
+      if (!reached) refresh(false);
     },
     checkPending,
     refresh: (): void => refresh(false),
