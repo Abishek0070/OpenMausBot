@@ -579,6 +579,31 @@ describe("every account", () => {
     expect(w.briefs()).toHaveLength(1);
   });
 
+  it("keeps the brief's mail window open through a check where one account's Gmail read failed, so that inbox's morning mail still lands in the brief", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = twoInboxes();
+    w.watch.state.patch(SEEN);
+    w.live.broken.add("g2");
+    w.watch.onPresence({ source: "desktop", returned: false }); await w.settle();
+    w.live.broken.delete("g2");
+    w.live.inboxes.g2 = [mail("important-2", w.now())];
+    w.tick(15 * MINUTE); await w.settle();
+    expect(w.titles()).toEqual(["Daily brief"]);
+    expect(JSON.stringify(w.briefs()[0]!.widget)).toContain("Subject important-2");
+  });
+
+  it("still closes the brief's mail window half an hour after the brief while one account's Gmail read keeps failing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = twoInboxes();
+    w.watch.state.patch(SEEN);
+    w.live.broken.add("g2");
+    w.watch.onPresence({ source: "desktop", returned: false }); await w.settle();
+    w.tick(31 * MINUTE);
+    w.live.emails.push(mail("important-1", w.now()));
+    await w.settle();
+    expect(w.titles()).toEqual(["Daily brief", "Subject important-1"]);
+  });
+
   it("un-judges both copies of an email in two inboxes on Retry, and cards it once", async () => {
     const w = twoInboxes({ emails: [IN_G1], reply: () => ({ ok: true, threadId: "", reply: "I looked at your mail." }), briefed: true });
     w.live.inboxes.g2 = [IN_G2];

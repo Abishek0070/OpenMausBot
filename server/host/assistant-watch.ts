@@ -606,7 +606,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       const mail = await readMail(at);
       if (!context()) return;
       const putOff = mail.length > 0 && emailDue(mail, at);
-      if (!putOff && !triageOutstanding()) brief.mailChecked();
+      if (!putOff && !triageOutstanding() && mail.length === accounts.usable("gmail").length) brief.mailChecked();
       quietly("old meetings were not forgotten", () => {
         const kept = pruneMeetings(meetings(), at);
         if (Object.keys(kept).length !== Object.keys(meetings()).length) state.patch({ meetings: kept });
