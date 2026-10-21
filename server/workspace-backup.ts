@@ -753,11 +753,15 @@ function prepareRestore(dataDir: string, id: string, manifest: Manifest): string
     if (!record(value)) throw new Error("Invalid calendar definitions in workspace backup.");
     if (Array.isArray(value.calls)) for (const call of value.calls) if (record(call)) call.nextRunAt = null;
   });
-  // MausBot's jobs in flight and their Retry cards belong to the source, which may still finish them.
+  // MausBot's jobs in flight and their Retry cards belong to the source, which may still finish them; which apps are
+  // connected is learned again here, so this server posts its own connect and Reconnect cards.
   changeJson("assistant.json", (value) => {
     if (!record(value)) return;
     delete value.inFlight;
     delete value.retryCards;
+    if (record(value.accounts)) for (const account of Object.values(value.accounts)) if (record(account)) {
+      for (const seen of ["connectedSeen", "reconnectShown", "failures", "missedListings"]) delete account[seen];
+    }
   });
   if (existsSync(join(prepared, "delegations.json"))) writeJson(join(prepared, "delegations.json"), {});
   if (existsSync(join(prepared, "browser-cleanups.json"))) writeJson(join(prepared, "browser-cleanups.json"), []);

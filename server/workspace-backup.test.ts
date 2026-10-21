@@ -58,6 +58,7 @@ function fixture(root: string): DatabaseSync {
   json(join(root, "assistant.json"), {
     version: 1, meetings: { "demo-1": { start: 1, fingerprint: "f" } }, inFlight: [{ item: "prep:demo-1", at: 1 }],
     retryCards: { rq1: { item: "prep:demo-1", threadId: "thread", messageId: "message" } },
+    accounts: { ca_g1: { service: "gmail", address: "me@example.test", alias: "work", emailCursor: 5, judged: ["m1"], failures: 2, reconnectShown: true, connectedSeen: true, missedListings: 1 } },
   });
   const runtime = openRuntimeStore(join(root, "runtime.db"));
   try {
@@ -184,7 +185,8 @@ describe("encrypted full workspace backups", () => {
       expect(readFileSync(join(target, restoredBot.avatarUrl.slice("/api/".length)))).toEqual(AVATAR_BYTES);
       expect(readJson(join(target, "groups.json"))[0].cwd).toBe("/external/project");
       expect(readJson(join(target, "config.json"))).toEqual({ ...connections, language: "ja", features: { assistantActs: false } });
-      expect(readJson(join(target, "assistant.json"))).toEqual({ version: 1, meetings: { "demo-1": { start: 1, fingerprint: "f" } } });
+      expect(readJson(join(target, "assistant.json"))).toEqual({ version: 1, meetings: { "demo-1": { start: 1, fingerprint: "f" } },
+        accounts: { ca_g1: { service: "gmail", address: "me@example.test", alias: "work", emailCursor: 5, judged: ["m1"] } } });
       expect(readFileSync(join(target, "task-workspaces", "bot", "thread", "binary.bin"))).toEqual(Buffer.alloc(2 * 1024 * 1024, 0xa5));
       expect(readJson(join(target, "sessions.json"))).toEqual({ identity: "target-session" });
       expect(readJson(join(target, "cloud-owner.json"))).toEqual({ identity: "target-owner-record" });
