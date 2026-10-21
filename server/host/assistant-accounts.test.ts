@@ -112,6 +112,18 @@ describe("createAssistantAccounts", () => {
     expect(w.state.get().accounts?.ca_g1).toMatchObject({ failures: 2 });
   });
 
+  it("counts one failed read per account in a check, however many of its reads fail, and counts again in the next check", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world();
+    await w.accounts.refresh();
+    w.accounts.newCheck();
+    await w.accounts.read(G1, failing, true); await w.accounts.read(G1, failing, true); await w.accounts.read(C1, failing, true);
+    expect(w.state.get().accounts).toMatchObject({ ca_g1: { failures: 1 }, ca_c1: { failures: 1 } });
+    w.accounts.newCheck();
+    await w.accounts.read(G1, failing, true);
+    expect(w.state.get().accounts?.ca_g1).toMatchObject({ failures: 2 });
+  });
+
   it("posts one Reconnect card when an account it saw active is listed but no longer active, and again only after it came back and was lost again", async () => {
     const w = world();
     const expired = { ...G1, active: false };

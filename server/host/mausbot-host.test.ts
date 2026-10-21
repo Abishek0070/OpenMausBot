@@ -89,7 +89,7 @@ function setup(options: { cloudHome?: boolean; ownerOnly?: (threadId: string) =>
   const host = createMausBotHost({
     store, cfg: { features: {} } as AppConfig, composio, dataDir, hosted: false, cloudHome: options.cloudHome ?? false, maxBots: 50,
     registry: { get: () => ({ adapter: { capabilities: { agentsMcp: true, composioMcp: true } } }) } as unknown as MausBotHostDeps["registry"],
-    brief: { state: briefState, chiefThread: (bot) => bot.threadId, turnsByBot: () => new Map(), noteAssistantCard: vi.fn(), teamLine: () => null },
+    brief: { state: briefState, chiefThread: (bot) => bot.threadId, turnsByBot: () => new Map(), noteAssistantCard: vi.fn(), routineRows: () => [] },
     notify: vi.fn(), threadBusy: () => false, newId: () => `id-${Math.random().toString(36).slice(2)}`,
     startTurn: async (botId, text, opts) => { started.push({ botId, text, opts }); },
     interruptDirectThread: vi.fn(async () => {}),

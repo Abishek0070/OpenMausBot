@@ -36,7 +36,7 @@ export interface MausBotHostDeps {
   cfg: AppConfig;
   composio: Pick<typeof Composio, "configured" | "connectedServices" | "relayMcp">;
   registry: Pick<ProviderRegistry, "get">;
-  brief: Pick<ReturnType<typeof createChiefBrief>, "state" | "chiefThread" | "turnsByBot" | "noteAssistantCard" | "teamLine">;
+  brief: Pick<ReturnType<typeof createChiefBrief>, "state" | "chiefThread" | "turnsByBot" | "noteAssistantCard" | "routineRows">;
   dataDir: string;
   hosted: boolean;
   cloudHome: boolean;
@@ -68,6 +68,10 @@ export function createMausBotHost(deps: MausBotHostDeps) {
     checkMs: deps.checkMs ?? assistantCheckMs(process.env.OMB_ASSISTANT_CHECK_MS),
     enabled: () => assistantActsEnabled(cfg.features) && brief.state.get().mausbotIntro !== undefined,
     mausbot: () => findMausBot(store.bots.filter((bot) => !bot.hidden)),
+    routines: (since) => {
+      const bot = findMausBot(store.bots.filter((one) => !one.hidden));
+      return bot ? brief.routineRows(bot, since) : [];
+    },
     mainThread: (bot) => brief.chiefThread(bot),
     timeZone: () => brief.state.get().timeZone ?? (deps.cloudHome ? undefined : hostTimeZone()),
     capabilities: (bot) => {
@@ -81,7 +85,6 @@ export function createMausBotHost(deps: MausBotHostDeps) {
     }),
     runJob: (bot, title, prompt) => turns.run(bot.id, title, prompt),
     noteCard: (card) => brief.noteAssistantCard(card),
-    team: (since) => brief.teamLine(since),
     threadOf: (threadId) => {
       const owner = store.botByThread(threadId);
       return owner ? { bot: owner, cloudGuest: deps.cloudHome && !deps.cloudOwnerOnlyThread(threadId) } : null;

@@ -59,7 +59,6 @@ export const assistantStateSchema = z.object({
   lastBriefAt: at.optional(),
   meetings: z.record(id, meetingSchema).optional(),
   lastTriageAt: at.optional(),
-  lastTodayDate: day.optional(),
   turnDay: day.optional(),
   dayTurns: z.number().int().min(0).optional(),
   notices: z.object({ noWebSearch: z.boolean().optional(), noConnectorTools: z.boolean().optional() }).strict().optional(),
@@ -75,6 +74,14 @@ export type AccountRecord = z.infer<typeof accountRecordSchema>;
 export type PendingEmail = z.infer<typeof pendingEmailSchema>;
 export type MeetingRecord = z.infer<typeof meetingSchema>;
 export type AssistantStatePatch = Partial<Omit<AssistantState, "version">>;
+
+export const storableId = (value: string): boolean => value.length >= 1 && value.length <= MAX_ID_LENGTH;
+
+export function withChanges<T extends object>(record: T, changes: Partial<T>): T {
+  const next: Record<string, unknown> = { ...record, ...changes };
+  for (const [key, value] of Object.entries(changes)) if (value === undefined) delete next[key];
+  return next as T;
+}
 
 export interface AssistantStateStore {
   get(): AssistantState;
@@ -94,9 +101,7 @@ export function createAssistantState(file: string): AssistantStateStore {
   return {
     get: () => state,
     patch(changes) {
-      const next: Record<string, unknown> = { ...state, ...changes };
-      for (const [key, value] of Object.entries(changes)) if (value === undefined) delete next[key];
-      state = assistantStateSchema.parse(next);
+      state = assistantStateSchema.parse(withChanges(state, changes));
       try {
         writeFileAtomic(file, JSON.stringify(state) + "\n", { mode: 0o600 });
       } catch (error) {

@@ -180,19 +180,6 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
     return routineRows(recapInputs(seenWith(poster)), since);
   }
 
-  /** Security invariant: counts only what everyone who can see the Chief may also see. */
-  function teamLine(since: number): { text: string; open: { botId: string; threadId: string } } | null {
-    if (deps.hosted) return null;
-    const bot = chief();
-    const threadId = bot && chiefThread(bot);
-    if (!bot || !threadId) return null;
-    const facts = buildRecap(recapInputs(seenWith(bot)), { since, exclude: { threadId } })?.facts;
-    const parts = facts
-      ? [facts.finished.length && `${facts.finished.length} finished`, facts.failed.length && `${facts.failed.length} failed`, facts.waitingOnYou.length && `${facts.waitingOnYou.length} waiting on you`].filter(Boolean)
-      : [];
-    return { text: parts.length ? `${bot.name}: ${parts.join(" · ")}` : `${bot.name}: nothing new from the team`, open: { botId: bot.id, threadId } };
-  }
-
   let absenceStart: number | undefined;
   const presence = createPresence({
     dataDir: deps.dataDir, now, awayMs: () => deps.settings().awayMs,
@@ -234,5 +221,5 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
     return { returned: outcome.returned, open: { botId: card.botId, threadId: card.threadId } };
   }
 
-  return { state, presence, chief, chiefThread, turnsByBot, postRecap, active, noteAssistantCard, teamLine, routineRows: routineRowsFor };
+  return { state, presence, chief, chiefThread, turnsByBot, postRecap, active, noteAssistantCard, routineRows: routineRowsFor };
 }

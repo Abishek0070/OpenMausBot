@@ -334,6 +334,16 @@ describe("MausBot's daily brief", () => {
     expect(w.lastCard()).not.toContain("Subject m2");
   });
 
+  it("releases every copy of a held important email once a delivered card shows it", () => {
+    const w = briefWorld();
+    w.brief.judged([pick("m2", false)]);
+    w.brief.judged([{ ...pick("m2b", false), email: copy("m2b", "ca_g2", "m2") }]);
+    expect(w.pending().map((one) => one.messageId)).toEqual(["m2", "m2b"]);
+    w.brief.post();
+    expect(w.lastCard().match(/Subject m2/g)).toHaveLength(1);
+    expect(w.pending()).toEqual([]);
+  });
+
   it("holds an important email for the next brief when it could not be re-read for this one", async () => {
     const w = briefWorld();
     w.state.patch({ pendingEmails: [entry("m2", { needsReply: false })] });

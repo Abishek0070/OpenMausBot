@@ -1,7 +1,9 @@
+import type { ConnectorCardData } from "../../shared/wire.ts";
 import { ASSISTANT_SERVICES, isAddress, type AssistantService, type AssistantSources, type SourceAccount } from "../assistant-sources.ts";
+import { connectorCardText } from "../connector-card-text.ts";
 import { failure } from "../failure.ts";
 import { RECONNECT_AFTER } from "./assistant-plan.ts";
-import { MAX_ACCOUNTS, MAX_ADDRESS_LENGTH, MAX_ID_LENGTH, MAX_MISSED_LISTINGS, type AccountRecord, type AssistantStateStore } from "./assistant-state.ts";
+import { MAX_ACCOUNTS, MAX_ADDRESS_LENGTH, MAX_MISSED_LISTINGS, storableId, withChanges, type AccountRecord, type AssistantStateStore } from "./assistant-state.ts";
 
 const SHORT_ID = 6;
 const SERVICE_LABEL: Record<AssistantService, string> = { gmail: "Gmail", googlecalendar: "Google Calendar" };
@@ -36,7 +38,17 @@ export function disconnectedText(service: AssistantService, label?: string): str
   return `${reconnectLead(service, label)}: ${which} ${SERVICE_LABEL[service]} connection stopped working, so I can't read ${whose} ${READS[service]}.`;
 }
 
-const storableId = (id: string): boolean => id.length >= 1 && id.length <= MAX_ID_LENGTH;
+export function reconnectCard(account: SourceAccount, label: string | undefined, resumeKey: string): { text: string; connector: ConnectorCardData } {
+  const app = SERVICE_LABEL[account.service];
+  return {
+    text: connectorCardText(app, account.alias),
+    connector: {
+      slug: account.service, label: app, description: `Reconnect ${app}${label ? ` (${label})` : ""} so MausBot can keep reading it.`, status: "required", resumeKey,
+      ...(account.alias ? { alias: account.alias } : {}),
+    },
+  };
+}
+
 const isService = (id: string): id is AssistantService => (ASSISTANT_SERVICES as readonly string[]).includes(id);
 
 function newRecord(account: SourceAccount): AccountRecord {
@@ -52,17 +64,12 @@ function fromRecord(id: string, record: AccountRecord): SourceAccount {
   return { service: record.service, id, ...(record.alias ? { alias: record.alias } : {}), active, ...(record.implied ? { implied: true } : {}) };
 }
 
-function withChanges(record: AccountRecord, changes: Partial<AccountRecord>): AccountRecord {
-  const next: Record<string, unknown> = { ...record, ...changes };
-  for (const [key, value] of Object.entries(changes)) if (value === undefined) delete next[key];
-  return next as AccountRecord;
-}
-
 export type AssistantAccounts = ReturnType<typeof createAssistantAccounts>;
 
 export function createAssistantAccounts(deps: AssistantAccountsDeps) {
   let listing: SourceAccount[] | null = null;
   let selectionWarned = false;
+  let countedThisCheck: Set<string> | undefined;
   const longIdsWarned = new Set<string>();
   const failureCountedAt = new Map<string, number>();
   const lastRead = new Map<string, "ok" | "failed">();
@@ -203,6 +210,11 @@ export function createAssistantAccounts(deps: AssistantAccountsDeps) {
 
     listed: (): boolean => listing !== null,
 
+    /** From here to the next call, at most one failed read per account counts towards its Reconnect. */
+    newCheck(): void {
+      countedThisCheck = new Set();
+    },
+
     usable(service: AssistantService): SourceAccount[] {
       if (!deps.mayUse(service)) return [];
       return lastSeen().filter((account) => account.service === service && account.active);
@@ -226,10 +238,11 @@ export function createAssistantAccounts(deps: AssistantAccountsDeps) {
       } catch (error) {
         lastRead.set(account.id, "failed");
         const at = deps.now();
-        if (!scheduled && at - (failureCountedAt.get(account.id) ?? -Infinity) < deps.checkMs) {
-          console.warn(`assistant: reading ${account.service} account ${account.id} failed again within one check interval: ${failure(error)}`);
+        if (countedThisCheck?.has(account.id) || (!scheduled && at - (failureCountedAt.get(account.id) ?? -Infinity) < deps.checkMs)) {
+          console.warn(`assistant: reading ${account.service} account ${account.id} failed again within one check: ${failure(error)}`);
           return null;
         }
+        countedThisCheck?.add(account.id);
         failureCountedAt.set(account.id, at);
         const record = records()[account.id];
         const count = (record?.failures ?? 0) + 1;

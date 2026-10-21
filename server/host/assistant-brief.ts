@@ -1,8 +1,8 @@
 import type { AssistantSources, EmailHeader, SourceAccount } from "../assistant-sources.ts";
 import type { AssistantAccounts } from "./assistant-accounts.ts";
 import { briefCard, briefFallbackCard, type BriefClash, type BriefEmail, type BriefFacts, type BriefMeeting, type BuiltCard } from "./assistant-cards.ts";
-import { answered, clashes, emailKey, keepNewest, localDate, prunePending, todayDue, type Meeting } from "./assistant-plan.ts";
-import { MAX_ID_LENGTH, MAX_PENDING_EMAILS, type AssistantStateStore, type PendingEmail } from "./assistant-state.ts";
+import { answered, briefDue, clashes, emailKey, keepNewest, localDate, prunePending, type Meeting } from "./assistant-plan.ts";
+import { MAX_PENDING_EMAILS, storableId, type AssistantStateStore, type PendingEmail } from "./assistant-state.ts";
 import type { RoutineRow } from "./brief-recap.ts";
 
 const MINUTE = 60_000;
@@ -45,7 +45,6 @@ interface PostedBrief extends CardRef {
 }
 
 const refKey = (ref: EmailRef): string => emailKey({ account: ref.account, id: ref.messageId });
-const storableId = (value: string): boolean => value.length >= 1 && value.length <= MAX_ID_LENGTH;
 const storable = (email: EmailHeader): boolean => storableId(email.account) && storableId(email.id) && storableId(email.threadId);
 const refOf = (email: EmailHeader, judgedAt: number): EmailRef => ({ account: email.account, messageId: email.id, threadId: email.threadId, judgedAt });
 const emailsOf = (pick: TriagePick): EmailHeader[] => [pick.email, ...pick.copies];
@@ -72,7 +71,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
 
   const pending = (): PendingEmail[] => deps.state.get().pendingEmails ?? [];
   const savePending = (list: readonly PendingEmail[]): void => { deps.state.patch({ pendingEmails: keepNewest(list, MAX_PENDING_EMAILS) }); };
-  const due = (): boolean => todayDue({ now: deps.now(), timeZone: deps.timeZone(), lastTodayDate: deps.state.get().lastBriefDate }) !== null;
+  const due = (): boolean => briefDue({ now: deps.now(), timeZone: deps.timeZone(), lastBriefDate: deps.state.get().lastBriefDate }) !== null;
   const todays = (at: number): PostedBrief | undefined => (brief && localDate(at, deps.timeZone()) === brief.day ? brief : undefined);
   const labels = (ids: readonly string[]): string => [...new Set(ids.map((id) => accounts.label(id)))].join(", ");
   const usableIds = (service: "gmail" | "googlecalendar"): Set<string> => new Set(accounts.usable(service).map((account) => account.id));
@@ -90,6 +89,10 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
   }
 
   const sameEmail = (email: EmailHeader): string => (email.messageIdHeader === undefined ? `key ${emailKey(email)}` : `header ${email.messageIdHeader}`);
+  const groupOf = (key: string): string => {
+    const known = headers.get(key)?.email;
+    return known ? sameEmail(known) : `key ${key}`;
+  };
 
   /** One row per email, so a message in two inboxes shows once, under the account it was first judged in. */
   function rows(refs: readonly EmailRef[]): Array<{ email: EmailHeader; why?: string }> {
@@ -175,10 +178,10 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     return fallback;
   }
 
-  /** An important email that needs no reply is held in assistant.json until a delivered card shows it. */
+  /** An important email that needs no reply is held in assistant.json until a delivered card shows it or a copy of it. */
   function stillHeld(list: readonly PendingEmail[], shown: BriefFacts): PendingEmail[] {
-    const onCard = new Set(shown.important.map((email) => emailKey({ account: email.accountId, id: email.messageId })));
-    return list.filter((entry) => entry.needsReply || !onCard.has(refKey(entry)));
+    const onCard = new Set(shown.important.map((email) => groupOf(emailKey({ account: email.accountId, id: email.messageId }))));
+    return list.filter((entry) => entry.needsReply || !onCard.has(groupOf(refKey(entry))));
   }
 
   function releaseShown(shown: BriefFacts): void {
@@ -202,7 +205,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
 
   function post(): void {
     const at = deps.now();
-    const day = todayDue({ now: at, timeZone: deps.timeZone(), lastTodayDate: deps.state.get().lastBriefDate });
+    const day = briefDue({ now: at, timeZone: deps.timeZone(), lastBriefDate: deps.state.get().lastBriefDate });
     waitingForListing = false;
     if (!day || (postFailedAt !== undefined && at - postFailedAt < POST_RETRY_MS)) return;
     const since = deps.state.get().lastBriefAt ?? at - DAY;
@@ -276,8 +279,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
 
     const groups = new Map<string, PendingEmail[]>();
     for (const entry of waiting.filter((one) => !drop.has(refKey(one)))) {
-      const email = headers.get(refKey(entry))?.email;
-      const group = email ? sameEmail(email) : `key ${refKey(entry)}`;
+      const group = groupOf(refKey(entry));
       groups.set(group, [...(groups.get(group) ?? []), entry]);
     }
     const addresses = accounts.addresses();
@@ -305,12 +307,8 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
   }
 
   function dismiss(accountId: string, messageId: string, cardMessageId: string): void {
-    const key = emailKey({ account: accountId, id: messageId });
-    const pressed = headers.get(key)?.email;
-    const same = (ref: EmailRef): boolean => {
-      const email = headers.get(refKey(ref))?.email;
-      return refKey(ref) === key || (pressed !== undefined && email !== undefined && sameEmail(email) === sameEmail(pressed));
-    };
+    const pressed = groupOf(emailKey({ account: accountId, id: messageId }));
+    const same = (ref: EmailRef): boolean => groupOf(refKey(ref)) === pressed;
     let dropped = false;
     const before = pending();
     const kept = before.filter((entry) => !same(entry));

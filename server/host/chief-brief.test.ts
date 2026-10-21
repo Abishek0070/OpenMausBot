@@ -557,25 +557,6 @@ describe("MausBot in the recap composition", () => {
   });
 });
 
-describe("the team line for MausBot's Today", () => {
-  it("counts what the Chief's audience may see since a time, and opens the Chief's chat", () => {
-    const w = world([{ id: "chief", name: "Chief", chiefOfStaff: true }, { id: "scout", name: "Scout" }]);
-    w.digestFor("scout", NOW + HOUR);
-    w.tick(2 * HOUR);
-    expect(w.brief.teamLine(NOW)).toEqual({ text: "Chief: 1 finished", open: { botId: "chief", threadId: "chief-main" } });
-    expect(w.brief.teamLine(NOW + 3 * HOUR)).toEqual({ text: "Chief: nothing new from the team", open: { botId: "chief", threadId: "chief-main" } });
-    expect(world([{ id: "scout", name: "Scout" }]).brief.teamLine(NOW)).toBeNull();
-    expect(world([{ id: "chief", name: "Chief", chiefOfStaff: true }], { hosted: true }).brief.teamLine(NOW)).toBeNull();
-  });
-
-  it("leaves out what the Chief's audience may not see", () => {
-    const w = world([{ id: "chief", name: "Chief", chiefOfStaff: true }, { id: "payroll", name: "Payroll", visibility: "admins" }]);
-    w.digestFor("payroll", NOW + HOUR);
-    w.tick(2 * HOUR);
-    expect(w.brief.teamLine(NOW)).toEqual({ text: "Chief: nothing new from the team", open: { botId: "chief", threadId: "chief-main" } });
-  });
-});
-
 describe("routine runs in the recap and MausBot's rows", () => {
   const run = (more: Partial<RoutineRun> = {}): RoutineRun =>
     ({ id: "run-1", routineId: "rt-1", routineName: "Overnight numbers", status: "completed", target: "bot", botId: "scout", scheduledFor: NOW + HOUR, finishedAt: NOW + HOUR, output: "Revenue is up 4%. Costs flat.", ...more } as RoutineRun);

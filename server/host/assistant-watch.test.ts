@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SourceError, type CalendarEvent, type EmailHeader, type SourceAccount, type ThreadMessage } from "../assistant-sources.ts";
 import type { BotVisibility } from "../bot-visibility.ts";
@@ -10,9 +10,10 @@ import type { BotRecord, Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { disconnectedText, reconnectText } from "./assistant-accounts.ts";
 import { fingerprint, meetingKey } from "./assistant-plan.ts";
-import { MAX_JUDGED, type AssistantStatePatch } from "./assistant-state.ts";
+import { MAX_JUDGED, type AssistantStatePatch, type PendingEmail } from "./assistant-state.ts";
 import type { JobResult } from "./assistant-turns.ts";
-import { createAssistantWatch, NO_CONNECTOR_TOOLS, NO_WEB_SEARCH, RETRY, TODAY_FAILED, type AssistantWatchDeps } from "./assistant-watch.ts";
+import { createAssistantWatch, NO_CONNECTOR_TOOLS, NO_WEB_SEARCH, RETRY, type AssistantWatchDeps } from "./assistant-watch.ts";
+import type { RoutineRow } from "./brief-recap.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -63,11 +64,13 @@ function world(options: {
   events?: CalendarEvent[]; emails?: EmailHeader[]; listed?: SourceAccount[] | null;
   /** The first `live.reply`. */
   reply?: (title: string, prompt: string) => JobResult | Promise<JobResult>; hosted?: boolean; tools?: { agentsTools: boolean; mailTools: boolean };
-  notifications?: boolean; team?: ReturnType<AssistantWatchDeps["team"]>; threads?: Record<string, Owner>; visibility?: BotVisibility;
+  notifications?: boolean; routines?: RoutineRow[]; threads?: Record<string, Owner>; visibility?: BotVisibility;
   connectorTools?: BotRecord["connectorTools"];
   /** When Gmail received a message, if not when it was sent: Gmail's `after:` counts arrival. */
   arrivals?: Record<string, number>;
-  deps?: Partial<Pick<AssistantWatchDeps, "capabilities" | "team" | "threadBusy">>;
+  deps?: Partial<Pick<AssistantWatchDeps, "capabilities" | "routines" | "threadBusy">>;
+  /** Today's brief went out before this run, so mail judged now gets a card of its own. */
+  briefed?: boolean;
 } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "omb-assistant-watch-"));
   dirs.push(dataDir);
@@ -126,8 +129,8 @@ function world(options: {
       return emailsOf(account.id).filter((email) => (live.arrivals[email.id] ?? email.at) >= since);
     }),
     mailFrom: vi.fn(async (_account: SourceAccount, _addresses: readonly string[], _sinceMs: number) => live.newMailFromAttendees),
-    message: vi.fn(async (account: SourceAccount, messageId: string) => emailsOf(account.id).find((email) => email.id === messageId) ?? null),
-    thread: vi.fn(async (account: SourceAccount, threadId: string) => live.threads[`${account.id}/${threadId}`] ?? []),
+    message: vi.fn(async (account: SourceAccount, messageId: string) => { refuse(account); return emailsOf(account.id).find((email) => email.id === messageId) ?? null; }),
+    thread: vi.fn(async (account: SourceAccount, threadId: string) => { refuse(account); return live.threads[`${account.id}/${threadId}`] ?? []; }),
   };
   const jobs: Array<{ title: string; prompt: string }> = [];
   let jobThreads = 0;
@@ -144,11 +147,12 @@ function world(options: {
     store: store as unknown as AssistantWatchDeps["store"], dataDir, now: () => now, checkMs: 15 * MINUTE, hosted: options.hosted ?? false,
     enabled: () => enabled, mausbot: () => bot, mainThread: () => "m-main", timeZone: () => zone,
     capabilities: () => options.tools ?? { agentsTools: true, mailTools: true }, sources, runJob, notify, noteCard,
-    team: () => options.team ?? null, threadOf: (threadId) => threads[threadId] ?? null,
+    routines: () => options.routines ?? [], threadOf: (threadId) => threads[threadId] ?? null,
     threadBusy: () => false, newId: () => `rq${++ids}`, every: (run) => { clocks.push(run); return { cancel: () => {} }; },
     ...options.deps,
   });
   const watch = make();
+  if (options.briefed) watch.state.patch({ lastBriefDate: "2026-10-17" });
   const widgets = () => messages.filter((line) => line.kind === "widget").map((line) => line.widget!.root as unknown as { title: string; caption?: string });
   return {
     watch, make, live, store, sources, jobs, runJob, notify, noteCard, clocks, messages, tasks, dataDir,
@@ -156,7 +160,7 @@ function world(options: {
     titles: () => widgets().map((card) => card.title),
     retries: () => messages.filter((line) => line.kind === "options" && line.card?.options.includes(RETRY)),
     answerRetry: (row: Message) => watch.answerCard("m-main", row.card!.requestId!, "answer", RETRY, owner),
-    todays: () => messages.filter((line) => line.kind === "widget" && (line.widget!.root as unknown as { title: string }).title === "Today"),
+    briefs: () => messages.filter((line) => line.kind === "widget" && (line.widget!.root as unknown as { title: string }).title === "Daily brief"),
     texts: () => messages.filter((line) => line.kind === "text").map((line) => line.text),
     tick: (ms: number) => { now += ms; }, now: () => now, setZone: (next: string) => { zone = next; }, switchOff: () => { enabled = false; }, switchOn: () => { enabled = true; },
     settle: async () => { await watch.check(); await watch.idle(); },
@@ -296,7 +300,7 @@ describe("reminders", () => {
 describe("email", () => {
   it("judges at most twenty new emails a turn, once per fifteen minutes, and cards only what matters", async () => {
     const recent = Array.from({ length: 25 }, (_, index) => mail(index === 3 ? "important-3" : index === 22 ? "important-22" : `plain-${index}`, NOW - (index + 1) * MINUTE));
-    const w = world({ emails: [...recent, mail("ancient", NOW - 30 * HOUR)], arrivals: { ancient: NOW - MINUTE } });
+    const w = world({ emails: [...recent, mail("ancient", NOW - 30 * HOUR)], arrivals: { ancient: NOW - MINUTE }, briefed: true });
     w.watch.state.patch({ accounts: { g1: { service: "gmail", connectedSeen: true, emailCursor: NOW - 2 * HOUR } } });
     await w.settle();
     expect(w.jobs.map((job) => job.title)).toEqual(["Email check"]);
@@ -316,7 +320,7 @@ describe("email", () => {
   });
 
   it("never judges the backlog on a first run: it asks only for mail from one check back", async () => {
-    const w = world({ emails: [mail("important-old", NOW - 2 * HOUR), mail("important-new", NOW - 5 * MINUTE)] });
+    const w = world({ emails: [mail("important-old", NOW - 2 * HOUR), mail("important-new", NOW - 5 * MINUTE)], briefed: true });
     await w.settle();
     expect(w.sources.emails).toHaveBeenCalledWith(G1, NOW - 15 * MINUTE, expect.any(Number));
     expect(w.jobs[0]!.prompt).toContain("important-new");
@@ -361,7 +365,7 @@ describe("every account", () => {
   });
 
   it("judges new mail from every account in one email check, and cards an important one with its account", async () => {
-    const w = twoInboxes({ emails: [mail("important-1", NOW - MINUTE)] });
+    const w = twoInboxes({ emails: [mail("important-1", NOW - MINUTE)], briefed: true });
     w.live.inboxes.g2 = [mail("important-2", NOW - 2 * MINUTE)];
     await w.settle();
     expect(w.jobs.filter((job) => job.title === "Email check")).toHaveLength(1);
@@ -371,7 +375,7 @@ describe("every account", () => {
   });
 
   it("keeps each account's email cursor and judged ids, and Retry on an email check judges those emails again in each account", async () => {
-    const w = twoInboxes({ emails: [mail("important-1", NOW - 10 * MINUTE)], reply: () => ({ ok: true, threadId: "", reply: "I looked at your mail." }) });
+    const w = twoInboxes({ emails: [mail("important-1", NOW - 10 * MINUTE)], reply: () => ({ ok: true, threadId: "", reply: "I looked at your mail." }), briefed: true });
     w.live.inboxes.g2 = [mail("important-2", NOW - 5 * MINUTE)];
     await w.settle();
     expect(w.watch.state.get().accounts).toMatchObject({ g1: { judged: ["important-1"] }, g2: { judged: ["important-2"] } });
@@ -520,7 +524,7 @@ describe("every account", () => {
 
   it("judges one email in two inboxes in one item, cards it once, and marks both copies judged", async () => {
     let flights: string[] = [];
-    const w = twoInboxes({ emails: [IN_G1], reply: (title, prompt) => {
+    const w = twoInboxes({ emails: [IN_G1], briefed: true, reply: (title, prompt) => {
       flights = (w.watch.state.get().inFlight ?? []).map((flight) => flight.item);
       return defaultReply(title, prompt);
     } });
@@ -537,7 +541,7 @@ describe("every account", () => {
   });
 
   it("un-judges both copies of an email in two inboxes on Retry, and cards it once", async () => {
-    const w = twoInboxes({ emails: [IN_G1], reply: () => ({ ok: true, threadId: "", reply: "I looked at your mail." }) });
+    const w = twoInboxes({ emails: [IN_G1], reply: () => ({ ok: true, threadId: "", reply: "I looked at your mail." }), briefed: true });
     w.live.inboxes.g2 = [IN_G2];
     await w.settle();
     expect(w.answerRetry(w.retries()[0]!)).toBe("answered");
@@ -690,133 +694,185 @@ describe("catch-up", () => {
   });
 });
 
-describe("Today", () => {
-  it("waits for the first calendar read, then posts once per later local day with meetings, prep status, flagged email and the team", async () => {
-    const team = { text: "Chief of Staff: 2 finished", open: { botId: "chief", threadId: "chief-main" } };
-    const w = world({ events: [meeting("soon", NOW + 2 * HOUR), meeting("later", NOW + 9 * HOUR), meeting("tomorrow", NOW + 24 * HOUR)], emails: [mail("important-1", NOW - MINUTE)], team });
-    const todays = () => w.widgets().filter((card) => card.title === "Today");
-    w.watch.onPresence({ source: "desktop", returned: false });
-    expect(w.titles()).toEqual([]);
-    await w.settle();
-    expect(todays()).toHaveLength(1);
-    const first = JSON.stringify(todays()[0]);
-    for (const shown of ["Meeting soon", "Preparing", "Meeting later", "Prep at 2:30 PM", "Chief of Staff: 2 finished", '"open_thread"']) expect(first).toContain(shown);
-    expect(first).not.toContain("Meeting tomorrow");
-    w.watch.onPresence({ source: "desktop", returned: false });
-    w.setZone("America/Los_Angeles");
-    w.watch.onPresence({ source: "phone", returned: false });
-    expect(todays()).toHaveLength(1);
-    w.setZone("Asia/Kolkata");
-    w.tick(24 * HOUR);
-    w.watch.onPresence({ source: "desktop", returned: false });
-    expect(todays()).toHaveLength(2);
-    expect(JSON.stringify(todays()[1])).toContain("important-1 <important-1@example.test>: Subject important-1");
+describe("the daily brief", () => {
+  let w: ReturnType<typeof world>;
+  beforeEach(() => { w = world({ emails: [mail("important-1", NOW - MINUTE)] }); });
+  const dismiss = { type: "dismiss_email", payload: { messageId: "important-1", account: "g1" } };
+
+  it("posts the brief at the first presence of the day, with one notification and a note for the open rule", async () => {
+    await w.settle(); w.watch.onPresence({ source: "desktop", returned: false });
+    expect(w.titles().filter((title) => title === "Daily brief")).toHaveLength(1);
+    expect(w.notify).toHaveBeenCalledTimes(1); expect(w.noteCard).toHaveBeenCalledTimes(1);
   });
 
-  it("posts Today at once from a stale calendar, so the presence can open it, then corrects that card in place", async () => {
-    const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
+  it("holds mail judged before the day's brief, and cards mail judged after the brief's first email check", async () => {
+    // important-1 arrives overnight: judged before any presence
     await w.settle();
-    w.notify.mockClear();
-    w.noteCard.mockClear();
-    w.tick(24 * HOUR);
-    w.live.events = [meeting("overnight", w.now() + 5 * HOUR)];
-    w.watch.onPresence({ source: "desktop", returned: true });
-    expect(w.todays()).toHaveLength(1);
-    expect(w.noteCard).toHaveBeenCalledWith({ botId: "m", threadId: "m-main" });
-    const id = w.todays()[0]!.id;
-    expect(JSON.stringify(w.todays()[0]!.widget)).not.toContain("Meeting overnight");
-    await w.watch.idle();
-    expect(w.todays()).toHaveLength(1);
-    expect(w.todays()[0]!.id).toBe(id);
-    expect(w.todays()[0]!.widget).toMatchObject({ rev: 1 });
-    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Meeting overnight");
-    expect(w.notify).toHaveBeenCalledTimes(1);
-    expect(w.noteCard).toHaveBeenCalledTimes(1);
+    expect(w.titles()).not.toContain("Subject important-1");
+    w.watch.onPresence({ source: "desktop", returned: false }); await w.settle();
+    expect(JSON.stringify(w.widgets().find((card) => card.title === "Daily brief"))).toContain("Subject important-1");
+    w.live.emails.push(mail("important-2", w.now())); w.tick(15 * MINUTE); await w.settle();
+    expect(w.titles()).toContain("Subject important-2");
   });
 
-  it("leaves a stale Today alone when the fresh read finds the same meetings, and reads at once after an ordinary presence", async () => {
-    const w = world({ events: [meeting("a", NOW + 2 * HOUR), meeting("b", NOW + 26 * HOUR)] });
-    await w.settle();
-    w.tick(24 * HOUR);
-    w.watch.onPresence({ source: "desktop", returned: false });
-    expect(w.todays()).toHaveLength(1);
-    await w.watch.idle();
-    expect(w.sources.events).toHaveBeenCalledTimes(2);
-    expect(w.todays()[0]!.widget).not.toHaveProperty("rev");
-    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Meeting b");
+  it("closes the brief's mail window when its first email check fails, so later mail gets a card of its own", async () => {
+    let fail = true;
+    const day = world({ emails: [mail("important-1", NOW - MINUTE)], reply: (title, prompt) => (fail ? { ok: false, error: "engine down" } : defaultReply(title, prompt)) });
+    day.watch.state.patch(SEEN);
+    day.watch.onPresence({ source: "desktop", returned: false });
+    await day.settle();
+    expect(day.retries().map((line) => line.card?.title)).toEqual(["I couldn't check your new email"]);
+    fail = false;
+    day.live.emails.push(mail("important-2", day.now()));
+    day.tick(15 * MINUTE);
+    await day.settle();
+    expect(day.titles()).toEqual(["Daily brief", "Subject important-2"]);
   });
 
-  it("after a restart posts Today at the first presence while the calendar is still being read, then turns that same card into the real Today, with one notification", async () => {
-    const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
-    await w.settle();
-    w.notify.mockClear();
-    w.noteCard.mockClear();
-    w.tick(24 * HOUR);
-    w.live.events = [meeting("b", w.now() + 6 * HOUR)];
+  it("dismisses an email from the brief without a turn, and refuses a dismiss from someone who is not the owner or an admin", async () => {
+    await w.settle(); w.watch.onPresence({ source: "desktop", returned: false }); await w.settle();
+    const briefId = w.briefs()[0]!.id;
+    const jobsBefore = w.runJob.mock.calls.length;
+    expect(w.watch.serverPress("m-main", briefId, dismiss, member)).toBe("refused");
+    expect(JSON.stringify(w.briefs()[0]!.widget)).toContain("Subject important-1");
+    expect(w.watch.serverPress("m-main", briefId, dismiss, owner)).toBe("handled");
+    expect(JSON.stringify(w.briefs()[0]!.widget)).not.toContain("Subject important-1");
+    expect(w.runJob).toHaveBeenCalledTimes(jobsBefore);
+    expect(w.watch.serverPress("m-main", briefId, { type: "draft_reply", payload: {} }, owner)).toBeNull();
+    expect(w.watch.serverPress("scout-main", briefId, dismiss, owner)).toBeNull();
+  });
+
+  it("posts no brief and answers no press with the switch off or on a hosted workspace", async () => {
+    for (const quiet of [world({ hosted: true }), (() => { const off = world(); off.switchOff(); return off; })()]) {
+      quiet.watch.onPresence({ source: "desktop", returned: false }); await quiet.settle();
+      expect(quiet.titles()).toEqual([]);
+      expect(quiet.watch.serverPress("m-main", "any", { type: "dismiss_email", payload: { messageId: "x", account: "g1" } }, owner)).toBeNull();
+    }
+  });
+
+  it("lists today's timed meetings in Your day with their prep status, a solo block as Just you, and no all-day event", async () => {
+    const day = world({ events: [meeting("soon", NOW + 2 * HOUR), meeting("later", NOW + 9 * HOUR), meeting("focus", NOW + 3 * HOUR, { attendees: [ME] }), meeting("holiday", NOW, { allDay: true }), meeting("tomorrow", NOW + 24 * HOUR)] });
+    await day.settle(); day.watch.onPresence({ source: "desktop", returned: false });
+    const brief = JSON.stringify(day.briefs()[0]!.widget);
+    for (const shown of ["Meeting soon", "Prep ready", "Meeting later", "Prep at 2:30 PM", "Meeting focus", "Just you"]) expect(brief).toContain(shown);
+    for (const left of ["Meeting holiday", "Meeting tomorrow"]) expect(brief).not.toContain(left);
+  });
+
+  it("lists the meetings of the calendars it read and names the one it could not, so 'Checking your calendar…' never stays", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const two = world({ listed: [G1, C1, C2], events: [meeting("a", NOW + 6 * HOUR)] });
+    two.live.addresses.c2 = ADMIN;
+    two.live.broken.add("c2");
+    two.watch.state.patch({ accounts: { ...SEEN.accounts, c2: { service: "googlecalendar", address: ADMIN, connectedSeen: true } } });
+    two.watch.onPresence({ source: "desktop", returned: false });
+    expect(JSON.stringify(two.briefs()[0]!.widget)).toContain("Checking your calendar…");
+    await two.settle();
+    const brief = JSON.stringify(two.briefs()[0]!.widget);
+    expect(brief).toContain("Meeting a");
+    expect(brief).toContain("I couldn't read the calendar of admin@example.test.");
+    expect(brief).not.toContain("Checking your calendar…");
+    expect(two.briefs()).toHaveLength(1);
+    expect(two.retries()).toEqual([]);
+  });
+
+  it("names a calendar that turns out to be disconnected on the brief, with its Reconnect card and no Retry", async () => {
+    const day = world({ events: [meeting("b", NOW + 6 * HOUR)] });
+    day.watch.state.patch(SEEN);
+    day.live.listed = [G1, { ...C1, active: false }];
+    day.watch.onPresence({ source: "desktop", returned: false });
+    expect(JSON.stringify(day.briefs()[0]!.widget)).toContain("Checking your calendar…");
+    await day.settle();
+    const brief = JSON.stringify(day.briefs()[0]!.widget);
+    expect(brief).toContain("I couldn't read the calendar of me@example.test.");
+    expect(brief).not.toContain("Checking your calendar…");
+    expect(day.texts()).toContain(disconnectedText("googlecalendar", "me@example.test"));
+    expect(day.retries()).toEqual([]);
+  });
+
+  it("counts one failed read of an account in a check, though the brief's re-read and the email read both fail", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const down = world();
+    const waiting: PendingEmail = { account: "g1", messageId: "waiting-1", threadId: "thread-waiting-1", judgedAt: NOW - HOUR, needsReply: true };
+    down.watch.state.patch({ ...SEEN, pendingEmails: [waiting] });
+    down.watch.onPresence({ source: "desktop", returned: false });
+    down.live.broken.add("g1");
+    await down.settle();
+    expect(down.sources.message).toHaveBeenCalledTimes(1);
+    expect(down.sources.emails).toHaveBeenCalledTimes(1);
+    expect(down.watch.state.get().accounts?.g1?.failures).toBe(1);
+    down.tick(15 * MINUTE);
+    await down.settle();
+    expect(down.watch.state.get().accounts?.g1?.failures).toBe(2);
+  });
+
+  it("posts the brief at once from the last calendar read, so the presence can open it, then corrects that card in place without another notification", async () => {
+    const day = world({ events: [meeting("a", NOW + 2 * HOUR)] });
+    await day.settle();
+    day.notify.mockClear();
+    day.noteCard.mockClear();
+    day.tick(24 * HOUR);
+    day.live.events = [meeting("overnight", day.now() + 5 * HOUR)];
+    day.watch.onPresence({ source: "desktop", returned: true });
+    expect(day.briefs()).toHaveLength(1);
+    expect(day.noteCard).toHaveBeenCalledWith({ botId: "m", threadId: "m-main" });
+    const id = day.briefs()[0]!.id;
+    expect(JSON.stringify(day.briefs()[0]!.widget)).not.toContain("Meeting overnight");
+    await day.watch.idle();
+    expect(day.briefs()).toHaveLength(1);
+    expect(day.briefs()[0]!.id).toBe(id);
+    expect(day.briefs()[0]!.widget).toMatchObject({ rev: 1 });
+    expect(JSON.stringify(day.briefs()[0]!.widget)).toContain("Meeting overnight");
+    expect(day.notify).toHaveBeenCalledTimes(1);
+    expect(day.noteCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("after a restart posts the brief at the first presence while the calendar is still being read, then fills that same card in, with one notification", async () => {
+    const day = world({ events: [meeting("a", NOW + 2 * HOUR)] });
+    await day.settle();
+    day.notify.mockClear();
+    day.noteCard.mockClear();
+    day.tick(24 * HOUR);
+    day.live.events = [meeting("b", day.now() + 6 * HOUR)];
     const connected = gate();
     const calendar = gate();
-    w.sources.accounts.mockImplementationOnce(async () => { await connected.closed; return w.live.listed; });
-    w.sources.events.mockImplementationOnce(async () => { await calendar.closed; return w.live.events; });
-    const restarted = w.make();
+    day.sources.accounts.mockImplementationOnce(async () => { await connected.closed; return day.live.listed; });
+    day.sources.events.mockImplementationOnce(async () => { await calendar.closed; return day.live.events; });
+    const restarted = day.make();
     restarted.start();
     restarted.onPresence({ source: "desktop", returned: false });
-    expect(w.todays()).toHaveLength(1);
-    const placeholder = w.todays()[0]!;
+    expect(day.briefs()).toHaveLength(1);
+    const placeholder = day.briefs()[0]!;
     expect(JSON.stringify(placeholder.widget)).toContain("Checking your calendar…");
-    expect(w.notify).toHaveBeenCalledTimes(1);
-    expect(w.noteCard).toHaveBeenCalledWith({ botId: "m", threadId: "m-main" });
+    expect(day.notify).toHaveBeenCalledTimes(1);
+    expect(day.noteCard).toHaveBeenCalledWith({ botId: "m", threadId: "m-main" });
     connected.open();
     calendar.open();
     await restarted.idle();
-    expect(w.todays()).toHaveLength(1);
-    expect(w.todays()[0]!.id).toBe(placeholder.id);
-    expect(w.todays()[0]!.widget).toMatchObject({ rev: 1 });
-    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Meeting b");
-    expect(JSON.stringify(w.todays()[0]!.widget)).not.toContain("Checking your calendar");
-    expect(w.notify).toHaveBeenCalledTimes(1);
-    expect(w.noteCard).toHaveBeenCalledTimes(1);
-    expect(readFileSync(join(w.dataDir, "assistant.json"), "utf8")).not.toContain("Meeting b");
+    expect(day.briefs()).toHaveLength(1);
+    expect(day.briefs()[0]!.id).toBe(placeholder.id);
+    expect(day.briefs()[0]!.widget).toMatchObject({ rev: 1 });
+    expect(JSON.stringify(day.briefs()[0]!.widget)).toContain("Meeting b");
+    expect(JSON.stringify(day.briefs()[0]!.widget)).not.toContain("Checking your calendar");
+    expect(day.notify).toHaveBeenCalledTimes(1);
+    expect(day.noteCard).toHaveBeenCalledTimes(1);
+    expect(readFileSync(join(day.dataDir, "assistant.json"), "utf8")).not.toContain("Meeting b");
     restarted.stop();
   });
 
-  it("says on a waiting Today that the calendar could not be read, offers one Retry, and fills the card in once a read works", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const w = world({ events: [meeting("b", NOW + 6 * HOUR)] });
-    w.watch.state.patch(SEEN);
-    w.watch.onPresence({ source: "desktop", returned: false });
-    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Checking your calendar…");
-    w.live.calendarFailures = 2;
-    await w.settle();
-    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("I couldn't read your calendar.");
-    expect(w.retries().map((line) => line.card!.title)).toEqual([TODAY_FAILED]);
-    await w.settle();
-    expect(w.retries()).toHaveLength(1);
-    expect(w.watch.answerCard("m-main", w.retries()[0]!.card!.requestId!, "answer", RETRY, member)).toBe("unavailable");
-    expect(w.watch.answerCard("m-main", w.retries()[0]!.card!.requestId!, "answer", RETRY, owner)).toBe("answered");
-    await w.watch.idle();
-    expect(w.todays()).toHaveLength(1);
-    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Meeting b");
-    expect(w.notify).toHaveBeenCalledTimes(2);
-    expect(w.noteCard).toHaveBeenCalledTimes(1);
+  it("posts the brief for routine results alone, under Routines", async () => {
+    const run: RoutineRow = { name: "Overnight numbers", status: "completed", line: "Revenue is up four percent.", open: { botId: "scout", threadId: "run-1" } };
+    const routines = world({ listed: [], routines: [run] });
+    await routines.settle();
+    routines.watch.onPresence({ source: "desktop", returned: false });
+    const brief = JSON.stringify(routines.briefs()[0]!.widget);
+    for (const shown of ['"Routines"', "Overnight numbers", "Revenue is up four percent."]) expect(brief).toContain(shown);
   });
 
-  it("offers the Reconnect card, not Retry, when the waiting Today's calendar turns out to be disconnected", async () => {
-    const w = world({ events: [meeting("b", NOW + 6 * HOUR)] });
-    w.watch.state.patch(SEEN);
-    w.live.listed = [G1, { ...C1, active: false }];
-    w.watch.onPresence({ source: "desktop", returned: false });
-    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Checking your calendar…");
-    await w.settle();
-    expect(JSON.stringify(w.todays()[0]!.widget)).toContain("I couldn't read your calendar.");
-    expect(w.texts()).toContain(disconnectedText("googlecalendar", "me@example.test"));
-    expect(w.retries()).toEqual([]);
-  });
-
-  it("posts no Today when neither Gmail nor Calendar is connected", async () => {
-    const w = world({ listed: [{ ...G1, active: false }, { ...C1, active: false }] });
-    await w.settle();
-    w.watch.onPresence({ source: "desktop", returned: false });
-    expect(w.titles()).toEqual([]);
+  it("posts no brief when no Google account is connected and there are no routine results", async () => {
+    const none = world({ listed: [{ ...G1, active: false }, { ...C1, active: false }] });
+    await none.settle();
+    none.watch.onPresence({ source: "desktop", returned: false });
+    expect(none.titles()).toEqual([]);
   });
 });
 
@@ -845,7 +901,7 @@ describe("a failed AI turn", () => {
 
   it("Retry on an email check judges those emails again, even after later checks moved past them", async () => {
     let fail = true;
-    const w = world({ emails: [mail("important-1", NOW - MINUTE)], reply: (title, prompt) => (fail ? { ok: false, error: "engine down" } : defaultReply(title, prompt)) });
+    const w = world({ emails: [mail("important-1", NOW - MINUTE)], reply: (title, prompt) => (fail ? { ok: false, error: "engine down" } : defaultReply(title, prompt)), briefed: true });
     await w.settle();
     for (let check = 0; check < 8; check += 1) {
       w.tick(15 * MINUTE);
@@ -980,7 +1036,7 @@ describe("a throw inside a job or a step", () => {
 
   it("puts back the emails of a check that threw, but not the ones it already carded", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const w = world({ emails: [mail("important-1", NOW - MINUTE), mail("important-2", NOW - 2 * MINUTE)] });
+    const w = world({ emails: [mail("important-1", NOW - MINUTE), mail("important-2", NOW - 2 * MINUTE)], briefed: true });
     let refuse = true;
     w.live.refuseAppend = (message) => refuse && message.kind === "widget" && JSON.stringify(message.widget).includes("Subject important-2");
     await w.settle();
@@ -1016,24 +1072,24 @@ describe("a throw inside a job or a step", () => {
     expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting b"]);
   });
 
-  it("still posts Today and runs queued jobs when sweeping throws", async () => {
+  it("still posts the brief and runs queued jobs when sweeping throws", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const w = world({ events: [meeting("a", NOW + 2 * HOUR)], deps: { threadBusy: () => { throw new Error("the busy list is gone"); } } });
     w.tasks.set("job-old", { routineRunId: "mausbot-job-old" });
     w.watch.state.patch({ workThreads: [{ threadId: "job-old", at: NOW - 25 * HOUR }] });
     w.watch.onPresence({ source: "desktop", returned: false });
     await w.settle();
-    expect(w.titles()).toEqual(["Today", "Prep: Meeting a"]);
+    expect(w.titles()).toEqual(["Daily brief", "Prep: Meeting a"]);
   });
 
-  it("still runs queued jobs when Today throws, and a return still reads", async () => {
+  it("still runs queued jobs when the brief throws, and a return still reads", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
-    w.live.refuseAppend = (message) => message.kind === "widget" && JSON.stringify(message.widget).includes('"title":"Today"');
+    w.live.refuseAppend = (message) => message.kind === "widget" && JSON.stringify(message.widget).includes('"title":"Daily brief"');
     w.watch.onPresence({ source: "desktop", returned: false });
     await w.settle();
     expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a"]);
-    expect(w.todays()).toEqual([]);
+    expect(w.briefs()).toEqual([]);
     w.tick(24 * HOUR);
     w.watch.onPresence({ source: "desktop", returned: true });
     await w.watch.idle();
@@ -1042,15 +1098,15 @@ describe("a throw inside a job or a step", () => {
 });
 
 describe("a failing piece after delivery", () => {
-  it("still posts Today, without the team line, when the team line throws", async () => {
+  it("still posts the brief, without routine results, when they cannot be read", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], deps: { team: () => { throw new Error("the recap broke"); } } });
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], deps: { routines: () => { throw new Error("the run log is unreadable"); } } });
     w.watch.onPresence({ source: "desktop", returned: false });
     await w.settle();
-    expect(w.todays()).toHaveLength(1);
-    const today = JSON.stringify(w.todays()[0]!.widget);
-    expect(today).toContain("Meeting a");
-    expect(today).not.toContain('"Team"');
+    expect(w.briefs()).toHaveLength(1);
+    const brief = JSON.stringify(w.briefs()[0]!.widget);
+    expect(brief).toContain("Meeting a");
+    expect(brief).not.toContain('"Routines"');
   });
 
   it("adds no Retry card to a prep that posted its card and then threw, whether or not the switch went off", async () => {
@@ -1126,7 +1182,7 @@ describe("checks running together", () => {
 
   it("keeps a cursor moved back by Retry when a Gmail read that started earlier finishes", async () => {
     let fail = true;
-    const w = world({ emails: [mail("important-1", NOW - MINUTE)], reply: (title, prompt) => (fail ? { ok: false, error: "engine down" } : defaultReply(title, prompt)) });
+    const w = world({ emails: [mail("important-1", NOW - MINUTE)], reply: (title, prompt) => (fail ? { ok: false, error: "engine down" } : defaultReply(title, prompt)), briefed: true });
     await w.settle();
     for (let check = 0; check < 2; check += 1) {
       w.tick(15 * MINUTE);
@@ -1153,13 +1209,17 @@ describe("checks running together", () => {
 });
 
 describe("cards and the open rule", () => {
-  it("sends exactly one notification and one note per new card", async () => {
+  it("sends exactly one notification and one note per new card, and none for the brief's edits", async () => {
     const w = world({ events: [meeting("a", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)] });
     w.watch.onPresence({ source: "desktop", returned: false });
     await w.settle();
-    w.tick(2 * HOUR - 9 * MINUTE);
+    expect(JSON.stringify(w.briefs()[0]!.widget)).toContain("Subject important-1");
+    w.live.emails.push(mail("important-2", w.now()));
+    w.tick(15 * MINUTE);
+    await w.settle();
+    w.tick(2 * HOUR - 15 * MINUTE - 9 * MINUTE);
     w.watch.reminders();
-    expect(w.titles()).toEqual(["Today", "Prep: Meeting a", "Subject important-1", "Call with Jake Price in 9 minutes"]);
+    expect(w.titles()).toEqual(["Daily brief", "Prep: Meeting a", "Subject important-2", "Call with Jake Price in 9 minutes"]);
     expect(w.notify).toHaveBeenCalledTimes(4);
     expect(w.noteCard).toHaveBeenCalledTimes(4);
     expect(w.messages.filter((line) => line.kind === "widget").map((line) => line.serverCard)).toEqual([true, true, true, true]);
@@ -1167,7 +1227,7 @@ describe("cards and the open rule", () => {
 
   it("notes each newly posted card once, and never a Retry card or its answer", async () => {
     let fail = true;
-    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)],
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)], briefed: true,
       reply: (title, prompt) => (fail && title.startsWith("Prep: ") ? { ok: false, error: "engine down" } : defaultReply(title, prompt)) });
     await w.settle();
     expect(w.titles()).toEqual(["Subject important-1"]);
@@ -1196,7 +1256,7 @@ describe("cards and the open rule", () => {
   });
 
   it("answers a card press from its own records by id, never from card text, and ignores an unknown id", async () => {
-    const w = world({ events: [meeting("a", NOW + 2 * HOUR, { description: "Agenda: pricing" })], emails: [mail("important-1", NOW - MINUTE)] });
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR, { description: "Agenda: pricing" })], emails: [mail("important-1", NOW - MINUTE)], briefed: true });
     await w.settle();
     const prep = w.watch.pressRecords({ type: "prep_notes", payload: { eventId: "a" } });
     expect(prep).toContain("Title: Meeting a");
@@ -1218,7 +1278,7 @@ describe("cards and the open rule", () => {
 
 describe("bounded state", () => {
   it("keeps the newest judged ids and job threads, and never overflows the state file", async () => {
-    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)] });
+    const w = world({ events: [meeting("a", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)], briefed: true });
     const oldThreads = Array.from({ length: 1_000 }, (_, index) => ({ threadId: `job-old-${index}`, at: NOW }));
     for (const entry of oldThreads) w.tasks.set(entry.threadId, { routineRunId: `mausbot-${entry.threadId}` });
     w.watch.state.patch({ accounts: { g1: { service: "gmail", connectedSeen: true, judged: Array.from({ length: MAX_JUDGED }, (_, index) => `seen-${index}`) } }, workThreads: oldThreads });
@@ -1286,7 +1346,7 @@ describe("when MausBot may not act, or says what it cannot do", () => {
 
   it("posts nothing from a job running when the switch goes off, gives its turn back, and plans it again once on", async () => {
     let first = true;
-    const w = world({ events: [meeting("a", NOW + HOUR), meeting("b", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)],
+    const w = world({ events: [meeting("a", NOW + HOUR), meeting("b", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)], briefed: true,
       reply: (title, prompt) => {
         if (first) w.switchOff();
         first = false;
@@ -1319,7 +1379,7 @@ describe("when MausBot may not act, or says what it cannot do", () => {
 
   it("posts no email card from a check running when the switch goes off, and judges those emails again once on", async () => {
     let first = true;
-    const w = world({ emails: [mail("important-1", NOW - MINUTE)], reply: (title, prompt) => {
+    const w = world({ emails: [mail("important-1", NOW - MINUTE)], briefed: true, reply: (title, prompt) => {
       if (first) w.switchOff();
       first = false;
       return defaultReply(title, prompt);
@@ -1360,7 +1420,7 @@ describe("when MausBot may not act, or says what it cannot do", () => {
 
   it("skips an event whose series id, or an email whose id, the state file could not hold, and carries on with the rest", async () => {
     const long = "x".repeat(300);
-    const w = world({ events: [meeting("long", NOW + HOUR, { seriesId: long }), meeting("a", NOW + HOUR)], emails: [mail(long, NOW - MINUTE), mail("important-1", NOW - MINUTE)] });
+    const w = world({ events: [meeting("long", NOW + HOUR, { seriesId: long }), meeting("a", NOW + HOUR)], emails: [mail(long, NOW - MINUTE), mail("important-1", NOW - MINUTE)], briefed: true });
     await w.settle();
     expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a", "Email check"]);
     expect(w.jobs[1]!.prompt).not.toContain(long);

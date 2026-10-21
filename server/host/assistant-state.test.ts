@@ -15,8 +15,8 @@ describe("createAssistantState", () => {
     const file = join(folder(), "assistant.json");
     const state = createAssistantState(file);
     expect(state.get()).toEqual({ version: 2 });
-    state.patch({ meetings: { m1: { start: 10, fingerprint: "abc", seriesId: "s", preppedAt: 5 } }, lastTriageAt: 7, lastTodayDate: "2026-10-17", turnDay: "2026-10-17", dayTurns: 2 });
-    expect(createAssistantState(file).get()).toMatchObject({ meetings: { m1: { preppedAt: 5 } }, lastTriageAt: 7, dayTurns: 2 });
+    state.patch({ meetings: { m1: { start: 10, fingerprint: "abc", seriesId: "s", preppedAt: 5 } }, lastTriageAt: 7, lastBriefDate: "2026-10-17", turnDay: "2026-10-17", dayTurns: 2 });
+    expect(createAssistantState(file).get()).toMatchObject({ meetings: { m1: { preppedAt: 5 } }, lastTriageAt: 7, lastBriefDate: "2026-10-17", dayTurns: 2 });
     state.patch({ lastTriageAt: undefined });
     expect(JSON.parse(readFileSync(file, "utf8"))).not.toHaveProperty("lastTriageAt");
   });
@@ -49,8 +49,8 @@ describe("createAssistantState", () => {
   it("keeps the change in memory when the disk refuses it", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const state = createAssistantState(join(folder(), "missing", "assistant.json"));
-    expect(state.patch({ lastTodayDate: "2026-10-17" }).lastTodayDate).toBe("2026-10-17");
-    expect(state.get().lastTodayDate).toBe("2026-10-17");
+    expect(state.patch({ lastBriefDate: "2026-10-17" }).lastBriefDate).toBe("2026-10-17");
+    expect(state.get().lastBriefDate).toBe("2026-10-17");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("could not save"));
   });
 

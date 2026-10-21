@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
 import {
   answered, clashes, DAILY_TURN_CAP, emailKey, emailSince, eventsToMerge, fingerprint, isMine, keepNewest, KEEP_MEETINGS_MS, KEPT_READ_MS, localDate, meetingKey, mergeMeetings,
-  planMail, planMeetings, prunePending, pruneMeetings, qualifies, todayDue, turnsLeft, type AccountEvent, type CalendarRead,
+  planMail, planMeetings, prunePending, pruneMeetings, qualifies, briefDue, turnsLeft, type AccountEvent, type CalendarRead,
 } from "./assistant-plan.ts";
 import { MAX_WORK_THREADS, type MeetingRecord, type PendingEmail } from "./assistant-state.ts";
 
@@ -108,11 +108,11 @@ describe("days in the person's zone", () => {
     expect(localDate(Date.UTC(2026, 9, 17, 23, 0), undefined)).toBe("2026-10-17");
   });
 
-  it("makes Today due once per later local day, not again after flying west", () => {
-    expect(todayDue({ now: NOW, timeZone: "Asia/Kolkata" })).toBe("2026-10-17");
-    expect(todayDue({ now: NOW, timeZone: "Asia/Kolkata", lastTodayDate: "2026-10-17" })).toBeNull();
-    expect(todayDue({ now: NOW, timeZone: "America/Los_Angeles", lastTodayDate: "2026-10-17" })).toBeNull();
-    expect(todayDue({ now: NOW + 24 * HOUR, timeZone: "Asia/Kolkata", lastTodayDate: "2026-10-17" })).toBe("2026-10-18");
+  it("makes the brief due once per later local day, not again after flying west", () => {
+    expect(briefDue({ now: NOW, timeZone: "Asia/Kolkata" })).toBe("2026-10-17");
+    expect(briefDue({ now: NOW, timeZone: "Asia/Kolkata", lastBriefDate: "2026-10-17" })).toBeNull();
+    expect(briefDue({ now: NOW, timeZone: "America/Los_Angeles", lastBriefDate: "2026-10-17" })).toBeNull();
+    expect(briefDue({ now: NOW + 24 * HOUR, timeZone: "Asia/Kolkata", lastBriefDate: "2026-10-17" })).toBe("2026-10-18");
   });
 
   it("counts AI turns per local day and resets at local midnight", () => {
@@ -128,13 +128,13 @@ describe("days in the person's zone", () => {
     expect(turnsLeft({ now: NOW + 48 * HOUR, timeZone: "America/Los_Angeles", turnDay: "2026-10-17", dayTurns: 12 })).toEqual({ day: "2026-10-18", left: DAILY_TURN_CAP });
   });
 
-  it("treats a stored day more than one day ahead as a clock jump, for turns and for Today", () => {
+  it("treats a stored day more than one day ahead as a clock jump, for turns and for the brief", () => {
     expect(turnsLeft({ now: NOW, timeZone: "Asia/Kolkata", turnDay: "2026-10-18", dayTurns: 12 })).toEqual({ day: "2026-10-18", left: 0 });
     expect(turnsLeft({ now: NOW, timeZone: "Asia/Kolkata", turnDay: "2026-10-19", dayTurns: 12 })).toEqual({ day: "2026-10-17", left: DAILY_TURN_CAP });
     expect(turnsLeft({ now: NOW, timeZone: "Asia/Kolkata", turnDay: "2027-01-01", dayTurns: 12 })).toEqual({ day: "2026-10-17", left: DAILY_TURN_CAP });
-    expect(todayDue({ now: NOW, timeZone: "Asia/Kolkata", lastTodayDate: "2026-10-18" })).toBeNull();
-    expect(todayDue({ now: NOW, timeZone: "Asia/Kolkata", lastTodayDate: "2026-10-19" })).toBe("2026-10-17");
-    expect(todayDue({ now: NOW, timeZone: "Asia/Kolkata", lastTodayDate: "2026-12-31" })).toBe("2026-10-17");
+    expect(briefDue({ now: NOW, timeZone: "Asia/Kolkata", lastBriefDate: "2026-10-18" })).toBeNull();
+    expect(briefDue({ now: NOW, timeZone: "Asia/Kolkata", lastBriefDate: "2026-10-19" })).toBe("2026-10-17");
+    expect(briefDue({ now: NOW, timeZone: "Asia/Kolkata", lastBriefDate: "2026-12-31" })).toBe("2026-10-17");
   });
 
   it("forgets meetings more than five weeks old", () => {

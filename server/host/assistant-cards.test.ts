@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseWidgetInput, WIDGET_LIMITS, widgetActions } from "../../shared/widget.ts";
 import type { CalendarEvent } from "../assistant-sources.ts";
 import {
-  attendeeNames, BRIEF_MAX, BRIEF_ROWS, briefCard, briefFallbackCard, clockTime, cancelledCard, DISMISS_ACTION, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, todayCard, updateCard,
+  attendeeNames, BRIEF_MAX, BRIEF_ROWS, briefCard, briefFallbackCard, clockTime, cancelledCard, DISMISS_ACTION, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, updateCard,
   type BriefEmail, type BriefFacts, type BriefMeeting, type BuiltCard,
 } from "./assistant-cards.ts";
 import { clip } from "./text-clip.ts";
@@ -17,6 +17,8 @@ const demo: CalendarEvent = {
   attendees: [{ email: "me@example.test", self: true, organizer: true }, { email: "jake@pin.example", name: "Jake Price", self: false, organizer: false }],
   joinUrl: "https://meet.google.com/abc-defg-hij",
 };
+const EMPTY_BRIEF: BriefFacts = { now: NOW, missing: [], replies: [], repliesChecking: false, repliesUnreadable: [], failedRoutines: [], clashes: [], meetings: [], important: [], routines: [] };
+const briefMeeting = (more: Partial<BriefMeeting> = {}): BriefMeeting => ({ title: "Demo", start: demo.start, end: demo.end, accounts: "", status: "Prep ready", ...more });
 
 function valid(built: BuiltCard) {
   const parsed = parseWidgetInput(built.card);
@@ -39,7 +41,7 @@ describe("MausBot's cards", () => {
     expect(clockTime(demo.start, undefined)).toBe("5:00 PM UTC");
     expect(clockTime(demo.start, "UTC")).toBe("5:00 PM");
     expect(clockTime(demo.start, ZONE)).toBe("10:30 PM");
-    expect(JSON.stringify(valid(todayCard({ now: NOW, meetings: [{ title: "Demo", start: demo.start, end: demo.end, status: "Prep ready" }], emails: [] })).root)).toContain("5:00 PM UTC · Demo");
+    expect(JSON.stringify(valid(briefCard({ ...EMPTY_BRIEF, meetings: [briefMeeting()] })).root)).toContain("5:00 PM UTC · Demo");
     expect(JSON.stringify(valid(cancelledCard({ title: "Demo", start: demo.start, now: NOW })).root)).toContain("Was Today, 5:00 PM UTC");
   });
 
@@ -80,36 +82,6 @@ describe("MausBot's cards", () => {
     expect(cancelled.root.title).toBe("Cancelled: Supamaus demo with Jake");
     expect(cancelled.actions).toEqual([]);
   });
-
-  it("lays out Today: meetings with prep status, flagged email, and one team line that opens the Chief", () => {
-    const built = todayCard({
-      now: NOW, timeZone: ZONE,
-      meetings: [{ title: "Supamaus demo with Jake", start: demo.start, end: demo.end, status: "Prep ready", joinUrl: demo.joinUrl }],
-      emails: [{ from: "Ada <ada@example.test>", subject: "Q3 numbers due Friday" }],
-      team: { text: "Chief of Staff: 3 finished · 1 waiting on you", open: { botId: "chief", threadId: "chief-main" } },
-    });
-    const { root, actions } = valid(built);
-    expect(root.title).toBe("Today");
-    expect(root.caption).toBe("Saturday, October 17");
-    const text = JSON.stringify(root);
-    for (const shown of ["10:30 PM · Supamaus demo with Jake", "Prep ready", "Ada <ada@example.test>: Q3 numbers due Friday", "Chief of Staff: 3 finished · 1 waiting on you"]) expect(text).toContain(shown);
-    expect(actions.map((entry) => [entry.label, entry.action.type])).toEqual([["Join", "open_url"], ["Open", "open_thread"]]);
-    expect(built.summary).toBe("Today: 1 meeting, 1 important email");
-    expect(JSON.stringify(valid(todayCard({ now: NOW, timeZone: ZONE, meetings: [], emails: [] })).root)).toContain("No meetings today.");
-  });
-
-  it("lays out Today while the calendar is still being read, and once it could not be read, with its email and team", () => {
-    const team = { text: "Chief of Staff: nothing new from the team", open: { botId: "chief", threadId: "chief-main" } };
-    const checking = todayCard({ now: NOW, timeZone: ZONE, meetings: "checking", emails: [{ from: "Ada", subject: "Q3" }], team });
-    const shown = JSON.stringify(valid(checking).root);
-    expect(shown).toContain("Checking your calendar…");
-    expect(shown).toContain("Ada: Q3");
-    expect(shown).not.toContain("No meetings today.");
-    expect(checking.summary).toBe("Today: checking your calendar…, 1 important email");
-    const unreadable = JSON.stringify(valid(todayCard({ now: NOW, timeZone: ZONE, meetings: "unreadable", emails: [], team })).root);
-    expect(unreadable).toContain("I couldn't read your calendar.");
-    expect(unreadable).toContain("Chief of Staff: nothing new from the team");
-  });
 });
 
 describe("untrusted links and all-day events", () => {
@@ -122,8 +94,7 @@ describe("untrusted links and all-day events", () => {
       expect(labels(prepCard({ event, brief: "x", timeZone: ZONE, now: NOW })), joinUrl).toEqual(["Draft a follow-up"]);
       expect(labels(reminderCard({ event, timeZone: ZONE, now: demo.start - 10 * MINUTE })), joinUrl).toEqual(["Prep notes"]);
       expect(labels(updateCard({ event, text: "Moved.", timeZone: ZONE, now: NOW })), joinUrl).toEqual([]);
-      const today = todayCard({ now: NOW, timeZone: ZONE, meetings: [{ title: "Demo", start: demo.start, end: demo.end, status: "Prep ready", joinUrl }], emails: [] });
-      expect(labels(today), joinUrl).toEqual([]);
+      expect(labels(briefCard({ ...EMPTY_BRIEF, timeZone: ZONE, meetings: [briefMeeting({ joinUrl })] })), joinUrl).toEqual([]);
     }
   });
 
@@ -144,9 +115,6 @@ describe("untrusted links and all-day events", () => {
     for (const zone of [ZONE, "America/Los_Angeles"]) {
       expect(meetingWhen(allDay.start, allDay.end, zone, NOW, true), zone).toBe("Today, all day");
       expect(meetingWhen(allDay.start + DAY_MS, allDay.end + DAY_MS, zone, NOW, true), zone).toBe("Tomorrow, all day");
-      const text = JSON.stringify(valid(todayCard({ now: NOW, timeZone: zone, meetings: [{ title: "Offsite", start: allDay.start, end: allDay.end, status: "All day", allDay: true }], emails: [] })).root);
-      expect(text, zone).toContain("All day \u00b7 Offsite");
-      expect(text, zone).not.toMatch(/\d:\d\d/);
     }
     expect(valid(updateCard({ event: allDay, text: "Renamed.", timeZone: "America/Los_Angeles", now: NOW })).root.caption).toBe("Today, all day");
     expect(valid(cancelledCard({ title: "Offsite", start: allDay.start, allDay: true, timeZone: ZONE, now: NOW })).root.caption).toBe("Was Today, all day");
@@ -270,7 +238,7 @@ describe("account naming on cards", () => {
 describe("the daily brief", () => {
   const reply: BriefEmail = { accountId: "ca_g2", account: "admin@example.test", address: "admin@example.test", messageId: "m1", threadId: "t1", from: "Ada <ada@example.test>", subject: "Q3 numbers due Friday" };
   const meeting: BriefMeeting = { title: "Supamaus demo with Jake", start: demo.start, end: demo.end, accounts: "me@example.test, admin@example.test", status: "Prep ready", joinUrl: demo.joinUrl };
-  const empty: BriefFacts = { now: NOW, timeZone: ZONE, missing: [], replies: [], repliesChecking: false, repliesUnreadable: [], failedRoutines: [], clashes: [], meetings: [], important: [], routines: [] };
+  const empty: BriefFacts = { ...EMPTY_BRIEF, timeZone: ZONE };
   const full: BriefFacts = {
     ...empty,
     replies: [{ ...reply, accountId: "ca_g1", account: "me@example.test", address: "me@example.test", messageId: "m0", threadId: "t0", from: "Jake Price <jake@pin.example>", subject: "Pricing for Pin" }],

@@ -87,9 +87,9 @@ function sameOrNextDay(local: string, stored: string | undefined): stored is str
   return ahead >= 0 && ahead <= 1;
 }
 
-export function todayDue(input: { now: number; timeZone?: string; lastTodayDate?: string }): string | null {
+export function briefDue(input: { now: number; timeZone?: string; lastBriefDate?: string }): string | null {
   const today = localDate(input.now, input.timeZone);
-  return sameOrNextDay(today, input.lastTodayDate) ? null : today;
+  return sameOrNextDay(today, input.lastBriefDate) ? null : today;
 }
 
 export function turnsLeft(input: { now: number; timeZone?: string; turnDay?: string; dayTurns?: number }): { day: string; left: number } {
