@@ -837,6 +837,7 @@
   --identity-yellow: #8d6c1a;
   --identity-teal: #017f72;
   --identity-coral: #d1381f;
+  --identity-silver: #6a727c;
 }
 
 [data-skin="halloween"] {
@@ -887,6 +888,7 @@
   --identity-yellow: #D8A729;
   --identity-teal: #01A492;
   --identity-coral: #E5634E;
+  --identity-silver: #A8ADB4;
 }
 
 /* Shiki emits both palettes so cached blocks follow the nearest skin without
