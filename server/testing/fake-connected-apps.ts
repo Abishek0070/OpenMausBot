@@ -11,7 +11,7 @@ type Toolkit = "gmail" | "googlecalendar";
 export interface FakeAccount {
   id: string;
   alias?: string;
-  /** Composio's connection status; ACTIVE when unset. */
+  /** Composio's connection status; ACTIVE when unset. An account that is not ACTIVE fails every read. */
   status?: string;
   address: string;
   /** Google Calendar calendar list entries; unset, the primary calendar named by the address. */
@@ -56,6 +56,7 @@ const ACTIVE = "ACTIVE";
 // Google's own answer for a message that is gone, as Composio passes it on.
 const NOT_FOUND = "Requested entity was not found.";
 
+const isActive = (account: FakeAccount): boolean => /^active$/i.test(account.status ?? ACTIVE);
 const toolkitOf = (slug: string): Toolkit | undefined => (slug.startsWith("GMAIL_") ? "gmail" : slug.startsWith("GOOGLECALENDAR_") ? "googlecalendar" : undefined);
 const field = (value: unknown, name: string): unknown => (value && typeof value === "object" ? (value as Record<string, unknown>)[name] : undefined);
 
@@ -72,7 +73,7 @@ export async function startFakeConnectedApps(): Promise<FakeConnectedApps> {
       const listed = fake.accounts[slug as Toolkit];
       if (!listed) return [slug, { connected: fake.connected[slug] === true }];
       return [slug, {
-        connected: listed.some((account) => (account.status ?? ACTIVE) === ACTIVE),
+        connected: listed.some(isActive),
         accounts: listed.map(({ id, alias, status }) => ({ id, ...(alias ? { alias } : {}), status: status ?? ACTIVE })),
       }];
     }));
@@ -102,6 +103,7 @@ export async function startFakeConnectedApps(): Promise<FakeConnectedApps> {
   }
 
   function answer(slug: string, args: unknown, toolkit: Toolkit | undefined, account: FakeAccount | undefined): unknown {
+    if (account && !isActive(account)) throw new ToolFailure(`${slug}: the connected account ${account.id} is ${account.status}, not ACTIVE`);
     if (account?.failing) throw new ToolFailure(`${slug}: the connection to ${account.address} failed`);
     const key = account?.id ?? toolkit ?? "";
     if (slug === CALENDAR_LIST_TOOL) return { items: fake.calendarEvents[`${key}/${String(field(args, "calendarId"))}`] ?? (account ? [] : fake.events) };

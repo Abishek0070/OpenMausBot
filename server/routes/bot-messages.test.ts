@@ -342,12 +342,28 @@ describe("POST /api/bots/:id/messages with widgetAction", () => {
       expect((await press(malformed)).status, JSON.stringify(malformed)).toBe(400);
     }
     expect((await press({ messageId: widgetId, ref: "confirm" }, { sendId: "short" })).status).toBe(400);
-    expect(await press({ messageId: widgetId, ref: "confirm" }, { threadId: "thread-of-nobody" })).toEqual({ status: 404, body: { error: "That widget is not in this conversation." } });
+    // Another bot's thread answers exactly like one that does not exist, whatever the press names in it.
+    const notHere = { status: 409, body: { error: "the bot switched tasks before it could receive the message" } };
     const stranger = store.createBot({ name: "Stranger" });
-    const theirs = createAgentCard({ store, bot: stranger, threadId: stranger.threadId, input: { tool: "show_widget", widget: WIDGET_SAMPLES.pullRequests } });
-    if (!theirs.ok) throw new Error(theirs.error);
-    expect(await press({ messageId: theirs.messageId, ref: "confirm" }, { threadId: stranger.threadId }))
-      .toEqual({ status: 409, body: { error: "the bot switched tasks before it could receive the message" } });
+    const theirs = (sample: string) => {
+      const created = createAgentCard({ store, bot: stranger, threadId: stranger.threadId, input: { tool: "show_widget", widget: WIDGET_SAMPLES[sample] } });
+      if (!created.ok) throw new Error(created.error);
+      return created.messageId;
+    };
+    const theirList = theirs("pullRequests");
+    const theirForm = theirs("routineForm");
+    const asked = state.serverAsked.length;
+    for (const [thread, widgetAction] of [
+      ["thread-of-nobody", { messageId: widgetId, ref: "confirm" }],
+      [stranger.threadId, { messageId: theirList, ref: "confirm" }],
+      [stranger.threadId, { messageId: "m-missing", ref: "confirm" }],
+      [stranger.threadId, { messageId: theirList, ref: "n999" }],
+      [stranger.threadId, { messageId: theirList, ref: "confirm", rev: 3 }],
+      [stranger.threadId, { messageId: theirForm, ref: "confirm", values: { at: "" } }],
+    ] as const) {
+      expect(await press(widgetAction, { threadId: thread }), JSON.stringify([thread, widgetAction])).toEqual(notHere);
+    }
+    expect(state.serverAsked).toHaveLength(asked);
     expect(await post({ threadId, sendId: SEND, text: "Hi", expectedActiveLeafId: null, widgetAction: { messageId: widgetId, ref: "confirm" } }, "/guarded"))
       .toEqual({ status: 400, body: { error: "guarded sends cannot answer a widget" } });
     expect(state.accepted).toHaveLength(0);

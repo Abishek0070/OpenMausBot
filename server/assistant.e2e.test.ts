@@ -531,6 +531,7 @@ it("posts the daily brief at the morning presence with Needs you, Your day, rout
   await expect.poll(shown, { timeout: STEP_MS }).toContain("I couldn't read the calendar of admin@example.test.");
   const card = await shown();
   const at = (text: string) => card.indexOf(text);
+  expect(at('"Needs you"')).toBeGreaterThanOrEqual(0);
   expect(at('"Needs you"')).toBeLessThan(at("Ben Ortiz: Contract redlines"));
   expect(at("Ben Ortiz: Contract redlines")).toBeLessThan(at('"Your day"'));
   expect(at('"Your day"')).toBeLessThan(at("Supamaus demo with Jake"));
@@ -556,6 +557,15 @@ it("posts the daily brief at the morning presence with Needs you, Your day, rout
   }, { timeout: STEP_MS }).not.toBe(409);
   expect(dismissed).toEqual({ status: 202, body: { ok: true, threadId: mausbot.threadId, handled: true } });
   await expect.poll(shown, { timeout: STEP_MS }).not.toContain("Contract redlines");
+  expect((await assistantNotes(again)).length).toBe(notedBefore + 1);
+  // Two more checks leave the card as the Dismiss made it, and still send no second brief notification.
+  const rev = async () => (await briefs()).find((line) => line.id === posted.id).widget.rev;
+  const dismissedRev = await rev();
+  const calendarReads = () => fake.calls.filter((call) => call.tool === "GOOGLECALENDAR_EVENTS_LIST" && call.account === "ca_cp").length;
+  const readsAtDismiss = calendarReads();
+  await expect.poll(calendarReads, { timeout: STEP_MS }).toBeGreaterThanOrEqual(readsAtDismiss + 2);
+  expect(await rev()).toBe(dismissedRev);
+  expect((await assistantNotes(again)).length).toBe(notedBefore + 1);
   const chat = await again.lines(mausbot.threadId);
   expect(chat.filter((line) => line.role === "user" || line.replyToId === posted.id)).toEqual([]);
   expect(again.prompts().slice(promptsBefore).filter((prompt) => prompt.includes("dismiss_email") || prompt.includes("Contract redlines"))).toEqual([]);

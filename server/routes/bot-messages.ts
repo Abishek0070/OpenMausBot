@@ -180,6 +180,8 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
       const trigger: UsageTrigger = onBehalfOf
         ? { kind: "user", ...(onBehalfOf.email ? { email: onBehalfOf.email } : {}), ...(onBehalfOf.name ? { label: onBehalfOf.name } : {}) }
         : usageTriggerFor(auth);
+      // Security invariant: another bot's thread answers like a missing one, before anything reads a widget in it.
+      if (pressed && !store.taskByThread(bot.id, threadId)) return json(res, 409, { error: "the bot switched tasks before it could receive the message" });
       const sendId = parseSendId(body.sendId);
       const press = pressed ? prepareWidgetPress(store, threadId, body.widgetAction, sendId) : null;
       if (press && !press.ok) return json(res, press.status, { error: press.error });
