@@ -3,7 +3,7 @@
 OpenMausBot treats **proactivity as an explicit trigger**, not as a hidden
 heartbeat. A bot may continue within an active task through Auto mode, may be
 started by a Routine or Webhook, and may coordinate peers when its engine and
-profile allow that. Nothing polls in the background to invent work or send messages outside those configured paths, with one exception the person can switch off: MausBot's watcher ("MausBot can act on its own" in Settings, on by default) reads the owner's calendar and new email about every 15 minutes, prepares meeting notes, reminders, important-email cards and a Today card in MausBot's own chat, and never sends anything without the person's Approve. The Chief of Staff's "Since you last looked" recap only reads records that already exist and never runs a model.
+profile allow that. Nothing polls in the background to invent work or send messages outside those configured paths, with one exception the person can switch off: MausBot's watcher ("MausBot can act on its own" in Settings, on by default) reads every connected Google account's calendars and new email about every 15 minutes, prepares meeting notes, reminders, important-email cards and a daily brief (meetings from every calendar, emails waiting on a reply, important email and routine results) in MausBot's own chat, and never sends anything without the person's Approve. The Chief of Staff's "Since you last looked" recap only reads records that already exist and never runs a model.
 
 ## Notification policy
 
@@ -14,7 +14,7 @@ notifications disabled remains quiet. Otherwise it may emit:
 - **Needs your hands** when a computer task requires a takeover.
 - **Finished** only when there is a non-empty result to summarize.
 - **Routine failed** when a scheduled or manual routine run cannot complete.
-- **MausBot** (`assistant`) once per card MausBot posts on its own: a meeting prep, a reminder, an important email, Today, a change, a Reconnect or an error card.
+- **MausBot** (`assistant`) once per card MausBot posts on its own: a meeting prep, a reminder, an important email, the daily brief, a change, a Reconnect or an error card.
 
 Every notification carries both the bot ID and the exact task thread ID. A
 click must select that bot **and switch to that task**, including a routine's
@@ -38,8 +38,11 @@ alone cannot provide closed-app delivery.
 | iOS target parsing and detached-task decision | `ios/Tests/CompanionCoreTests/DecodingTests.swift` |
 | Paired-device route policy remains default-deny | `companion/test/routes.test.ts` |
 | One recap per return; a guest or service never moves presence | `server/host/presence.test.ts`, `server/host/chief-brief.test.ts`, `server/routes/presence.test.ts`, `server/chief-recap.e2e.test.ts` |
-| The watcher's decisions: the prep window, late bookings, repeats, reminders, email batches, the daily cap, catch-up, Today, connected-app failures | `server/host/assistant-plan.test.ts`, `server/host/assistant-watch.test.ts` |
-| One prep card, one important-email card, none for a newsletter, one reminder; MausBot never sends; nothing on a hosted workspace | `server/assistant.e2e.test.ts` |
+| The watcher's decisions: the prep window, late bookings, repeats, reminders, email batches, the daily cap, catch-up, connected-app failures | `server/host/assistant-plan.test.ts`, `server/host/assistant-watch.test.ts` |
+| Per-account reads, merged meetings and clashes, accounts that drop out, Reconnect per account | `server/host/assistant-plan.test.ts`, `server/host/assistant-accounts.test.ts` |
+| The daily brief: its four sections, held morning mail, pending emails, edited in place, Dismiss with no turn | `server/host/assistant-brief.test.ts` |
+| Routine runs leave the Chief's recap only when MausBot's brief reports them | `server/host/chief-brief.test.ts` |
+| One prep card, the daily brief, an important-email card, none for a newsletter, one reminder; two accounts read with every call naming its account; MausBot never sends; nothing on a hosted workspace | `server/assistant.e2e.test.ts` |
 | A MausBot job thread answers its own approval requests: a web search only | `server/host/assistant-job-requests.test.ts` |
 | A member never sees a restricted bot in the recap | `server/chief-recap-members.e2e.test.ts` |
 
