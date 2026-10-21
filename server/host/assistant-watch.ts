@@ -9,7 +9,8 @@ import { failure } from "../failure.ts";
 import { buildNotification, type Notification } from "../notify.ts";
 import { ownerOrAdmin, type RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
-import { cancelledCard, clip, clockTime, emailCard, prepCard, reminderCard, todayCard, updateCard, type BuiltCard, type TodayMeeting, type TodayMeetings } from "./assistant-cards.ts";
+import { cancelledCard, clockTime, emailCard, prepCard, reminderCard, todayCard, updateCard, type BuiltCard, type TodayMeeting, type TodayMeetings } from "./assistant-cards.ts";
+import { clip } from "./text-clip.ts";
 import {
   DAILY_TURN_CAP, emailSince, fingerprint, keepNewest, localDate, LOOKAHEAD_MS, planMeetings, planTriage, PREP_LEAD_MS, pruneMeetings, qualifies, RECONNECT_AFTER,
   todayDue, turnsLeft,

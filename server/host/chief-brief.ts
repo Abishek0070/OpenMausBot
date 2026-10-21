@@ -8,7 +8,7 @@ import { mainThread } from "../main-thread.ts";
 import type { RoutineRun } from "../routines.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "../store.ts";
 import { readUsage } from "../usage-ledger.ts";
-import { buildRecap, type RecapDeps } from "./brief-recap.ts";
+import { buildRecap, routineRows, type RecapDeps, type RoutineRow } from "./brief-recap.ts";
 import { createBriefState, type BriefState, type BriefStateStore } from "./brief-state.ts";
 import { createPresence, type PresenceSource } from "./presence.ts";
 
@@ -22,6 +22,8 @@ export interface ChiefBriefDeps {
   threadBusy: RecapDeps["threadBusy"];
   /** Runs that finished at or after `since`, or have not finished, whenever they were scheduled. */
   routineRuns(since: number): RoutineRun[];
+  /** True when MausBot's brief reports routine runs to everyone who reads this recap. */
+  routinesToMausBot?(poster: BotRecord): boolean;
   /** MausBot, which posts the recap when there is no Chief. */
   mausbot?(): BotRecord | null;
   /** Each owner activation, before a return's recap: MausBot's intro comes before anything else posted for it. */
@@ -165,12 +167,17 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
     const bot = chief() ?? deps.mausbot?.() ?? null;
     const threadId = bot && chiefThread(bot);
     if (!bot || !threadId) return false;
-    const recap = buildRecap(recapInputs(seenWith(bot)), { since, exclude: { threadId }, timeZone: state.get().timeZone });
+    const recap = buildRecap(recapInputs(seenWith(bot)), { since, exclude: { threadId }, timeZone: state.get().timeZone, routines: !deps.routinesToMausBot?.(bot) });
     if (!recap) return false;
     if (!postCard(bot, threadId, recap.card)) return false;
     const card = { at: now(), botId: bot.id, threadId, kind: "recap" as const };
     unsavedCard = savePatch({ lastCard: card }) ? undefined : card;
     return true;
+  }
+
+  /** Routine runs `poster`'s readers may see: what MausBot's brief lists. */
+  function routineRowsFor(poster: BotRecord, since: number): RoutineRow[] {
+    return routineRows(recapInputs(seenWith(poster)), since);
   }
 
   /** Security invariant: counts only what everyone who can see the Chief may also see. */
@@ -227,5 +234,5 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
     return { returned: outcome.returned, open: { botId: card.botId, threadId: card.threadId } };
   }
 
-  return { state, presence, chief, chiefThread, turnsByBot, postRecap, active, noteAssistantCard, teamLine };
+  return { state, presence, chief, chiefThread, turnsByBot, postRecap, active, noteAssistantCard, teamLine, routineRows: routineRowsFor };
 }

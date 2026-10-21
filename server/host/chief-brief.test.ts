@@ -24,7 +24,7 @@ type WorldBot = { id: string; name: string; section?: string; chiefOfStaff?: boo
 type WorldRoom = { id: string; threadId: string; memberIds: string[]; audienceFloor?: BotVisibility };
 
 function world(bots: WorldBot[], options: {
-  recap?: boolean; runs?: (since: number) => RoutineRun[]; patchTaskFails?: boolean; rooms?: WorldRoom[]; hosted?: boolean; mausbot?: string;
+  recap?: boolean; runs?: (since: number) => RoutineRun[]; patchTaskFails?: boolean; rooms?: WorldRoom[]; hosted?: boolean; mausbot?: string; routinesToMausBot?: boolean;
   onPresence?: ChiefBriefDeps["onPresence"]; beforePresence?: ChiefBriefDeps["beforePresence"];
 } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "omb-chief-brief-"));
@@ -72,6 +72,7 @@ function world(bots: WorldBot[], options: {
     threadBusy: () => false,
     routineRuns: options.runs ?? (() => []),
     mausbot: () => (options.mausbot ? store.bot(options.mausbot) : null),
+    ...(options.routinesToMausBot === undefined ? {} : { routinesToMausBot: () => options.routinesToMausBot === true }),
     onPresence: options.onPresence,
     beforePresence: options.beforePresence,
   });
@@ -572,5 +573,35 @@ describe("the team line for MausBot's Today", () => {
     w.digestFor("payroll", NOW + HOUR);
     w.tick(2 * HOUR);
     expect(w.brief.teamLine(NOW)).toEqual({ text: "Chief: nothing new from the team", open: { botId: "chief", threadId: "chief-main" } });
+  });
+});
+
+describe("routine runs in the recap and MausBot's rows", () => {
+  const run = (more: Partial<RoutineRun> = {}): RoutineRun =>
+    ({ id: "run-1", routineId: "rt-1", routineName: "Overnight numbers", status: "completed", target: "bot", botId: "scout", scheduledFor: NOW + HOUR, finishedAt: NOW + HOUR, output: "Revenue is up 4%. Costs flat.", ...more } as RoutineRun);
+  const recapWith = (routinesToMausBot: boolean | undefined) => {
+    const w = world([{ id: "chief", name: "Chief", chiefOfStaff: true }, { id: "scout", name: "Scout" }], { runs: () => [run()], ...(routinesToMausBot === undefined ? {} : { routinesToMausBot }) });
+    w.brief.active("desktop");
+    w.tick(4 * HOUR);
+    w.digestFor("scout", NOW + HOUR);
+    w.brief.active("desktop");
+    return w;
+  };
+
+  it("leaves routine runs out of the recap when MausBot reports them to every reader, and keeps them otherwise", () => {
+    const withMausBot = recapWith(true);
+    expect(JSON.stringify(withMausBot.widgets("chief-main")[0])).not.toContain("Overnight numbers");
+    expect(JSON.stringify(withMausBot.widgets("chief-main")[0])).toContain("scout finished a job.");
+    expect(JSON.stringify(recapWith(false).widgets("chief-main")[0])).toContain("Overnight numbers");
+    expect(JSON.stringify(recapWith(undefined).widgets("chief-main")[0])).toContain("Overnight numbers");
+  });
+
+  it("lists the routine rows MausBot's audience may see", () => {
+    const mausbot = { id: "mausbot", name: "MausBot", visibility: "admins" as const };
+    const w = world([mausbot, { id: "scout", name: "Scout" }, { id: "payroll", name: "Payroll", visibility: "admins" }], {
+      mausbot: "mausbot", runs: () => [run(), run({ id: "run-2", routineId: "rt-2", routineName: "Payroll run", botId: "payroll" })],
+    });
+    expect(w.brief.routineRows(w.store.bot("mausbot")!, NOW).map((row) => row.name)).toEqual(["Overnight numbers", "Payroll run"]);
+    expect(w.brief.routineRows(w.store.bot("scout")!, NOW).map((row) => row.name)).toEqual(["Overnight numbers"]);
   });
 });

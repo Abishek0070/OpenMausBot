@@ -3,6 +3,7 @@ import { liveCardKind } from "../../shared/live-approval.ts";
 import type { WidgetRoot } from "../../shared/widget.ts";
 import type { RoutineRun } from "../routines.ts";
 import type { BotRecord, Message, TaskRecord } from "../store.ts";
+import { clip, oneLine } from "./text-clip.ts";
 
 export interface RecapFacts {
   since: number;
@@ -27,14 +28,11 @@ export const RECAP_LIMITS = { threads: 200, rows: 8, text: 120 } as const;
 /** Newest messages read per thread. */
 export const RECAP_TAIL = 40;
 export const RECAP_TITLE = "Since you last looked";
+/** UTF-16 units in a routine row's line. */
+export const ROUTINE_LINE_MAX = 140;
 const RUN_STATUSES = new Set(["completed", "failed", "missed", "waiting", "running"]);
 
-const clip = (text: string): string => {
-  const flat = text.replace(/\s+/g, " ").trim();
-  const points = Array.from(flat);
-  return points.length <= RECAP_LIMITS.text ? flat : `${points.slice(0, RECAP_LIMITS.text - 1).join("").trimEnd()}…`;
-};
-type OpenTarget = { botId: string; threadId: string } | { groupId: string; threadId: string };
+export type OpenTarget = { botId: string; threadId: string } | { groupId: string; threadId: string };
 export const validZone = (zone: string | undefined): string | undefined => {
   if (!zone) return undefined;
   try {
@@ -44,23 +42,78 @@ export const validZone = (zone: string | undefined): string | undefined => {
     return undefined;
   }
 };
+/** Counts code points, so a recap row never ends in half an emoji. */
+const recapText = (text: string): string => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const points = Array.from(flat);
+  return points.length <= RECAP_LIMITS.text ? flat : `${points.slice(0, RECAP_LIMITS.text - 1).join("").trimEnd()}…`;
+};
 const touchedAt = (task: TaskRecord): number => task.updatedAt ?? task.createdAt;
 
-export function buildRecap(deps: RecapDeps, input: { since: number; exclude?: { threadId: string }; timeZone?: string }): { facts: RecapFacts; card: WidgetRoot } | null {
+const runAt = (run: RoutineRun): number => run.finishedAt ?? run.startedAt ?? run.scheduledFor;
+
+function runTarget(run: RoutineRun): OpenTarget | undefined {
+  if (!run.threadId) return undefined;
+  if (run.target === "room-goal" && run.groupId) return { groupId: run.groupId, threadId: run.threadId };
+  return run.target === "bot" ? { botId: run.botId, threadId: run.threadId } : undefined;
+}
+
+/** The runs a reader of the card may see, from `deps.routineRuns`; the recap and the routine rows share this one filter. */
+function visibleRuns(deps: RecapDeps, since: number, known: Map<string, BotRecord>, excluded?: string): RoutineRun[] {
+  return deps.routineRuns(since).filter((run) => {
+    if (!known.has(run.botId) || !RUN_STATUSES.has(run.status)) return false;
+    // A run that never started (missed, ended, refused) has no thread: its room alone says who may see it.
+    if (run.target === "room-goal" && !(run.groupId && deps.visible.room(run.groupId))) return false;
+    return !(run.threadId && (run.threadId === excluded || !deps.visible.thread(run.threadId)));
+  });
+}
+
+const visibleBots = (deps: RecapDeps): Map<string, BotRecord> =>
+  new Map(deps.store.bots.filter((bot) => !bot.hidden && deps.visible.bot(bot.id)).map((bot) => [bot.id, bot]));
+
+/** Everything up to the first `.`, `!` or `?` that ends a word, else the first line. */
+export function firstSentence(text: string): string {
+  const value = text.trim();
+  const ended = /^[\s\S]*?[.!?](?=\s|$)/.exec(value);
+  return (ended ? ended[0] : value.split(/\r?\n/)[0]!).replace(/\s+/g, " ").trim();
+}
+
+export interface RoutineRow {
+  name: string;
+  status: "completed" | "failed" | "missed";
+  line: string;
+  open?: OpenTarget;
+}
+
+const ROW_STATUSES = new Set<string>(["completed", "failed", "missed"]);
+
+/** One row per run that finished at or after `since`, newest first, for the runs `deps.visible` lets a reader see. */
+export function routineRows(deps: RecapDeps, since: number): RoutineRow[] {
+  const known = visibleBots(deps);
+  return visibleRuns(deps, since, known)
+    .filter((run) => ROW_STATUSES.has(run.status) && runAt(run) >= since)
+    .sort((a, b) => runAt(b) - runAt(a))
+    .map((run) => {
+      const status = run.status as RoutineRow["status"];
+      const reply = run.threadId ? deps.store.messagesTail(run.threadId, RECAP_TAIL).findLast((line) => line.kind === "digest" && line.digest?.reply)?.digest?.reply : undefined;
+      const said = firstSentence(reply ?? run.output ?? "");
+      const text = status === "completed" ? said || "Finished" : status === "failed" ? oneLine(run.error ?? "", ROUTINE_LINE_MAX) || "It failed" : "It did not run";
+      const open = runTarget(run);
+      return { name: recapText(run.routineName), status, line: clip(text, ROUTINE_LINE_MAX), ...(open ? { open } : {}) };
+    });
+}
+
+export function buildRecap(deps: RecapDeps, input: { since: number; exclude?: { threadId: string }; timeZone?: string; routines?: boolean }): { facts: RecapFacts; card: WidgetRoot } | null {
   const { since } = input;
   const { visible } = deps;
   const facts: RecapFacts = { since, finished: [], failed: [], running: [], routineRuns: [], waitingOnYou: [] };
-  const bots = deps.store.bots.filter((bot) => !bot.hidden && visible.bot(bot.id));
-  const known = new Map(bots.map((bot) => [bot.id, bot]));
+  const known = visibleBots(deps);
+  const bots = deps.store.bots.filter((bot) => known.has(bot.id));
   const excluded = input.exclude?.threadId;
   const runTargets = new Map<string, OpenTarget | undefined>();
   const latest = new Map<string, { run: RoutineRun; at: number; count: number }>();
-  for (const run of deps.routineRuns(since)) {
-    if (!known.has(run.botId) || !RUN_STATUSES.has(run.status)) continue;
-    // A run that never started (missed, ended, refused) has no thread: its room alone says who may see it.
-    if (run.target === "room-goal" && !(run.groupId && visible.room(run.groupId))) continue;
-    if (run.threadId && (run.threadId === excluded || !visible.thread(run.threadId))) continue;
-    const at = run.finishedAt ?? run.startedAt ?? run.scheduledFor;
+  for (const run of input.routines === false ? [] : visibleRuns(deps, since, known, excluded)) {
+    const at = runAt(run);
     const seen = latest.get(run.routineId);
     latest.set(run.routineId, { run: !seen || at >= seen.at ? run : seen.run, at: Math.max(at, seen?.at ?? 0), count: (seen?.count ?? 0) + 1 });
   }
@@ -69,9 +122,9 @@ export function buildRecap(deps: RecapDeps, input: { since: number; exclude?: { 
   for (const { run, count } of routines) {
     if (run.threadId) {
       routineThreads.add(run.threadId);
-      runTargets.set(run.threadId, run.target === "room-goal" && run.groupId ? { groupId: run.groupId, threadId: run.threadId } : run.target === "bot" ? { botId: run.botId, threadId: run.threadId } : undefined);
+      runTargets.set(run.threadId, runTarget(run));
     }
-    facts.routineRuns.push({ routineId: run.routineId, name: clip(run.routineName), status: run.status, count, ...(run.threadId ? { threadId: run.threadId } : {}) });
+    facts.routineRuns.push({ routineId: run.routineId, name: recapText(run.routineName), status: run.status, count, ...(run.threadId ? { threadId: run.threadId } : {}) });
   }
   const threads = bots
     .flatMap((bot) => deps.store.tasks(bot.id)
@@ -91,14 +144,14 @@ export function buildRecap(deps: RecapDeps, input: { since: number; exclude?: { 
         const turnStart = before.findLastIndex((line) => line.kind === "digest") + 1;
         const name = before.slice(turnStart).findLast((line) => line.kind === "activity" && line.tool?.ok === false)?.tool?.name;
         const reason = name === undefined ? "the turn failed" : failedTurnCause(name) ?? name;
-        facts.failed.push({ botId: bot.id, botName: bot.name, threadId: task.threadId, reason: clip(reason) });
+        facts.failed.push({ botId: bot.id, botName: bot.name, threadId: task.threadId, reason: recapText(reason) });
       } else {
-        facts.finished.push({ botId: bot.id, botName: bot.name, threadId: task.threadId, summary: clip(digest.digest.reply || task.title) });
+        facts.finished.push({ botId: bot.id, botName: bot.name, threadId: task.threadId, summary: recapText(digest.digest.reply || task.title) });
       }
     }
     for (const line of recent) {
       if (line.kind === "options" && liveCardKind(line.card) !== null) {
-        facts.waitingOnYou.push({ botId: bot.id, threadId: task.threadId, title: clip(line.card!.title) });
+        facts.waitingOnYou.push({ botId: bot.id, threadId: task.threadId, title: recapText(line.card!.title) });
       }
     }
   }

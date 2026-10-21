@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { parseWidgetInput, WIDGET_LIMITS, widgetActions } from "../../shared/widget.ts";
 import type { CalendarEvent } from "../assistant-sources.ts";
-import { attendeeNames, BRIEF_MAX, clip, clockTime, cancelledCard, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, todayCard, updateCard, type BuiltCard } from "./assistant-cards.ts";
+import { attendeeNames, BRIEF_MAX, clockTime, cancelledCard, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, todayCard, updateCard, type BuiltCard } from "./assistant-cards.ts";
+import { clip } from "./text-clip.ts";
 
 const MINUTE = 60_000;
 const DAY_MS = 24 * 60 * MINUTE;

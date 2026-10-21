@@ -2,6 +2,7 @@ import { WEB_URL_MAX, WIDGET_LIMITS, type WidgetRoot } from "../../shared/widget
 import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
 import { localDate } from "./assistant-plan.ts";
 import { validZone } from "./brief-recap.ts";
+import { clip, oneLine } from "./text-clip.ts";
 
 export interface BuiltCard {
   card: WidgetRoot;
@@ -21,16 +22,6 @@ type Node = Record<string, unknown>;
 type Target = { botId: string; threadId: string };
 const DAY = 24 * 60 * 60_000;
 
-/** Cut to `max` UTF-16 units, the widget validator's own count, never inside a surrogate pair. Newlines stay. */
-export function clip(text: string, max: number): string {
-  const value = text.trim();
-  if (value.length <= max) return value;
-  let cut = Math.max(0, max - 1);
-  if (cut > 0 && /[\ud800-\udbff]/.test(value[cut - 1]!)) cut -= 1;
-  return `${value.slice(0, cut).trimEnd()}…`;
-}
-
-const oneLine = (value: string, max: number): string => clip(value.replace(/\s+/g, " "), max);
 const SUMMARY_MAX = 140;
 const summary = (value: string): string => oneLine(value, SUMMARY_MAX);
 /** The prep brief's cap, and the most lines it shows (each line is a node; a card holds 250). */

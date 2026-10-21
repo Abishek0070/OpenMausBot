@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseWidgetInput, WIDGET_LIMITS, widgetActions, widgetToText } from "../../shared/widget.ts";
 import type { RoutineRun } from "../routines.ts";
 import type { BotRecord, Message, TaskRecord } from "../store.ts";
-import { buildRecap, RECAP_LIMITS, RECAP_TAIL, RECAP_TITLE, type RecapDeps } from "./brief-recap.ts";
+import { buildRecap, firstSentence, RECAP_LIMITS, RECAP_TAIL, RECAP_TITLE, ROUTINE_LINE_MAX, routineRows, type RecapDeps } from "./brief-recap.ts";
 
 const SINCE = Date.UTC(2026, 9, 14, 22, 0, 0);
 const AFTER = SINCE + 60_000;
@@ -162,5 +162,79 @@ describe("buildRecap", () => {
     const text = (timeZone?: string) => widgetToText(buildRecap(one([digest(AFTER, "x")]), { ...view, timeZone })!.card);
     expect(text("Asia/Kolkata")).toContain("Away since Thu 3:30 AM");
     expect(() => text("Not/AZone")).not.toThrow();
+  });
+});
+
+describe("routineRows", () => {
+  const run = (id: string, more: Partial<RoutineRun>): RoutineRun =>
+    ({ id, routineId: `rt-${id}`, routineName: id, status: "completed", target: "bot", botId: "scout", scheduledFor: AFTER, finishedAt: AFTER, ...more } as RoutineRun);
+  const withRuns = (runs: RoutineRun[], more: { messages?: Record<string, Message[]>; hiddenThreads?: string[] } = {}) =>
+    deps({ bots: [bot("scout", "Scout")], tasks: {}, messages: more.messages ?? {}, runs, hiddenThreads: more.hiddenThreads });
+  const withOutput = (output: string) => withRuns([run("r", { routineName: "Nightly", output })]);
+
+  it("lists one row per finished run since a time, newest first: a completed run's first sentence, a failed run's error, a missed run's reason", () => {
+    const world = withRuns([
+      run("a", { routineName: "Overnight numbers", threadId: "run-1", finishedAt: AFTER + 1 }),
+      run("b", { routineName: "Broken", status: "failed", error: "Token expired", threadId: "run-2", finishedAt: AFTER + 2 }),
+      run("c", { routineName: "Missed one", status: "missed", finishedAt: undefined, scheduledFor: AFTER + 3 }),
+    ], { messages: { "run-1": [digest(AFTER, "Revenue is up 4%. Costs flat.")] } });
+    expect(routineRows(world, SINCE)).toEqual([
+      { name: "Missed one", status: "missed", line: "It did not run" },
+      { name: "Broken", status: "failed", line: "Token expired", open: { botId: "scout", threadId: "run-2" } },
+      { name: "Overnight numbers", status: "completed", line: "Revenue is up 4%.", open: { botId: "scout", threadId: "run-1" } }]);
+  });
+
+  it("takes a completed run's line from its thread's last digest, else from its output", () => {
+    const world = withRuns([
+      run("a", { threadId: "run-1", output: "ignored output", finishedAt: AFTER + 1 }),
+      run("b", { output: "Sent 12 invoices! Done.", finishedAt: AFTER + 2 }),
+      run("c", { threadId: "run-3", output: "Fell back to output. More.", finishedAt: AFTER + 3 }),
+    ], { messages: { "run-1": [digest(AFTER, "Old reply."), digest(AFTER + 1, "Revenue is up 4%. Costs flat.")], "run-3": [] } });
+    expect(routineRows(world, SINCE).map((row) => row.line)).toEqual(["Fell back to output.", "Sent 12 invoices!", "Revenue is up 4%."]);
+  });
+
+  it("says Finished or It failed when a run has no text", () => {
+    const world = withRuns([run("a", { output: "  ", finishedAt: AFTER + 1 }), run("b", { status: "failed", finishedAt: AFTER + 2 })]);
+    expect(routineRows(world, SINCE).map((row) => row.line)).toEqual(["It failed", "Finished"]);
+  });
+
+  it("leaves out a run its readers may not see, and running, waiting and cancelled runs", () => {
+    const world = withRuns([
+      run("Hidden one", { threadId: "t-hidden" }),
+      run("Busy", { status: "running" }), run("Parked", { status: "waiting" }), run("Dropped", { status: "cancelled" }),
+      run("Visible one", { threadId: "t-ok" }),
+      run("Before", { finishedAt: SINCE - 1 }),
+    ], { hiddenThreads: ["t-hidden"] });
+    expect(routineRows(world, SINCE).map((row) => row.name)).toEqual(["Visible one"]);
+  });
+
+  it("writes one readable line for an empty, endless or emoji reply", () => {
+    expect(firstSentence("")).toBe("");
+    expect(routineRows(withOutput(""), SINCE)[0]!.line).toBe("Finished");
+    const endless = routineRows(withOutput("word ".repeat(400)), SINCE)[0]!.line;
+    expect(endless.length).toBeLessThanOrEqual(ROUTINE_LINE_MAX);
+    expect(endless.endsWith("…")).toBe(true);
+    const emoji = routineRows(withOutput("\u{1F600}".repeat(200)), SINCE)[0]!.line;
+    expect(emoji.length).toBeLessThanOrEqual(ROUTINE_LINE_MAX);
+    expect(/[\ud800-\udbff]$/.test(emoji.replace(/…$/, ""))).toBe(false);
+    expect(routineRows(withOutput("All good \u{1F389}"), SINCE)[0]!.line).toBe("All good \u{1F389}");
+  });
+
+  it("cuts a sentence at . ! or ? followed by a space or the end, else at the first line", () => {
+    expect(firstSentence("Version 2.5 shipped. More.")).toBe("Version 2.5 shipped.");
+    expect(firstSentence("Really? Yes.")).toBe("Really?");
+    expect(firstSentence("No stop here\nsecond line")).toBe("No stop here");
+    expect(firstSentence("Done!")).toBe("Done!");
+  });
+
+  it("lists no routine runs in the recap when told to leave them out, and still lists chats and tasks", () => {
+    const world = deps({
+      bots: [bot("scout", "Scout")], tasks: { scout: [task("t1", AFTER)] }, messages: { t1: [digest(AFTER, "Pushed the branch.")] },
+      runs: [run("a", { threadId: "t-run" })],
+    });
+    const recap = buildRecap(world, { since: SINCE, routines: false })!;
+    expect(recap.facts.routineRuns).toEqual([]);
+    expect(recap.facts.finished.length).toBeGreaterThan(0);
+    expect(buildRecap(world, { since: SINCE })!.facts.routineRuns.length).toBe(1);
   });
 });
