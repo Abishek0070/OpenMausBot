@@ -43,6 +43,9 @@ export interface SourceAccount {
   id: string;
   alias?: string;
   active: boolean;
+  /** Composio reports the connection as INITIATED, INITIALIZING or PENDING: the person started connecting it and has not
+   * finished. */
+  pending?: true;
   implied?: true;
 }
 
@@ -103,6 +106,7 @@ const CALL_ID = "omb-assistant-call";
 const PREVIEW_MAX = 300;
 const ADDRESS = /^[\w.+][\w.+-]*@[\w-]+(?:\.[\w-]+)+$/;
 const isAccountActive = /^active$/i;
+const isAccountPending = /^(?:initiated|initializing|pending)$/i;
 const PRIMARY_CALENDAR = { id: "primary", name: "primary", primary: true, owned: true, read: true } as const;
 const GONE = Symbol("gone");
 
@@ -142,7 +146,9 @@ export function accountsFromServices(services: ConnectedServices): SourceAccount
   return ASSISTANT_SERVICES.flatMap((service): SourceAccount[] => {
     const state = services[service];
     if (!state?.accounts?.length) return [{ service, id: service, active: state?.connected === true, implied: true }];
-    return state.accounts.map(({ id, alias, status }) => ({ service, id, ...(alias ? { alias } : {}), active: isAccountActive.test(status) }));
+    return state.accounts.map(({ id, alias, status }) => ({
+      service, id, ...(alias ? { alias } : {}), active: isAccountActive.test(status), ...(isAccountPending.test(status) ? { pending: true as const } : {}),
+    }));
   });
 }
 

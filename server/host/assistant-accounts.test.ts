@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SourceError, type AssistantService, type SourceAccount } from "../assistant-sources.ts";
+import { accountsFromServices, SourceError, type AssistantService, type SourceAccount } from "../assistant-sources.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { accountLabel, createAssistantAccounts, disconnectedText, reconnectText, type AssistantAccounts } from "./assistant-accounts.ts";
 import { prunePending } from "./assistant-plan.ts";
-import { createAssistantState, MAX_ACCOUNTS, MAX_ID_LENGTH, type AssistantStatePatch, type PendingEmail } from "./assistant-state.ts";
+import { createAssistantState, MAX_ACCOUNTS, MAX_ADDRESS_LENGTH, MAX_ID_LENGTH, type AssistantStatePatch, type PendingEmail } from "./assistant-state.ts";
 import { DISCONNECTED_TEXT, RECONNECT_TEXT } from "./assistant-watch.ts";
 
 const MINUTE = 60_000;
@@ -18,6 +18,10 @@ const G2: SourceAccount = { service: "gmail", id: "ca_g2", active: true };
 const C1: SourceAccount = { service: "googlecalendar", id: "ca_c1", active: true };
 const IMPLIED_GMAIL: SourceAccount = { service: "gmail", id: "gmail", active: true, implied: true };
 const failing = async (): Promise<never> => { throw new SourceError("gmail", "connected apps refused the read"); };
+const google = (gmail: Array<{ id: string; alias?: string; status: string }>): SourceAccount[] => accountsFromServices({
+  gmail: { connected: true, accounts: gmail },
+  googlecalendar: { connected: true, accounts: [{ id: "ca_c1", status: "ACTIVE" }] },
+});
 
 const dirs: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) await removeTempDir(dir); });
@@ -129,12 +133,14 @@ describe("createAssistantAccounts", () => {
     expect(w.reconnect.mock.calls.map((call) => call[2])).toEqual([reconnectText("gmail", "admin@example.test")]);
   });
 
-  it("forgets an account no longer listed, with no card", async () => {
+  it("forgets an account no longer listed, with no card, once two listings in a row miss it", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const w = world();
     await w.accounts.refresh();
     await w.accounts.read(G1, failing, true);
     w.listed = [C1];
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.ca_g1).toMatchObject({ address: "admin@example.test", failures: 1, missedListings: 1 });
     await w.accounts.refresh();
     expect(w.state.get().accounts?.ca_g1).toBeUndefined();
     expect(w.reconnect).not.toHaveBeenCalled();
@@ -156,6 +162,8 @@ describe("createAssistantAccounts", () => {
     ];
     w.state.patch({ pendingEmails: waiting });
     w.listed = [{ ...G1, active: false }, C1];
+    await w.accounts.refresh();
+    expect(w.accounts.unreadable("gmail").map((account) => account.id)).toEqual(["ca_g1", "ca_g2"]);
     await w.accounts.refresh();
     expect(w.state.get().accounts).toMatchObject({ ca_g1: { address: "admin@example.test", connectedSeen: false } });
     expect(w.state.get().accounts?.ca_g2).toBeUndefined();
@@ -192,6 +200,15 @@ describe("createAssistantAccounts", () => {
     w.listed = [{ ...IMPLIED_GMAIL, active: false }, C1];
     await w.accounts.refresh();
     expect(w.reconnect.mock.calls).toEqual([[{ ...IMPLIED_GMAIL, active: false }, undefined, DISCONNECTED_TEXT.gmail]]);
+  });
+
+  it("names no account for a service that was never connected", async () => {
+    const w = world();
+    w.listed = [{ ...IMPLIED_GMAIL, active: false }, C1];
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.gmail).toBeUndefined();
+    expect(w.accounts.unreadable("gmail")).toEqual([]);
+    expect(w.reconnect).not.toHaveBeenCalled();
   });
 
   it("forgets an implied account once its service lists real accounts, with no card", async () => {
@@ -272,9 +289,22 @@ describe("createAssistantAccounts", () => {
     await w.accounts.refresh(); await w.accounts.refresh();
     expect(["ca_g1", "ca_g2", "ca_c1"].map((id) => w.accounts.selectionIgnored(id))).toEqual([true, true, false]);
     expect(warn).toHaveBeenCalledTimes(1);
-    w.listed = [G1, C1];
+  });
+
+  it("reads a flagged account's address again on each listing, and clears the flag once the addresses differ", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world();
+    w.listed = [G1, G2, C1];
+    w.addresses.ca_g2 = "admin@example.test";
     await w.accounts.refresh();
-    expect(w.accounts.selectionIgnored("ca_g1")).toBe(false);
+    expect(w.accounts.selectionIgnored("ca_g2")).toBe(true);
+    w.addresses.ca_g2 = "other@example.test";
+    await w.accounts.refresh();
+    expect(w.address.mock.calls.filter(([account]) => account.id === "ca_g2")).toHaveLength(2);
+    expect(w.accounts.address("ca_g2")).toBe("other@example.test");
+    expect(["ca_g1", "ca_g2"].map((id) => w.accounts.selectionIgnored(id))).toEqual([false, false]);
+    await w.accounts.refresh();
+    expect(w.address.mock.calls.filter(([account]) => account.id === "ca_g2")).toHaveLength(2);
   });
 
   it("trusts the account selection while every account of a service has its own address", async () => {
@@ -293,5 +323,113 @@ describe("createAssistantAccounts", () => {
     const listed = await w.accounts.refresh();
     expect(listed?.map((account) => account.id)).toEqual(many.map((account) => account.id));
     expect(Object.keys(w.state.get().accounts ?? {})).toHaveLength(MAX_ACCOUNTS);
+  });
+
+  it("logs an account id longer than assistant.json holds once, and leaves that account out", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world();
+    w.listed = [{ ...G1, id: "c".repeat(MAX_ID_LENGTH + 1) }, C1];
+    await w.accounts.refresh(); await w.accounts.refresh();
+    expect(warn.mock.calls.filter(([line]) => String(line).includes(`${MAX_ID_LENGTH + 1} characters`))).toHaveLength(1);
+    expect(w.accounts.usable("gmail")).toEqual([]);
+  });
+
+  it("ignores an address longer than assistant.json holds", async () => {
+    const w = world();
+    w.addresses.ca_g1 = `${"a".repeat(MAX_ADDRESS_LENGTH)}@example.test`;
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.ca_g1).toMatchObject({ connectedSeen: true });
+    expect(w.accounts.address("ca_g1")).toBeUndefined();
+    expect(w.accounts.label("ca_g1")).toBe("work");
+  });
+
+  it("names an account that is EXPIRED the first time it is listed, with no card", async () => {
+    const w = world();
+    w.listed = [{ ...G1, active: false }, C1];
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.ca_g1).toMatchObject({ service: "gmail", alias: "work", connectedSeen: false });
+    expect(w.accounts.unreadable("gmail").map((account) => account.id)).toEqual(["ca_g1"]);
+    expect(w.accounts.usable("gmail")).toEqual([]);
+    expect(w.accounts.known()).toEqual(new Set(["ca_g1", "ca_c1"]));
+    expect(w.accounts.label("ca_g1")).toBe("work");
+    expect(w.address).not.toHaveBeenCalledWith(expect.objectContaining({ id: "ca_g1" }));
+    expect(w.reconnect).not.toHaveBeenCalled();
+  });
+
+  it("ignores an account the person is still connecting until it is active", async () => {
+    const w = world();
+    w.listed = google([{ id: "ca_g1", alias: "work", status: "ACTIVE" }, { id: "ca_g2", status: "INITIATED" }]);
+    w.addresses.ca_g2 = "other@example.test";
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.ca_g2).toBeUndefined();
+    expect(w.accounts.usable("gmail").map((account) => account.id)).toEqual(["ca_g1"]);
+    expect(w.accounts.unreadable("gmail")).toEqual([]);
+    expect(w.address).not.toHaveBeenCalledWith(expect.objectContaining({ id: "ca_g2" }));
+    w.listed = google([{ id: "ca_g1", alias: "work", status: "ACTIVE" }, { id: "ca_g2", status: "ACTIVE" }]);
+    await w.accounts.refresh();
+    expect(w.accounts.usable("gmail").map((account) => account.id)).toEqual(["ca_g1", "ca_g2"]);
+    expect(w.reconnect).not.toHaveBeenCalled();
+  });
+
+  it("names an account it saw active that is now being reconnected", async () => {
+    const w = world();
+    w.listed = google([{ id: "ca_g1", alias: "work", status: "ACTIVE" }]);
+    await w.accounts.refresh();
+    w.listed = google([{ id: "ca_g1", alias: "work", status: "INITIATED" }]);
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.ca_g1).toMatchObject({ address: "admin@example.test", connectedSeen: false });
+    expect(w.accounts.unreadable("gmail").map((account) => account.id)).toEqual(["ca_g1"]);
+    expect(w.reconnect.mock.calls.map((call) => call[2])).toEqual([disconnectedText("gmail", "admin@example.test")]);
+  });
+
+  it("keeps an account one listing missed, unread and named unreadable, and resets the count when it is listed again", async () => {
+    const w = world();
+    await w.accounts.refresh();
+    w.state.patch({ accounts: { ...w.state.get().accounts, ca_g1: { ...w.state.get().accounts!.ca_g1!, emailCursor: NOW - MINUTE, judged: ["m0"] } } });
+    const waiting: PendingEmail[] = [{ account: "ca_g1", messageId: "m1", threadId: "t1", judgedAt: NOW, needsReply: true }];
+    w.state.patch({ pendingEmails: waiting });
+    const before = w.state.get().accounts!.ca_g1!;
+    w.listed = [C1];
+    await w.accounts.refresh();
+    expect(w.accounts.usable("gmail")).toEqual([]);
+    expect(w.accounts.unreadable("gmail")).toEqual([{ service: "gmail", id: "ca_g1", alias: "work", active: false }]);
+    expect(w.accounts.label("ca_g1")).toBe("admin@example.test");
+    expect(prunePending(waiting, { now: NOW, accounts: w.accounts.known() })).toEqual(waiting);
+    w.listed = [G1, C1];
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.ca_g1).toEqual(before);
+    expect(w.accounts.usable("gmail")).toEqual([G1]);
+    expect(w.accounts.unreadable("gmail")).toEqual([]);
+    w.listed = [C1];
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.ca_g1).toMatchObject({ missedListings: 1 });
+    expect(w.state.get().pendingEmails).toEqual(waiting);
+    expect(w.reconnect).not.toHaveBeenCalled();
+    expect(w.address).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers no account one listing missed before the first listing of a run", () => {
+    const fresh = world({ seed: { accounts: { ca_g1: { service: "gmail", connectedSeen: true, missedListings: 1 } } } }).accounts;
+    expect(fresh.usable("gmail")).toEqual([]);
+    expect(fresh.unreadable("gmail").map((account) => account.id)).toEqual(["ca_g1"]);
+  });
+
+  it("posts today's Reconnect wording through read() for an implied account with no address", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world();
+    w.listed = [IMPLIED_GMAIL, C1];
+    await w.accounts.refresh();
+    for (let n = 0; n < 3; n++) { await w.accounts.read(IMPLIED_GMAIL, failing, true); w.tick(CHECK_MS); }
+    expect(w.reconnect.mock.calls).toEqual([[IMPLIED_GMAIL, undefined, RECONNECT_TEXT.gmail]]);
+  });
+
+  it("labels a Reconnect card from the stored record, not from the account it was handed", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world();
+    w.addresses.ca_g1 = null;
+    await w.accounts.refresh();
+    const bare: SourceAccount = { service: "gmail", id: "ca_g1", active: true };
+    for (let n = 0; n < 3; n++) { await w.accounts.read(bare, failing, true); w.tick(CHECK_MS); }
+    expect(w.reconnect.mock.calls).toEqual([[bare, "work", reconnectText("gmail", "work")]]);
   });
 });

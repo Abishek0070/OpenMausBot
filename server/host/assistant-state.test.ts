@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { removeTempDir } from "../testing/cleanup.ts";
-import { createAssistantState, MAX_ACCOUNTS, MAX_PENDING_EMAILS } from "./assistant-state.ts";
+import { createAssistantState, MAX_ACCOUNTS, MAX_MISSED_LISTINGS, MAX_PENDING_EMAILS } from "./assistant-state.ts";
 
 const dirs: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) await removeTempDir(dir); });
@@ -78,13 +78,15 @@ describe("createAssistantState", () => {
       expect(createAssistantState(file).get()).toEqual({ version: 2 });
     });
 
-    it("holds at most twelve accounts and two hundred pending emails, and a bounded address", () => {
+    it("holds at most twelve accounts and two hundred pending emails, a bounded address and a bounded count of missed listings", () => {
       const { store } = setup();
       const accounts = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, n) => [`ca_${n}`, { service: "gmail" as const }]));
       expect(() => store.patch({ accounts: accounts(MAX_ACCOUNTS + 1) })).toThrow();
       expect(store.patch({ accounts: accounts(MAX_ACCOUNTS) }).accounts).toHaveProperty("ca_11");
       expect(() => store.patch({ pendingEmails: Array.from({ length: MAX_PENDING_EMAILS + 1 }, (_, n) => ({ ...pending, messageId: `m${n}` })) })).toThrow();
       expect(() => store.patch({ accounts: { ca_g1: { service: "gmail", address: "a".repeat(321) } } })).toThrow();
+      expect(() => store.patch({ accounts: { ca_g1: { service: "gmail", missedListings: MAX_MISSED_LISTINGS + 1 } } })).toThrow();
+      expect(store.patch({ accounts: { ca_g1: { service: "gmail", missedListings: MAX_MISSED_LISTINGS } } }).accounts?.ca_g1).toMatchObject({ missedListings: MAX_MISSED_LISTINGS });
     });
   });
 });

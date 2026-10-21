@@ -13,6 +13,7 @@ export const MAX_ID_LENGTH = 256;
 export const MAX_ACCOUNTS = 12;
 export const MAX_PENDING_EMAILS = 200;
 export const MAX_ADDRESS_LENGTH = 320;
+export const MAX_MISSED_LISTINGS = 1;
 
 const at = z.number().finite().nonnegative();
 const id = z.string().min(1).max(MAX_ID_LENGTH);
@@ -45,6 +46,7 @@ const accountRecordSchema = z.object({
   failures: z.number().int().min(0).optional(),
   reconnectShown: z.boolean().optional(),
   connectedSeen: z.boolean().optional(),
+  missedListings: z.number().int().min(1).max(MAX_MISSED_LISTINGS).optional(),
 }).strict();
 
 const pendingEmailSchema = z.object({ account: id, messageId: id, threadId: id, judgedAt: at, needsReply: z.boolean() }).strict();

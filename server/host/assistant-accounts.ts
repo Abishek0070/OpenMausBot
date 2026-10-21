@@ -1,7 +1,7 @@
-import { isAddress, type AssistantService, type AssistantSources, type SourceAccount } from "../assistant-sources.ts";
+import { ASSISTANT_SERVICES, isAddress, type AssistantService, type AssistantSources, type SourceAccount } from "../assistant-sources.ts";
 import { failure } from "../failure.ts";
 import { RECONNECT_AFTER } from "./assistant-plan.ts";
-import { MAX_ACCOUNTS, MAX_ADDRESS_LENGTH, MAX_ID_LENGTH, type AccountRecord, type AssistantStateStore } from "./assistant-state.ts";
+import { MAX_ACCOUNTS, MAX_ADDRESS_LENGTH, MAX_ID_LENGTH, MAX_MISSED_LISTINGS, type AccountRecord, type AssistantStateStore } from "./assistant-state.ts";
 
 const SHORT_ID = 6;
 const SERVICE_LABEL: Record<AssistantService, string> = { gmail: "Gmail", googlecalendar: "Google Calendar" };
@@ -37,7 +37,7 @@ export function disconnectedText(service: AssistantService, label?: string): str
 }
 
 const storableId = (id: string): boolean => id.length >= 1 && id.length <= MAX_ID_LENGTH;
-const isService = (id: string): id is AssistantService => Object.hasOwn(SERVICE_LABEL, id);
+const isService = (id: string): id is AssistantService => (ASSISTANT_SERVICES as readonly string[]).includes(id);
 
 function newRecord(account: SourceAccount): AccountRecord {
   return {
@@ -48,7 +48,14 @@ function newRecord(account: SourceAccount): AccountRecord {
 }
 
 function fromRecord(id: string, record: AccountRecord): SourceAccount {
-  return { service: record.service, id, ...(record.alias ? { alias: record.alias } : {}), active: record.connectedSeen === true, ...(record.implied ? { implied: true } : {}) };
+  const active = record.connectedSeen === true && !record.missedListings;
+  return { service: record.service, id, ...(record.alias ? { alias: record.alias } : {}), active, ...(record.implied ? { implied: true } : {}) };
+}
+
+function withChanges(record: AccountRecord, changes: Partial<AccountRecord>): AccountRecord {
+  const next: Record<string, unknown> = { ...record, ...changes };
+  for (const [key, value] of Object.entries(changes)) if (value === undefined) delete next[key];
+  return next as AccountRecord;
 }
 
 export type AssistantAccounts = ReturnType<typeof createAssistantAccounts>;
@@ -56,11 +63,27 @@ export type AssistantAccounts = ReturnType<typeof createAssistantAccounts>;
 export function createAssistantAccounts(deps: AssistantAccountsDeps) {
   let listing: SourceAccount[] | null = null;
   let selectionWarned = false;
+  const longIdsWarned = new Set<string>();
   const failureCountedAt = new Map<string, number>();
   const lastRead = new Map<string, "ok" | "failed">();
 
   const records = (): Record<string, AccountRecord> => deps.state.get().accounts ?? {};
-  const lastSeen = (): SourceAccount[] => listing ?? Object.entries(records()).map(([id, record]) => fromRecord(id, record));
+
+  function lastSeen(): SourceAccount[] {
+    const kept = Object.entries(records());
+    if (!listing) return kept.map(([id, record]) => fromRecord(id, record));
+    const listedIds = new Set(listing.map((account) => account.id));
+    return [...listing, ...kept.filter(([id, record]) => record.missedListings && !listedIds.has(id)).map(([id, record]) => fromRecord(id, record))];
+  }
+
+  function fitsState(account: SourceAccount): boolean {
+    if (storableId(account.id)) return true;
+    if (!longIdsWarned.has(account.id)) {
+      longIdsWarned.add(account.id);
+      console.warn(`assistant: a ${account.service} account id of ${account.id.length} characters is longer than assistant.json holds, so MausBot leaves that account out`);
+    }
+    return false;
+  }
 
   function saveRecord(account: SourceAccount, changes: Partial<AccountRecord>): void {
     const all = records();
@@ -69,18 +92,26 @@ export function createAssistantAccounts(deps: AssistantAccountsDeps) {
       console.warn(`assistant: ${account.service} account ${account.id} was not saved: assistant.json holds ${MAX_ACCOUNTS} accounts`);
       return;
     }
-    deps.state.patch({ accounts: { ...all, [account.id]: { ...(record ?? newRecord(account)), ...changes } } });
+    deps.state.patch({ accounts: { ...all, [account.id]: withChanges(record ?? newRecord(account), changes) } });
   }
 
   function patchRecord(id: string, changes: Partial<AccountRecord>): void {
     const all = records();
     const record = all[id];
-    if (record) deps.state.patch({ accounts: { ...all, [id]: { ...record, ...changes } } });
+    if (record) deps.state.patch({ accounts: { ...all, [id]: withChanges(record, changes) } });
+  }
+
+  function describe(id: string, handed?: SourceAccount): { service?: AssistantService; label?: string } {
+    const record = records()[id];
+    const account = handed ?? lastSeen().find((candidate) => candidate.id === id);
+    const service = record?.service ?? account?.service ?? (isService(id) ? id : undefined);
+    const implied = (record ?? account)?.implied === true || (!record && !account && service !== undefined);
+    return { service, label: accountLabel({ id, alias: record?.alias ?? account?.alias, ...(implied ? { implied: true } : {}) }, record?.address) };
   }
 
   function postReconnect(account: SourceAccount, text: (service: AssistantService, label?: string) => string): void {
     patchRecord(account.id, { reconnectShown: true });
-    const label = accountLabel(account, records()[account.id]?.address);
+    const { label } = describe(account.id, account);
     try {
       deps.reconnect(account, label, text(account.service, label));
     } catch (error) {
@@ -90,22 +121,34 @@ export function createAssistantAccounts(deps: AssistantAccountsDeps) {
 
   function noteConnection(account: SourceAccount): void {
     const record = records()[account.id];
-    if (account.active === (record?.connectedSeen === true)) return;
+    const seen = record?.connectedSeen === true;
     if (account.active) {
-      saveRecord(account, { connectedSeen: true, failures: 0, reconnectShown: false });
+      if (!seen) saveRecord(account, { connectedSeen: true, failures: 0, reconnectShown: false });
       return;
     }
+    if (!record) {
+      if (!account.implied && !account.pending) saveRecord(account, { connectedSeen: false });
+      return;
+    }
+    if (!seen) return;
     patchRecord(account.id, { connectedSeen: false });
-    if (!record?.reconnectShown) postReconnect(account, disconnectedText);
+    if (!record.reconnectShown) postReconnect(account, disconnectedText);
   }
 
-  function forgetUnlisted(listed: readonly SourceAccount[]): void {
+  function noteMissing(listed: readonly SourceAccount[]): void {
     const ids = new Set(listed.map((account) => account.id));
     const realServices = new Set(listed.filter((account) => !account.implied).map((account) => account.service));
-    const all = Object.entries(records());
-    const gone = new Set(all.filter(([id, record]) => (record.implied ? realServices.has(record.service) : !ids.has(id))).map(([id]) => id));
-    if (!gone.size) return;
-    deps.state.patch({ accounts: Object.fromEntries(all.filter(([id]) => !gone.has(id))) });
+    const before = Object.entries(records());
+    const after: Record<string, AccountRecord> = {};
+    const gone: string[] = [];
+    for (const [id, record] of before) {
+      if (record.implied && realServices.has(record.service)) gone.push(id);
+      else if (record.implied || ids.has(id)) after[id] = withChanges(record, { missedListings: undefined });
+      else if ((record.missedListings ?? 0) >= MAX_MISSED_LISTINGS) gone.push(id);
+      else after[id] = { ...record, missedListings: (record.missedListings ?? 0) + 1 };
+    }
+    if (!gone.length && before.every(([id, record]) => after[id]?.missedListings === record.missedListings)) return;
+    deps.state.patch({ accounts: after });
     for (const id of gone) {
       lastRead.delete(id);
       failureCountedAt.delete(id);
@@ -142,13 +185,17 @@ export function createAssistantAccounts(deps: AssistantAccountsDeps) {
     async refresh(): Promise<SourceAccount[] | null> {
       const answer = await deps.sources.accounts();
       if (!answer) return null;
-      const listed = answer.filter((account) => storableId(account.id));
+      const listed = answer.filter(fitsState);
       listing = listed;
       for (const account of listed) if (deps.mayUse(account.service)) noteConnection(account);
-      forgetUnlisted(listed);
+      noteMissing(listed);
       const kept = records();
-      const unaddressed = listed.filter((account) => account.active && deps.mayUse(account.service) && kept[account.id] && !kept[account.id]!.address);
-      await Promise.all(unaddressed.map(readAddress));
+      const shared = sharedAddresses();
+      const addressDue = (account: SourceAccount): boolean => {
+        const record = kept[account.id];
+        return record !== undefined && account.active && deps.mayUse(account.service) && (!record.address || shared.has(account.id));
+      };
+      await Promise.all(listed.filter(addressDue).map(readAddress));
       warnSharedAddresses();
       return listed;
     },
@@ -195,10 +242,8 @@ export function createAssistantAccounts(deps: AssistantAccountsDeps) {
     readState: (accountId: string): "ok" | "failed" | undefined => lastRead.get(accountId),
 
     label(accountId: string): string {
-      const record = records()[accountId];
-      const account = listing?.find((candidate) => candidate.id === accountId) ?? (record && fromRecord(accountId, record));
-      if (account) return accountLabel(account, record?.address) ?? SERVICE_LABEL[account.service];
-      return isService(accountId) ? SERVICE_LABEL[accountId] : shortId(accountId);
+      const { service, label } = describe(accountId);
+      return label ?? (service ? SERVICE_LABEL[service] : shortId(accountId));
     },
 
     address: (accountId: string): string | undefined => records()[accountId]?.address,
