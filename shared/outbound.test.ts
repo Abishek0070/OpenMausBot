@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { OUTBOUND_DEFAULT_CAP, approvalCallsIn, connectorCallsIn, isOutboundTool, isReadOnlyTool, normalizeOutboundPolicy, outboundCallsIn } from "./outbound.ts";
+import { KNOWN_READ_SLUGS, OUTBOUND_DEFAULT_CAP, approvalCallsIn, connectorCallsIn, isOutboundTool, isReadOnlyTool, normalizeOutboundPolicy, outboundCallsIn } from "./outbound.ts";
 
 describe("isOutboundTool", () => {
   it("flags tools that send, reply, post, publish, invite, share, or move money", () => {
@@ -85,6 +85,13 @@ describe("isReadOnlyTool", () => {
       "GOOGLECALENDAR_PATCH_EVENT",
       "mcp__linear__GOOGLECALENDAR_EVENTS_LIST",
     ]) expect(isReadOnlyTool(name), name).toBe(false);
+  });
+
+  it("knows the Google profile, calendar list, message and thread reads by slug", () => {
+    for (const slug of ["GMAIL_GET_PROFILE", "GOOGLECALENDAR_LIST_CALENDARS", "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", "GMAIL_FETCH_MESSAGE_BY_THREAD_ID"]) {
+      expect(KNOWN_READ_SLUGS.has(slug)).toBe(true);
+      expect(approvalCallsIn(slug, {})).toEqual([]);
+    }
   });
 });
 

@@ -96,7 +96,7 @@ describe("planMeetings", () => {
 });
 
 describe("planTriage", () => {
-  const mail = (id: string, ago: number): EmailHeader => ({ id, threadId: `t-${id}`, at: NOW - ago, from: id, subject: id, preview: "" });
+  const mail = (id: string, ago: number): EmailHeader => ({ id, account: "g1", threadId: `t-${id}`, at: NOW - ago, from: id, subject: id, preview: "" });
 
   it("sends the 20 newest unjudged emails of the last day, judges older ones silently and keeps the rest for later", () => {
     const recent = Array.from({ length: 25 }, (_, index) => mail(`r${index}`, (index + 1) * MINUTE));

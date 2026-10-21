@@ -1,5 +1,6 @@
 // Reads Google Calendar events and Gmail headers from the server through the connected-apps relay, with no engine turn.
-// Tool names, arguments and answer shapes follow Composio's documentation; the fixtures are not yet checked against the live service.
+// Tool names, arguments, the account selector and answer shapes follow Composio's documentation; the fixtures are not yet
+// checked against the live service.
 import { parseMcpResponse } from "./connector-tools-list.ts";
 
 export type AssistantService = "gmail" | "googlecalendar";
@@ -17,18 +18,52 @@ export interface CalendarEvent {
   joinUrl?: string;
   location?: string;
   description?: string;
+  calendarId?: string;
+  ownedCalendar?: boolean;
+  iCalUID?: string;
+  originalStart?: number;
+  organizer?: string;
 }
 
 export interface EmailHeader {
   id: string;
+  account: string;
   threadId: string;
   at: number;
   from: string;
   subject: string;
   preview: string;
+  messageIdHeader?: string;
+}
+
+/** An implied account stands for a service reported connected without a list of its accounts; its id is the service. */
+export interface SourceAccount {
+  service: AssistantService;
+  id: string;
+  alias?: string;
+  active: boolean;
+  implied?: true;
+}
+
+export interface ThreadMessage {
+  id: string;
+  at: number;
+  /** The sender's lower-case address, or "" when the answer named none. */
+  from: string;
 }
 
 export interface AssistantSources {
+  accounts(): Promise<SourceAccount[] | null>;
+  address(account: SourceAccount): Promise<string | null>;
+  events(account: SourceAccount, fromMs: number, toMs: number): Promise<CalendarEvent[]>;
+  emails(account: SourceAccount, sinceMs: number, limit: number): Promise<EmailHeader[]>;
+  mailFrom(account: SourceAccount, addresses: readonly string[], sinceMs: number): Promise<boolean>;
+  /** Null only when the service says the message is gone. */
+  message(account: SourceAccount, messageId: string): Promise<EmailHeader | null>;
+  thread(account: SourceAccount, threadId: string): Promise<ThreadMessage[]>;
+}
+
+export interface SingleAccountSources {
   connected(): Promise<Record<AssistantService, boolean> | null>;
   events(fromMs: number, toMs: number): Promise<CalendarEvent[]>;
   emails(sinceMs: number, limit: number): Promise<EmailHeader[]>;
@@ -37,24 +72,58 @@ export interface AssistantSources {
 
 export class SourceError extends Error {
   readonly service: AssistantService;
-  constructor(service: AssistantService, message: string) {
+  readonly account?: string;
+  constructor(service: AssistantService, message: string, account?: string) {
     super(message);
     this.service = service;
+    if (account !== undefined) this.account = account;
     this.name = "SourceError";
   }
 }
 
 export const CALENDAR_LIST_TOOL = "GOOGLECALENDAR_EVENTS_LIST";
+export const CALENDARS_TOOL = "GOOGLECALENDAR_LIST_CALENDARS";
 export const GMAIL_FETCH_TOOL = "GMAIL_FETCH_EMAILS";
+export const GMAIL_PROFILE_TOOL = "GMAIL_GET_PROFILE";
+export const GMAIL_MESSAGE_TOOL = "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID";
+export const GMAIL_THREAD_TOOL = "GMAIL_FETCH_MESSAGE_BY_THREAD_ID";
+/** The field of a Composio multi-execute tool item that names the connected account the call runs as. */
+export const ACCOUNT_PARAM = "account";
+/** Composio's GMAIL_FETCH_EMAILS carries each message's `payload.headers`, Message-ID among them, only with its payload. */
+export const GMAIL_HEADERS_OPTION = { include_payload: true } as const;
+/** How a Gmail tool says the message it was asked for no longer exists. */
+export const MESSAGE_GONE = /not found|404|deleted/i;
+const SERVICES: readonly AssistantService[] = ["gmail", "googlecalendar"];
 const MULTI_EXECUTE = "COMPOSIO_MULTI_EXECUTE_TOOL";
 const CALL_ID = "omb-assistant-call";
 const PREVIEW_MAX = 300;
 const ADDRESS = /^[\w.+][\w.+-]*@[\w-]+(?:\.[\w-]+)+$/;
+const isAccountActive = /^active$/i;
+const PRIMARY_CALENDAR = { id: "primary", primary: true, owned: true, read: true } as const;
+const GONE = Symbol("gone");
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const flat = (value: unknown): string => (typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "");
 const seconds = (ms: number): number => Math.floor(ms / 1000);
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** The tool itself answered that it failed, as opposed to the relay or Composio failing around it. */
+class ToolAnswerError extends Error {}
+
+type ConnectedServices = Record<string, { connected: boolean; accounts?: ReadonlyArray<{ id: string; alias?: string; status: string }> }>;
+
+export function accountsFromServices(services: ConnectedServices): SourceAccount[] {
+  return SERVICES.flatMap((service): SourceAccount[] => {
+    const state = services[service];
+    if (!state?.accounts?.length) return [{ service, id: service, active: state?.connected === true, implied: true }];
+    return state.accounts.map(({ id, alias, status }) => ({ service, id, ...(alias ? { alias } : {}), active: isAccountActive.test(status) }));
+  });
+}
+
+function toolItem(slug: string, args: Record<string, unknown>, account: SourceAccount): Record<string, unknown> {
+  return { tool_slug: slug, arguments: args, ...(account.implied ? {} : { [ACCOUNT_PARAM]: account.id }) };
+}
 
 /** One tool's `data` from a tools/call answer, multi-execute or direct. Anything else throws. */
 export function toolData(slug: string, frame: Record<string, unknown> | null): unknown {
@@ -78,7 +147,7 @@ export function toolData(slug: string, frame: Record<string, unknown> | null): u
   if (Array.isArray(results)) {
     const response = record(results.map(record).find((item) => item?.tool_slug === slug)?.response);
     if (!response) throw new Error(`${slug}: missing from the answer`);
-    if (response.successful === false) throw new Error(String(response.error ?? `${slug} failed`).slice(0, 300));
+    if (response.successful === false) throw new ToolAnswerError(String(response.error ?? `${slug} failed`).slice(0, 300));
     if (!("data" in response)) throw new Error(`${slug}: the answer had no data`);
     return response.data;
   }
@@ -86,13 +155,36 @@ export function toolData(slug: string, frame: Record<string, unknown> | null): u
   return body.data;
 }
 
-function eventList(data: unknown): unknown[] {
-  const top = record(data);
-  for (const candidate of [data, top?.items, record(top?.response_data)?.items, top?.events]) if (Array.isArray(candidate)) return candidate;
-  throw new Error("the calendar answer had no event list");
+function listIn(data: unknown, keys: readonly string[]): unknown[] | null {
+  if (Array.isArray(data)) return data;
+  for (const body of [record(data), record(record(data)?.response_data)]) {
+    for (const key of keys) if (Array.isArray(body?.[key])) return body[key] as unknown[];
+  }
+  return null;
 }
 
-function calendarEvent(raw: unknown): CalendarEvent | null {
+function headerValue(item: Record<string, unknown>, name: string): string | undefined {
+  const headers = record(item.payload)?.headers;
+  const value = (Array.isArray(headers) ? headers : []).map(record).find((header) => typeof header?.name === "string" && header.name.toLowerCase() === name)?.value;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function sentAt(item: Record<string, unknown>): number {
+  const at = typeof item.messageTimestamp === "string" ? Date.parse(item.messageTimestamp)
+    : typeof item.internalDate === "string" || typeof item.internalDate === "number" ? Number(item.internalDate) : Number.NaN;
+  return Number.isFinite(at) ? at : 0;
+}
+
+function senderOf(item: Record<string, unknown>): string {
+  return flat(item.sender ?? item.from ?? headerValue(item, "from"));
+}
+
+function addressIn(sender: string): string {
+  const candidate = (/<([^<>\s]+)>/.exec(sender)?.[1] ?? sender).trim().toLowerCase();
+  return ADDRESS.test(candidate) ? candidate : "";
+}
+
+function calendarEvent(raw: unknown, calendar: { id: string; owned: boolean }): CalendarEvent | null {
   const item = record(raw);
   if (!item || typeof item.id !== "string" || !item.id) return null;
   const start = record(item.start);
@@ -115,6 +207,9 @@ function calendarEvent(raw: unknown): CalendarEvent | null {
   const video = (Array.isArray(record(item.conferenceData)?.entryPoints) ? record(item.conferenceData)!.entryPoints as unknown[] : [])
     .map(record).find((entry) => entry?.entryPointType === "video" && typeof entry.uri === "string")?.uri;
   const location = typeof item.location === "string" && item.location.trim() ? item.location.trim() : undefined;
+  const original = record(item.originalStartTime);
+  const originalStart = Date.parse(String(original?.dateTime ?? original?.date ?? ""));
+  const organizer = record(item.organizer)?.email;
   const joinUrl = [item.hangoutLink, video, location].find((value): value is string => typeof value === "string" && /^https:\/\/\S+$/i.test(value.trim()));
   return {
     id: item.id,
@@ -129,14 +224,20 @@ function calendarEvent(raw: unknown): CalendarEvent | null {
     ...(joinUrl ? { joinUrl: joinUrl.trim() } : {}),
     ...(location ? { location } : {}),
     ...(typeof item.description === "string" && item.description.trim() ? { description: item.description } : {}),
+    calendarId: calendar.id,
+    ownedCalendar: calendar.owned,
+    ...(typeof item.iCalUID === "string" && item.iCalUID ? { iCalUID: item.iCalUID } : {}),
+    ...(Number.isFinite(originalStart) ? { originalStart } : {}),
+    ...(typeof organizer === "string" && organizer.trim() ? { organizer: organizer.trim().toLowerCase() } : {}),
   };
 }
 
-export function eventsFromData(data: unknown): CalendarEvent[] {
-  const list = eventList(data);
+export function eventsFromData(data: unknown, calendar: { id: string; owned: boolean }): CalendarEvent[] {
+  const list = listIn(data, ["items", "events"]);
+  if (!list) throw new Error("the calendar answer had no event list");
   let cancelledDropped = 0;
   const events = list.flatMap((raw) => {
-    const event = calendarEvent(raw);
+    const event = calendarEvent(raw, calendar);
     if (!event && record(raw)?.status === "cancelled") cancelledDropped += 1;
     return event ? [event] : [];
   });
@@ -144,35 +245,81 @@ export function eventsFromData(data: unknown): CalendarEvent[] {
   return events;
 }
 
-export function emailsFromData(data: unknown): EmailHeader[] {
-  const top = record(data);
-  const list = Array.isArray(top?.messages) ? top.messages : Array.isArray(data) ? data : null;
+function messageId(item: Record<string, unknown> | undefined): string | undefined {
+  const id = item?.messageId ?? item?.id;
+  return typeof id === "string" && id ? id : undefined;
+}
+
+function emailHeader(raw: unknown, account: string): EmailHeader | null {
+  const item = record(raw);
+  const id = messageId(item);
+  if (!item || !id) return null;
+  const preview = record(item.preview);
+  const messageIdHeader = headerValue(item, "message-id");
+  return {
+    id,
+    account,
+    threadId: typeof item.threadId === "string" && item.threadId ? item.threadId : id,
+    at: sentAt(item),
+    from: senderOf(item),
+    subject: flat(item.subject ?? preview?.subject ?? headerValue(item, "subject")),
+    preview: flat(preview?.body ?? item.snippet ?? item.messageText).slice(0, PREVIEW_MAX),
+    ...(messageIdHeader ? { messageIdHeader } : {}),
+  };
+}
+
+export function emailsFromData(data: unknown, account: string): EmailHeader[] {
+  const list = listIn(data, ["messages"]);
   if (!list) throw new Error("the Gmail answer had no message list");
-  const headers = list.flatMap((raw) => {
-    const item = record(raw);
-    const id = item?.messageId ?? item?.id;
-    if (!item || typeof id !== "string" || !id) return [];
-    const preview = record(item.preview);
-    const at = typeof item.messageTimestamp === "string" ? Date.parse(item.messageTimestamp)
-      : typeof item.internalDate === "string" || typeof item.internalDate === "number" ? Number(item.internalDate) : Number.NaN;
-    return [{
-      id,
-      threadId: typeof item.threadId === "string" && item.threadId ? item.threadId : id,
-      at: Number.isFinite(at) ? at : 0,
-      from: flat(item.sender ?? item.from),
-      subject: flat(item.subject ?? preview?.subject),
-      preview: flat(preview?.body ?? item.snippet ?? item.messageText).slice(0, PREVIEW_MAX),
-    }];
-  });
+  const headers = list.flatMap((raw) => emailHeader(raw, account) ?? []);
   if (list.length > 0 && headers.length === 0) throw new Error("none of the Gmail messages could be read");
   return headers;
+}
+
+export function messageFromData(data: unknown, account: string): EmailHeader {
+  const top = record(data);
+  const header = emailHeader(record(top?.message) ?? record(top?.response_data) ?? top, account);
+  if (!header) throw new Error("the Gmail message could not be read");
+  return header;
+}
+
+export function threadFromData(data: unknown): ThreadMessage[] {
+  const list = listIn(data, ["messages"]);
+  if (!list) throw new Error("the Gmail thread had no message list");
+  const messages = list.flatMap((raw): ThreadMessage[] => {
+    const item = record(raw);
+    const id = messageId(item);
+    return item && id ? [{ id, at: sentAt(item), from: addressIn(senderOf(item)) }] : [];
+  });
+  if (list.length > 0 && messages.length === 0) throw new Error("none of the thread's messages could be read");
+  return messages;
+}
+
+export function profileFromData(data: unknown): string {
+  const address = [record(data), record(record(data)?.response_data)].map((body) => body?.emailAddress).find((value) => typeof value === "string");
+  const normalised = typeof address === "string" ? address.trim().toLowerCase() : "";
+  if (!ADDRESS.test(normalised)) throw new Error("the Gmail profile had no address");
+  return normalised;
+}
+
+export function calendarsFromData(data: unknown): Array<{ id: string; primary: boolean; owned: boolean; read: boolean }> {
+  const list = listIn(data, ["items", "calendars"]);
+  if (!list) throw new Error("the answer had no calendar list");
+  const calendars = list.flatMap((raw) => {
+    const item = record(raw);
+    if (!item || typeof item.id !== "string" || !item.id) return [];
+    const primary = item.primary === true;
+    return [{ id: item.id, primary, owned: primary || item.accessRole === "owner", read: primary || (item.selected === true && item.hidden !== true) }];
+  });
+  if (list.length > 0 && calendars.length === 0) throw new Error("none of the calendars could be read");
+  return calendars;
 }
 
 export const READ_TIMEOUT_MS = 60_000;
 
 export interface ComposioSourceDeps {
   configured(): boolean;
-  connectedServices(): Promise<Record<string, { connected: boolean }>>;
+  connectedServices(): Promise<ConnectedServices>;
   relay(payload: unknown, transportSessionId: string | undefined, signal: AbortSignal): Promise<{ status: number; bytes: Uint8Array; transportSessionId?: string }>;
   readTimeoutMs?: number;
 }
@@ -180,7 +327,8 @@ export interface ComposioSourceDeps {
 export function createComposioSources(deps: ComposioSourceDeps): AssistantSources {
   const readTimeoutMs = deps.readTimeoutMs ?? READ_TIMEOUT_MS;
 
-  async function call(service: AssistantService, slug: string, args: Record<string, unknown>): Promise<unknown> {
+  /** One tool's data, or GONE when the tool's own failure matches `gone`. */
+  async function call(account: SourceAccount, slug: string, args: Record<string, unknown>, gone?: RegExp): Promise<unknown> {
     const signal = AbortSignal.timeout(readTimeoutMs);
     try {
       const init = await deps.relay({
@@ -193,61 +341,107 @@ export function createComposioSources(deps: ComposioSourceDeps): AssistantSource
       await deps.relay({ jsonrpc: "2.0", method: "notifications/initialized" }, session, signal).catch(() => undefined);
       const answer = await deps.relay({
         jsonrpc: "2.0", id: CALL_ID, method: "tools/call",
-        params: { name: MULTI_EXECUTE, arguments: { tools: [{ tool_slug: slug, arguments: args }] } },
+        params: { name: MULTI_EXECUTE, arguments: { tools: [toolItem(slug, args, account)] } },
       }, session, signal);
       if (answer.status !== 200) throw new Error(`${slug} answered HTTP ${answer.status}`);
       return toolData(slug, parseMcpResponse(new TextDecoder().decode(answer.bytes), CALL_ID));
     } catch (error) {
       if (error instanceof SourceError) throw error;
-      if (signal.aborted) throw new SourceError(service, `${slug} did not answer within ${Math.round(readTimeoutMs / 1000)} seconds`);
-      throw new SourceError(service, error instanceof Error ? error.message : String(error));
+      if (gone && error instanceof ToolAnswerError && gone.test(error.message)) return GONE;
+      if (signal.aborted) throw new SourceError(account.service, `${slug} did not answer within ${Math.round(readTimeoutMs / 1000)} seconds`, account.id);
+      throw new SourceError(account.service, errorText(error), account.id);
     }
   }
 
-  function requireFinite(service: AssistantService, ...times: number[]): void {
-    if (times.some((time) => !Number.isFinite(time))) throw new SourceError(service, "the time window was not a finite time");
-  }
-
-  async function gmail(query: string, limit: number): Promise<EmailHeader[]> {
-    const data = await call("gmail", GMAIL_FETCH_TOOL, { user_id: "me", query, max_results: limit, include_payload: false, verbose: false });
+  function parsed<T>(account: SourceAccount, parse: () => T): T {
     try {
-      return emailsFromData(data);
+      return parse();
     } catch (error) {
-      throw new SourceError("gmail", error instanceof Error ? error.message : String(error));
+      throw new SourceError(account.service, errorText(error), account.id);
     }
+  }
+
+  function requireFinite(account: SourceAccount, ...times: number[]): void {
+    if (times.some((time) => !Number.isFinite(time))) throw new SourceError(account.service, "the time window was not a finite time", account.id);
+  }
+
+  async function gmail(account: SourceAccount, query: string, limit: number, options: Record<string, unknown> = {}): Promise<EmailHeader[]> {
+    const data = await call(account, GMAIL_FETCH_TOOL, { user_id: "me", query, max_results: limit, include_payload: false, verbose: false, ...options });
+    return parsed(account, () => emailsFromData(data, account.id));
+  }
+
+  async function calendars(account: SourceAccount): Promise<ReturnType<typeof calendarsFromData>> {
+    const data = await call(account, CALENDARS_TOOL, {});
+    return parsed(account, () => calendarsFromData(data));
   }
 
   return {
-    async connected() {
+    async accounts() {
       if (!deps.configured()) return null;
       try {
-        const services = await deps.connectedServices();
-        return { gmail: services.gmail?.connected === true, googlecalendar: services.googlecalendar?.connected === true };
+        return accountsFromServices(await deps.connectedServices());
       } catch {
         return null;
       }
     },
-    async events(fromMs, toMs) {
-      requireFinite("googlecalendar", fromMs, toMs);
-      const data = await call("googlecalendar", CALENDAR_LIST_TOOL, {
-        calendarId: "primary", timeMin: new Date(fromMs).toISOString(), timeMax: new Date(toMs).toISOString(),
-        singleEvents: true, orderBy: "startTime", maxResults: 100, showDeleted: true,
-      });
-      try {
-        return eventsFromData(data);
-      } catch (error) {
-        throw new SourceError("googlecalendar", error instanceof Error ? error.message : String(error));
+    async address(account) {
+      if (account.service === "gmail") {
+        const data = await call(account, GMAIL_PROFILE_TOOL, { user_id: "me" });
+        return parsed(account, () => profileFromData(data));
       }
+      const primary = (await calendars(account)).find((calendar) => calendar.primary)?.id.toLowerCase();
+      return primary && ADDRESS.test(primary) ? primary : null;
     },
-    async emails(sinceMs, limit) {
-      requireFinite("gmail", sinceMs);
-      return gmail(`in:inbox after:${seconds(sinceMs)} -category:promotions -category:social`, limit);
+    async events(account, fromMs, toMs) {
+      requireFinite(account, fromMs, toMs);
+      const listed = await calendars(account);
+      const read = [...(listed.some((calendar) => calendar.primary) ? [] : [PRIMARY_CALENDAR]), ...listed.filter((calendar) => calendar.read)];
+      const events: CalendarEvent[] = [];
+      for (const calendar of read) {
+        const data = await call(account, CALENDAR_LIST_TOOL, {
+          calendarId: calendar.id, timeMin: new Date(fromMs).toISOString(), timeMax: new Date(toMs).toISOString(),
+          singleEvents: true, orderBy: "startTime", maxResults: 100, showDeleted: true,
+        });
+        events.push(...parsed(account, () => eventsFromData(data, { id: calendar.id, owned: calendar.owned })));
+      }
+      return events;
     },
-    async mailFrom(addresses, sinceMs) {
-      requireFinite("gmail", sinceMs);
+    async emails(account, sinceMs, limit) {
+      requireFinite(account, sinceMs);
+      return gmail(account, `in:inbox after:${seconds(sinceMs)} -category:promotions -category:social`, limit, GMAIL_HEADERS_OPTION);
+    },
+    async mailFrom(account, addresses, sinceMs) {
+      requireFinite(account, sinceMs);
       const valid = addresses.filter((address) => ADDRESS.test(address));
       if (!valid.length) return false;
-      return (await gmail(`from:(${valid.join(" OR ")}) after:${seconds(sinceMs)}`, 1)).length > 0;
+      return (await gmail(account, `from:(${valid.join(" OR ")}) after:${seconds(sinceMs)}`, 1)).length > 0;
     },
+    async message(account, id) {
+      const data = await call(account, GMAIL_MESSAGE_TOOL, { user_id: "me", message_id: id, format: "metadata" }, MESSAGE_GONE);
+      return data === GONE ? null : parsed(account, () => messageFromData(data, account.id));
+    },
+    async thread(account, threadId) {
+      const data = await call(account, GMAIL_THREAD_TOOL, { user_id: "me", thread_id: threadId });
+      return parsed(account, () => threadFromData(data));
+    },
+  };
+}
+
+export function firstAccountSources(sources: AssistantSources): SingleAccountSources {
+  let listed: SourceAccount[] | null = null;
+  async function first(service: AssistantService): Promise<SourceAccount> {
+    const account = (listed ?? await sources.accounts() ?? []).find((candidate) => candidate.service === service && candidate.active);
+    if (!account) throw new SourceError(service, `no ${service} account is connected`);
+    return account;
+  }
+  const anyActive = (accounts: readonly SourceAccount[], service: AssistantService) => accounts.some((account) => account.service === service && account.active);
+  return {
+    async connected() {
+      listed = await sources.accounts();
+      return listed && { gmail: anyActive(listed, "gmail"), googlecalendar: anyActive(listed, "googlecalendar") };
+    },
+    events: async (fromMs, toMs) => sources.events(await first("googlecalendar"), fromMs, toMs),
+    emails: async (sinceMs, limit) => sources.emails(await first("gmail"), sinceMs, limit),
+    mailFrom: async (addresses, sinceMs) => sources.mailFrom(await first("gmail"), addresses, sinceMs),
   };
 }

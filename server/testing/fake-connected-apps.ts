@@ -1,6 +1,8 @@
 // A loopback stand-in for the managed connected-apps service (cloudflare/composio-broker): the connected list, and an MCP
-// endpoint that answers the two Google read tools the way Composio's multi-execute tool does.
+// endpoint that answers the Google read tools the way Composio's multi-execute tool does.
 import { createServer } from "node:http";
+
+import { CALENDAR_LIST_TOOL, CALENDARS_TOOL, GMAIL_FETCH_TOOL, GMAIL_PROFILE_TOOL } from "../assistant-sources.ts";
 
 export interface FakeConnectedApps {
   url: string;
@@ -10,6 +12,8 @@ export interface FakeConnectedApps {
   events: unknown[];
   /** Composio GMAIL_FETCH_EMAILS messages. */
   emails: unknown[];
+  /** Google Calendar calendar list entries. */
+  calendars: unknown[];
   calls: Array<{ tool: string; arguments: unknown }>;
   /** While set, calendar reads wait for it before they answer. */
   holdCalendar?: Promise<void>;
@@ -19,7 +23,10 @@ export interface FakeConnectedApps {
 type Frame = { id?: unknown; method?: string; params?: { name?: string; arguments?: { tools?: Array<{ tool_slug?: string; arguments?: unknown }> } } };
 
 export async function startFakeConnectedApps(): Promise<FakeConnectedApps> {
-  const fake: Omit<FakeConnectedApps, "url" | "token" | "close"> = { connected: { gmail: true, googlecalendar: true }, events: [], emails: [], calls: [] };
+  const fake: Omit<FakeConnectedApps, "url" | "token" | "close"> = {
+    connected: { gmail: true, googlecalendar: true }, events: [], emails: [], calls: [],
+    calendars: [{ id: "me@example.test", primary: true, accessRole: "owner", selected: true }],
+  };
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
@@ -41,8 +48,9 @@ export async function startFakeConnectedApps(): Promise<FakeConnectedApps> {
         const tool = body.params?.name === "COMPOSIO_MULTI_EXECUTE_TOOL" ? body.params.arguments?.tools?.[0] : { tool_slug: body.params?.name, arguments: body.params?.arguments };
         const slug = String(tool?.tool_slug ?? "");
         fake.calls.push({ tool: slug, arguments: tool?.arguments });
-        if (slug === "GOOGLECALENDAR_EVENTS_LIST" && fake.holdCalendar) await fake.holdCalendar;
-        const data = slug === "GOOGLECALENDAR_EVENTS_LIST" ? { items: fake.events } : slug === "GMAIL_FETCH_EMAILS" ? { messages: fake.emails } : {};
+        if (slug === CALENDAR_LIST_TOOL && fake.holdCalendar) await fake.holdCalendar;
+        const data = slug === CALENDAR_LIST_TOOL ? { items: fake.events } : slug === GMAIL_FETCH_TOOL ? { messages: fake.emails }
+          : slug === CALENDARS_TOOL ? { items: fake.calendars } : slug === GMAIL_PROFILE_TOOL ? { emailAddress: "me@example.test" } : {};
         const text = JSON.stringify({ successful: true, data: { results: [{ tool_slug: slug, response: { successful: true, data, error: null } }] }, error: null });
         return res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text }] } }));
       }

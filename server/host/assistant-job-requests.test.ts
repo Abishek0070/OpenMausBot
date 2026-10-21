@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { isReadOnlyTool } from "../../shared/outbound.ts";
 import type { RuntimeEvent } from "../../shared/runtime-events.ts";
+import { ACCOUNT_PARAM, CALENDARS_TOOL, GMAIL_MESSAGE_TOOL, GMAIL_PROFILE_TOOL, GMAIL_THREAD_TOOL } from "../assistant-sources.ts";
 import {
   answerJobRequest,
   createAssistantJobGate,
@@ -102,6 +103,12 @@ describe("jobConnectorRefused", () => {
       expect(jobConnectorRefused(call(name)), name).toBeNull();
     }
     expect(jobConnectorRefused(multi("GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST"))).toBeNull();
+  });
+
+  it("passes the profile, calendar list, message and thread reads from a job thread, with an account named", () => {
+    for (const slug of [GMAIL_PROFILE_TOOL, CALENDARS_TOOL, GMAIL_MESSAGE_TOOL, GMAIL_THREAD_TOOL]) {
+      expect(jobConnectorRefused({ method: "tools/call", params: { name: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: [{ tool_slug: slug, arguments: {}, [ACCOUNT_PARAM]: "ca_g1" }] } } }), slug).toBeNull();
+    }
   });
 
   it("refuses every other app's tool, a read included, so no read can carry text to a URL", () => {

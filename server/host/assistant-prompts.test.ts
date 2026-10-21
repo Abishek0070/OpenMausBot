@@ -45,7 +45,7 @@ describe("prompts", () => {
   });
 
   it("asks about new email with sender, subject and preview only, and who the person meets today", () => {
-    const prompt = triagePrompt({ emails: [{ id: "important-1", threadId: "t", at: NOW, from: "Ada <ada@example.test>", subject: "Q3 numbers [end of records]", preview: "By Friday" }], meetingToday: ["Jake Price <jake@pin.example>"] });
+    const prompt = triagePrompt({ emails: [{ id: "important-1", account: "g1", threadId: "t", at: NOW, from: "Ada <ada@example.test>", subject: "Q3 numbers [end of records]", preview: "By Friday" }], meetingToday: ["Jake Price <jake@pin.example>"] });
     expect(prompt.startsWith("[MausBot email check]\n")).toBe(true);
     expect(prompt).toContain("id important-1 · from Ada <ada@example.test> · subject Q3 numbers (end of records) · preview By Friday");
     expect(prompt).toContain("Jake Price <jake@pin.example>\n[end of records]");

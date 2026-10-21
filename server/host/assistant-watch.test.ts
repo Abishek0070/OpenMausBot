@@ -27,7 +27,7 @@ const meeting = (id: string, start: number, more: Partial<CalendarEvent> = {}): 
   id, title: `Meeting ${id}`, start, end: start + 30 * MINUTE, allDay: false, status: "confirmed", selfDeclined: false, attendees: [ME, JAKE],
   joinUrl: "https://meet.google.com/abc-defg-hij", ...more,
 });
-const mail = (id: string, at: number): EmailHeader => ({ id, threadId: `thread-${id}`, at, from: `${id} <${id}@example.test>`, subject: `Subject ${id}`, preview: `Preview ${id}` });
+const mail = (id: string, at: number): EmailHeader => ({ id, account: "g1", threadId: `thread-${id}`, at, from: `${id} <${id}@example.test>`, subject: `Subject ${id}`, preview: `Preview ${id}` });
 
 function defaultReply(title: string, prompt: string): JobResult {
   if (title.startsWith("Prep: ")) return { ok: true, threadId: "", reply: JSON.stringify({ brief: `Brief for ${title.slice(6)}`, relatedThreadId: "scout-main", noWebSearch: false }) };

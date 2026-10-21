@@ -42,7 +42,16 @@ const SENT_NOUNS = new Set(["MESSAGE", "COMMENT", "POST", "EMAIL", "MAIL", "INVO
 const READ_VERBS = new Set(["GET", "LIST", "FETCH", "SEARCH", "READ", "FIND", "RETRIEVE", "LOOKUP", "DOWNLOAD", "VIEW", "CHECK", "COUNT"]);
 
 /** Composio reads known by slug, since some put the noun first (GOOGLECALENDAR_EVENTS_LIST lists events). */
-export const KNOWN_READ_SLUGS: ReadonlySet<string> = new Set(["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET", "GOOGLECALENDAR_FIND_EVENT"]);
+export const KNOWN_READ_SLUGS: ReadonlySet<string> = new Set([
+  "GMAIL_FETCH_EMAILS",
+  "GMAIL_GET_PROFILE",
+  "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
+  "GMAIL_FETCH_MESSAGE_BY_THREAD_ID",
+  "GOOGLECALENDAR_EVENTS_LIST",
+  "GOOGLECALENDAR_EVENTS_GET",
+  "GOOGLECALENDAR_FIND_EVENT",
+  "GOOGLECALENDAR_LIST_CALENDARS",
+]);
 
 /** Writing a draft leaves it for the person; sending or deleting one is not drafting. */
 const DRAFT_VERBS = new Set(["CREATE", "UPDATE", "SAVE", "EDIT"]);

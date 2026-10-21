@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeEvent } from "../../shared/runtime-events.ts";
+import { CALENDARS_TOOL } from "../assistant-sources.ts";
 import { DATA_DIR, type AppConfig } from "../config.ts";
 import type { ModelSelection } from "../contracts.ts";
 import { findMausBot, seedBots } from "../mausbot.ts";
@@ -61,9 +62,11 @@ function connectedApps(): MausBotHostDeps["composio"] {
     configured: () => true,
     connectedServices: async () => ({ googlecalendar: { connected: true, pending: false, status: "ACTIVE", accounts: [] }, gmail: { connected: false, pending: false, status: "not_connected", accounts: [] } }),
     relayMcp: async (_cfg, payload) => {
-      const frame = payload as { id?: unknown; method?: string };
+      const frame = payload as { id?: unknown; method?: string; params?: { arguments?: { tools?: Array<{ tool_slug?: string }> } } };
       if (frame.method !== "tools/call") return answer(frame.id, {});
-      const text = JSON.stringify({ successful: true, data: { results: [{ tool_slug: "GOOGLECALENDAR_EVENTS_LIST", response: { successful: true, data: { items: [event] }, error: null } }] } });
+      const slug = frame.params?.arguments?.tools?.[0]?.tool_slug;
+      const data = slug === CALENDARS_TOOL ? { items: [{ id: "me@example.test", primary: true, accessRole: "owner" }] } : { items: [event] };
+      const text = JSON.stringify({ successful: true, data: { results: [{ tool_slug: slug, response: { successful: true, data, error: null } }] } });
       return answer(frame.id, { content: [{ type: "text", text }] });
     },
   };

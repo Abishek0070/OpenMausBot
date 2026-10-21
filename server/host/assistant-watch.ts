@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import type { AssistantService, AssistantSources, CalendarEvent, EmailHeader } from "../assistant-sources.ts";
+import type { AssistantService, CalendarEvent, EmailHeader, SingleAccountSources } from "../assistant-sources.ts";
 import { audienceWithin } from "../bot-visibility.ts";
 import { createAgentCard } from "../chat-widgets.ts";
 import { connectorCardText } from "../connector-card-text.ts";
@@ -88,7 +88,7 @@ export interface AssistantWatchDeps {
   mainThread(bot: BotRecord): string | undefined;
   timeZone(): string | undefined;
   capabilities(bot: BotRecord, threadId: string): { agentsTools: boolean; mailTools: boolean };
-  sources: AssistantSources;
+  sources: SingleAccountSources;
   runJob(bot: BotRecord, title: string, prompt: string): Promise<JobResult>;
   notify(notification: Notification | null): void;
   noteCard(card: Target): void;

@@ -61,7 +61,7 @@ describe("MausBot's cards", () => {
   });
 
   it("flags an email with why and what to do, Open in Gmail on its own thread, and Draft a reply", () => {
-    const built = emailCard({ email: { id: "important-1", threadId: "thread/1", at: NOW, from: "Ada <ada@example.test>", subject: "Q3 numbers due Friday", preview: "" }, why: "Ada needs the numbers by Friday.", action: "Send the Q3 numbers." });
+    const built = emailCard({ email: { id: "important-1", account: "g1", threadId: "thread/1", at: NOW, from: "Ada <ada@example.test>", subject: "Q3 numbers due Friday", preview: "" }, why: "Ada needs the numbers by Friday.", action: "Send the Q3 numbers." });
     const { root, actions } = valid(built);
     expect([root.title, root.caption]).toEqual(["Q3 numbers due Friday", "From Ada <ada@example.test>"]);
     expect(actions.map((entry) => entry.label)).toEqual(["Open in Gmail", "Draft a reply"]);
@@ -166,7 +166,7 @@ describe("clipping and plain text", () => {
 
   it("keeps a card valid when emoji fill the subject, why and title", () => {
     const emoji = "😀".repeat(200);
-    const email = valid(emailCard({ email: { id: "m", threadId: "t", at: NOW, from: emoji, subject: emoji, preview: "" }, why: "🚀".repeat(2_500), action: `a${"😀".repeat(2_500)}` }));
+    const email = valid(emailCard({ email: { id: "m", account: "g1", threadId: "t", at: NOW, from: emoji, subject: emoji, preview: "" }, why: "🚀".repeat(2_500), action: `a${"😀".repeat(2_500)}` }));
     const prep = valid(prepCard({ event: { ...demo, title: emoji, location: emoji }, brief: `x${"😀".repeat(7_000)}`, timeZone: ZONE, now: NOW }));
     const mixed = valid(updateCard({ event: { ...demo, title: `é${emoji}日本` }, text: `日本${"😀a".repeat(1_500)}`, timeZone: ZONE, now: NOW }));
     for (const built of [email, prep, mixed]) strings(built.root).forEach(noLoneSurrogate);
@@ -179,7 +179,7 @@ describe("clipping and plain text", () => {
     }
     const edge = `https://meet.example.test/${"a".repeat(1_900)}`;
     expect(valid(prepCard({ event: { ...demo, joinUrl: edge }, brief: "x", timeZone: ZONE, now: NOW })).actions[0]!.label).toBe("Join");
-    expect(valid(emailCard({ email: { id: "m", threadId: "t".repeat(3_000), at: NOW, from: "a", subject: "s", preview: "" }, why: "w", action: "a" })).actions.map((entry) => entry.label)).toEqual(["Draft a reply"]);
+    expect(valid(emailCard({ email: { id: "m", account: "g1", threadId: "t".repeat(3_000), at: NOW, from: "a", subject: "s", preview: "" }, why: "w", action: "a" })).actions.map((entry) => entry.label)).toEqual(["Draft a reply"]);
   });
 
   it("renders the brief as literal text, with no link, image or HTML node", () => {
@@ -196,15 +196,15 @@ describe("clipping and plain text", () => {
 
   it("reads a sender made of a long whitespace run without backtracking", () => {
     const started = performance.now();
-    const built = emailCard({ email: { id: "m", threadId: "t", at: NOW, from: `a${" ".repeat(5_000)}x`, subject: "Hi", preview: "" }, why: "w", action: "a" });
+    const built = emailCard({ email: { id: "m", account: "g1", threadId: "t", at: NOW, from: `a${" ".repeat(5_000)}x`, subject: "Hi", preview: "" }, why: "w", action: "a" });
     expect(performance.now() - started).toBeLessThan(250);
     expect(built.summary.length).toBeLessThanOrEqual(140);
   });
 
   it("writes every summary as one short line, and the email's without the preview", () => {
     const nasty = `Title\nwith\n\nlines ${"😀".repeat(300)}`;
-    const email = emailCard({ email: { id: "m", threadId: "t", at: NOW, from: `"Ada Lovelace" <ada@example.test>`, subject: nasty, preview: "SECRET PREVIEW" }, why: "w", action: "a" });
-    const bare = emailCard({ email: { id: "m", threadId: "t", at: NOW, from: "<ada@example.test>", subject: "Hi", preview: "SECRET PREVIEW" }, why: "w", action: "a" });
+    const email = emailCard({ email: { id: "m", account: "g1", threadId: "t", at: NOW, from: `"Ada Lovelace" <ada@example.test>`, subject: nasty, preview: "SECRET PREVIEW" }, why: "w", action: "a" });
+    const bare = emailCard({ email: { id: "m", account: "g1", threadId: "t", at: NOW, from: "<ada@example.test>", subject: "Hi", preview: "SECRET PREVIEW" }, why: "w", action: "a" });
     const built = [
       email, bare,
       prepCard({ event: { ...demo, title: nasty }, brief: "x", timeZone: ZONE, now: NOW }),
