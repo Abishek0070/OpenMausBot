@@ -270,7 +270,7 @@ describe("account naming on cards", () => {
 describe("the daily brief", () => {
   const reply: BriefEmail = { accountId: "ca_g2", account: "admin@example.test", address: "admin@example.test", messageId: "m1", threadId: "t1", from: "Ada <ada@example.test>", subject: "Q3 numbers due Friday" };
   const meeting: BriefMeeting = { title: "Supamaus demo with Jake", start: demo.start, end: demo.end, accounts: "me@example.test, admin@example.test", status: "Prep ready", joinUrl: demo.joinUrl };
-  const empty: BriefFacts = { now: NOW, timeZone: ZONE, missing: [], replies: [], repliesChecking: false, failedRoutines: [], clashes: [], meetings: [], important: [], routines: [] };
+  const empty: BriefFacts = { now: NOW, timeZone: ZONE, missing: [], replies: [], repliesChecking: false, repliesUnreadable: [], failedRoutines: [], clashes: [], meetings: [], important: [], routines: [] };
   const full: BriefFacts = {
     ...empty,
     replies: [{ ...reply, accountId: "ca_g1", account: "me@example.test", address: "me@example.test", messageId: "m0", threadId: "t0", from: "Jake Price <jake@pin.example>", subject: "Pricing for Pin" }],
@@ -411,6 +411,7 @@ describe("the daily brief", () => {
     const facts: BriefFacts = {
       now: NOW, timeZone: ZONE, repliesChecking: true,
       missing: many((n) => ({ account: `${n}${long(400)}`, what: n % 2 ? "email" as const : "calendar" as const })),
+      repliesUnreadable: many((n) => ({ account: `${n}${long(400)}`, count: 999 })),
       replies: many(email), failedRoutines: many(routine), clashes: many((n) => ({ first: at(n), second: at(n + 1) })),
       meetings: many((n) => ({ title: long(2_000), start: meeting.start + n, end: meeting.end, accounts: long(2_000), status: long(500), joinUrl: `https://meet.example.test/${n}${long(570)}` })),
       important: many(email), routines: many((n) => ({ ...routine(n), status: "completed" as const })),
@@ -422,6 +423,19 @@ describe("the daily brief", () => {
     }
     const { actions } = valid(briefCard({ ...facts, failedRoutines: [], clashes: [] }));
     for (const press of ["Join", "Open in Gmail"]) expect(actions.filter((entry) => entry.label.split(":")[0] === press), press).toHaveLength(press === "Join" ? BRIEF_ROWS : BRIEF_ROWS * 2);
+  });
+
+  it("counts the waiting emails of an account it can't read, one line per account under Needs you, and never says nothing needs you", () => {
+    const built = briefCard({ ...empty, meetings: null, repliesUnreadable: [{ account: "admin@example.test", count: 2 }, { account: "me@example.test", count: 1 }] });
+    const text = JSON.stringify(valid(built).root);
+    expect(text).toContain("2 emails waiting in admin@example.test, which can't be read right now");
+    expect(text).toContain("1 email waiting in me@example.test, which can't be read right now");
+    expect(text.indexOf("2 emails waiting")).toBeGreaterThan(text.indexOf("Needs you"));
+    expect(text).not.toContain("Nothing needs you right now.");
+    expect(built.summary).toBe("Daily brief: 3 need you");
+    expect(briefCard({ ...full, repliesUnreadable: [{ account: "admin@example.test", count: 2 }] }).summary).toBe("Daily brief: 5 need you, 2 meetings, 1 important email, 1 routine result");
+    const clipped = JSON.stringify(valid(briefCard({ ...empty, repliesUnreadable: [{ account: `${"x".repeat(78)}\u{1F600}${"y".repeat(500)}`, count: 2 }] })).root);
+    expect(clipped).toContain(`2 emails waiting in ${"x".repeat(78)}…, which`);
   });
 
   it("uses only Card, Title, Text, Caption, Row, Col and Button, so every phone can show it", () => {

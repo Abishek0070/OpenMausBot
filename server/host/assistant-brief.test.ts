@@ -59,8 +59,10 @@ function briefWorld() {
     threads: {} as Record<string, ThreadMessage[] | Error>,
     messageReads: [] as Array<{ account: string; id: string }>,
     meetings: [demo] as Meeting[] | null,
-    routines: [] as RoutineRow[],
+    /** A run without `at` finished before any brief's window opened. */
+    routines: [] as Array<RoutineRow & { at?: number }>,
     routinesAskedSince: [] as number[],
+    postAttempts: 0,
     posts: [] as Array<{ messageId: string; threadId: string; built: BuiltCard }>,
     edits: [] as Array<{ messageId: string; threadId: string; built: BuiltCard }>,
     shown: [] as BuiltCard[],
@@ -116,9 +118,10 @@ function briefWorld() {
       status: () => "Prep ready",
       routines(since) {
         shared.routinesAskedSince.push(since);
-        return shared.routines;
+        return shared.routines.filter((row) => row.at === undefined || row.at >= since).map(({ at: _at, ...row }) => row);
       },
       post(built) {
+        shared.postAttempts += 1;
         if (shared.refuse(built)) return null;
         const card = { messageId: `brief-${shared.posts.length + 1}`, threadId: "m-main" };
         shared.posts.push({ ...card, built });
@@ -147,13 +150,14 @@ function briefWorld() {
       get posts() { return shared.posts; },
       get edits() { return shared.edits; },
       get routinesAskedSince() { return shared.routinesAskedSince; },
+      get postAttempts() { return shared.postAttempts; },
       get messageReads() { return shared.messageReads; },
       get readState() { return shared.readState; },
       get inbox() { return shared.inbox; },
       get threads() { return shared.threads; },
       get ignored() { return shared.ignored; },
       set meetings(next: Meeting[] | null) { shared.meetings = next; },
-      set routines(next: RoutineRow[]) { shared.routines = next; },
+      set routines(next: Array<RoutineRow & { at?: number }>) { shared.routines = next; },
       set usable(next: Partial<Record<AssistantService, SourceAccount[]>>) { shared.usable = next; },
       set listed(next: boolean) { shared.listed = next; },
       set expired(next: SourceAccount[]) { shared.expired = next; },
@@ -363,13 +367,22 @@ describe("MausBot's daily brief", () => {
     expect(w.routinesAskedSince).toEqual([NOW - DAY]);
   });
 
-  it("keeps the routine window it was posted with when it edits the brief in place", () => {
+  it("keeps the routine rows it was posted with, so a run that finishes later shows once, in the next brief", async () => {
     const w = briefWorld();
+    w.brief.judged([pick("m1", true)]);
     w.meetings = null; w.brief.post();
-    w.tick(5 * MINUTE); w.meetings = [demo]; w.brief.refresh();
+    w.routines = [{ name: "Late run", status: "failed", line: "It failed", at: NOW + HOUR }];
+    w.tick(2 * HOUR); w.meetings = [demo]; w.brief.refresh();
     expect(w.edits).toHaveLength(1);
-    expect(w.routinesAskedSince).toEqual([NOW - DAY, NOW - DAY]);
-    expect(w.state.get().lastBriefAt).toBe(NOW);
+    expect(w.lastCard()).not.toContain("Late run");
+    await w.brief.checkPending(true);
+    w.tick(5 * HOUR); w.brief.dismiss("ca_g1", "m1", w.posts[0]!.messageId);
+    expect(w.lastCard()).not.toContain("Subject m1");
+    expect(w.lastCard()).not.toContain("Late run");
+    expect(w.routinesAskedSince).toEqual([NOW - DAY]);
+    w.tick(DAY); w.brief.post();
+    expect(w.lastCard().match(/Late run/g)).toHaveLength(1);
+    expect(w.routinesAskedSince.at(-1)).toBe(NOW);
   });
 
   it("posts for routine results alone when no Google account is connected, and posts nothing when there is nothing at all", () => {
@@ -484,12 +497,13 @@ describe("MausBot's daily brief", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     w.refuse = () => true;
     w.brief.judged([pick("m1", true)]); w.brief.post();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("the daily brief card was refused"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("the daily brief was not posted"));
     expect(w.posts).toEqual([]);
     expect(w.state.get().lastBriefDate).toBeUndefined();
     expect(w.brief.due()).toBe(true);
     w.refuse = (built) => JSON.stringify(built.card).includes('"Button"');
-    w.brief.post();
+    w.tick(15 * MINUTE); w.brief.post();
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("so its plain version was posted"));
     expect(w.posts).toHaveLength(1);
     expect(w.lastCard()).toContain("Subject m1");
     expect(w.lastCard()).not.toContain('"Button"');
@@ -498,6 +512,73 @@ describe("MausBot's daily brief", () => {
     expect(w.edits).toHaveLength(1);
     expect(w.lastCard()).not.toContain("Subject m1");
     expect(w.lastCard()).not.toContain('"Button"');
+  });
+
+  it("waits a quarter of an hour after a brief could not be posted before it tries again", () => {
+    const w = briefWorld();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    w.refuse = () => true;
+    w.brief.post();
+    const attempts = w.postAttempts;
+    w.tick(MINUTE); w.brief.post();
+    w.tick(MINUTE); w.brief.post();
+    expect(w.postAttempts).toBe(attempts);
+    expect(warn).toHaveBeenCalledTimes(1);
+    w.refuse = () => false;
+    w.tick(13 * MINUTE); w.brief.post();
+    expect(w.posts).toHaveLength(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the mail window half an hour after the brief posts, so later mail gets its own card", () => {
+    const w = briefWorld();
+    w.brief.post();
+    w.tick(2 * HOUR);
+    expect(w.brief.judged([pick("m1", false)]).map((one) => one.email.id)).toEqual(["m1"]);
+    expect(w.edits).toEqual([]);
+  });
+
+  it("shows the calendar read before a check ends the in-place window, whatever order the check reports in", () => {
+    const w = briefWorld();
+    w.meetings = null; w.brief.post();
+    w.meetings = [demo]; w.brief.checked(NOW);
+    expect(w.lastCard()).toContain("Demo with Jake");
+    expect(w.lastCard()).not.toContain("Checking your calendar…");
+    w.meetings = []; w.brief.checked(NOW); w.brief.refresh();
+    expect(w.edits).toHaveLength(1);
+  });
+
+  it("keeps a held important email in assistant.json until a delivered card has shown it, across a restart", async () => {
+    const w = briefWorld();
+    w.state.patch({ pendingEmails: [entry("m2", { needsReply: false })] });
+    const again = w.restart(); again.brief.post();
+    expect(again.lastCard()).not.toContain("Subject m2");
+    expect(again.restart().pending()).toEqual([entry("m2", { needsReply: false })]);
+    await again.brief.checkPending(true);
+    expect(again.lastCard()).toContain("Subject m2");
+    expect(again.pending()).toEqual([]);
+  });
+
+  it("keeps mail folded into the brief held when the edit that would show it is refused", () => {
+    const w = briefWorld();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    w.brief.post(); w.refuse = () => true;
+    expect(w.brief.judged([pick("m3", false)])).toEqual([]);
+    expect(w.pending()).toEqual([entry("m3", { needsReply: false })]);
+  });
+
+  it("counts the waiting emails it cannot show for an account it cannot read, and never says nothing needs you", async () => {
+    const w = briefWorld();
+    w.state.patch({ pendingEmails: [entry("m1", { account: "ca_g2" }), entry("m2", { account: "ca_g2" })] });
+    w.inbox.set("ca_g2/m1", new Error("token expired"));
+    const again = w.restart(); again.brief.post(); await again.brief.checkPending(true);
+    expect(again.lastCard()).toContain("2 emails waiting in admin@example.test, which can't be read right now");
+    expect(again.lastCard()).not.toContain("Nothing needs you right now.");
+    expect(again.lastSummary()).not.toContain("nothing needs you");
+    const expired = w.restart();
+    expired.usable = { gmail: [G1], googlecalendar: [C1, C2] }; expired.expired = [{ ...G2, active: false }];
+    expired.tick(DAY); expired.brief.post();
+    expect(expired.lastCard()).toContain("2 emails waiting in admin@example.test, which can't be read right now");
   });
 
   it("edits the brief in place only until a check that started after it has finished, unless email or Dismiss changes it", async () => {

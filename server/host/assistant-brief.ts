@@ -5,8 +5,11 @@ import { answered, clashes, emailKey, keepNewest, localDate, prunePending, today
 import { MAX_ID_LENGTH, MAX_PENDING_EMAILS, type AssistantStateStore, type PendingEmail } from "./assistant-state.ts";
 import type { RoutineRow } from "./brief-recap.ts";
 
-const DAY = 24 * 60 * 60_000;
+const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
 const MAX_HEADERS = 1_000;
+const POST_RETRY_MS = 15 * MINUTE;
+const MAIL_WINDOW_MS = 30 * MINUTE;
 
 export interface TriagePick { email: EmailHeader; copies: EmailHeader[]; why: string; action: string; needsReply: boolean }
 
@@ -31,7 +34,7 @@ export interface AssistantBriefDeps {
 
 interface PostedBrief extends CardRef {
   day: string;
-  since: number;
+  routines: RoutineRow[];
   postedAt: number;
   important: EmailRef[];
   live: boolean;
@@ -64,6 +67,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
   const headers = new Map<string, { email: EmailHeader; why?: string }>();
   let brief: PostedBrief | undefined;
   let waitingForListing = false;
+  let postFailedAt: number | undefined;
   let rereading: Promise<void> | undefined;
 
   const pending = (): PendingEmail[] => deps.state.get().pendingEmails ?? [];
@@ -124,9 +128,18 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     return listed.length === 0 && accounts.unreadable("googlecalendar").length > 0 ? null : listed;
   }
 
-  function facts(posted: Omit<PostedBrief, keyof CardRef>, routines: readonly RoutineRow[], at: number): BriefFacts {
+  function unshownCounts(waiting: readonly PendingEmail[], unreadable: ReadonlySet<string>): BriefFacts["repliesUnreadable"] {
+    const counts = new Map<string, number>();
+    for (const entry of waiting) {
+      if (!headers.has(refKey(entry)) && unreadable.has(entry.account)) counts.set(entry.account, (counts.get(entry.account) ?? 0) + 1);
+    }
+    return [...counts].map(([id, count]) => ({ account: accounts.label(id), count }));
+  }
+
+  function facts(posted: Omit<PostedBrief, keyof CardRef>, at: number): BriefFacts {
     const known = accounts.known();
     const gmail = usableIds("gmail");
+    const unreadableMail = accounts.unreadable("gmail");
     const waiting = pending().filter((entry) => entry.needsReply && known.has(entry.account));
     const day = yourDay(at);
     const meetings = Array.isArray(day) ? day : [];
@@ -139,42 +152,59 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       timeZone: deps.timeZone(),
       missing: [
         ...accounts.unreadable("googlecalendar").map((account) => ({ account: accounts.label(account.id), what: "calendar" as const })),
-        ...accounts.unreadable("gmail").map((account) => ({ account: accounts.label(account.id), what: "email" as const })),
+        ...unreadableMail.map((account) => ({ account: accounts.label(account.id), what: "email" as const })),
       ],
       replies: rows(waiting).map(briefEmail),
       repliesChecking: !posted.pendingChecked && [...waiting, ...posted.important].some((ref) => gmail.has(ref.account)),
-      failedRoutines: routines.filter((row) => row.status !== "completed"),
+      repliesUnreadable: unshownCounts(waiting, new Set(unreadableMail.map((account) => account.id))),
+      failedRoutines: posted.routines.filter((row) => row.status !== "completed"),
       clashes: clashes(meetings, { now: at, timeZone: deps.timeZone() }).map(([first, second]) => ({ first: side(first), second: side(second) })),
       meetings: Array.isArray(day) ? day.map(meeting) : day,
       important: rows(posted.important.filter((ref) => known.has(ref.account))).map(briefEmail),
-      routines: routines.filter((row) => row.status === "completed"),
+      routines: posted.routines.filter((row) => row.status === "completed"),
     };
   }
 
-  function deliver<T>(built: BuiltCard, plain: () => BuiltCard, send: (card: BuiltCard) => T | null | false): T | null {
+  function deliver<T>(done: "posted" | "updated", built: BuiltCard, plain: () => BuiltCard, send: (card: BuiltCard) => T | null | false): T | null {
     const sent = send(built);
     if (sent) return sent;
-    console.warn("assistant: the daily brief card was refused, so its plain version goes instead");
-    return send(plain()) || null;
+    const fallback = send(plain()) || null;
+    console.warn(fallback
+      ? `assistant: the daily brief card was not accepted, so its plain version was ${done}`
+      : `assistant: the daily brief was not ${done}, as a card or as plain text`);
+    return fallback;
+  }
+
+  /** An important email that needs no reply is held in assistant.json until a delivered card shows it. */
+  function stillHeld(list: readonly PendingEmail[], shown: BriefFacts): PendingEmail[] {
+    const onCard = new Set(shown.important.map((email) => emailKey({ account: email.accountId, id: email.messageId })));
+    return list.filter((entry) => entry.needsReply || !onCard.has(refKey(entry)));
+  }
+
+  function releaseShown(shown: BriefFacts): void {
+    const before = pending();
+    const kept = stillHeld(before, shown);
+    if (kept.length !== before.length) savePending(kept);
   }
 
   function refresh(force: boolean): void {
     const at = deps.now();
     const posted = todays(at);
     if (!posted || (!posted.live && !force)) return;
-    const shown = facts(posted, deps.routines(posted.since), at);
+    const shown = facts(posted, at);
     const built = briefCard(shown);
     const json = JSON.stringify(built.card);
-    if (json === posted.shown) return;
     const card = { messageId: posted.messageId, threadId: posted.threadId };
-    if (deliver(built, () => briefFallbackCard(shown), (next) => deps.edit(card, next))) posted.shown = json;
+    if (json !== posted.shown && !deliver("updated", built, () => briefFallbackCard(shown), (next) => deps.edit(card, next))) return;
+    posted.shown = json;
+    releaseShown(shown);
   }
 
   function post(): void {
     const at = deps.now();
     const day = todayDue({ now: at, timeZone: deps.timeZone(), lastTodayDate: deps.state.get().lastBriefDate });
     waitingForListing = false;
-    if (!day) return;
+    if (!day || (postFailedAt !== undefined && at - postFailedAt < POST_RETRY_MS)) return;
     const since = deps.state.get().lastBriefAt ?? at - DAY;
     const gmail = usableIds("gmail");
     const routines = deps.routines(since);
@@ -184,15 +214,18 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     }
     const held = pending().filter((entry) => !entry.needsReply && gmail.has(entry.account));
     const draft = {
-      day, since, postedAt: at, important: held.map(({ needsReply: _needsReply, ...ref }) => ref),
+      day, routines, postedAt: at, important: held.map(({ needsReply: _needsReply, ...ref }) => ref),
       live: true, mailOpen: gmail.size > 0, pendingChecked: false,
     };
-    const shown = facts(draft, routines, at);
+    const shown = facts(draft, at);
     const built = briefCard(shown);
-    const card = deliver(built, () => briefFallbackCard(shown), (next) => deps.post(next));
-    if (!card) return;
-    const moved = new Set(held.map(refKey));
-    deps.state.patch({ lastBriefDate: day, lastBriefAt: at, pendingEmails: pending().filter((entry) => !moved.has(refKey(entry))) });
+    const card = deliver("posted", built, () => briefFallbackCard(shown), (next) => deps.post(next));
+    if (!card) {
+      postFailedAt = at;
+      return;
+    }
+    postFailedAt = undefined;
+    deps.state.patch({ lastBriefDate: day, lastBriefAt: at, pendingEmails: stillHeld(pending(), shown) });
     brief = { ...draft, messageId: card.messageId, threadId: card.threadId, shown: JSON.stringify(built.card) };
   }
 
@@ -203,13 +236,17 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     const unheld = picks.filter((pick) => !holdable.includes(pick));
     const replies = holdable.filter((pick) => pick.needsReply).flatMap(emailsOf).map((email) => ({ ...refOf(email, at), needsReply: true }));
     const others = holdable.filter((pick) => !pick.needsReply).map((pick) => refOf(pick.email, at));
+    const held = [...replies, ...others.map((ref) => ({ ...ref, needsReply: false }))];
     if (due()) {
-      addPending([...replies, ...others.map((ref) => ({ ...ref, needsReply: false }))]);
+      addPending(held);
       return unheld;
     }
-    addPending(replies);
     const posted = todays(at);
-    if (!posted?.mailOpen) return picks;
+    if (!posted?.mailOpen || at - posted.postedAt >= MAIL_WINDOW_MS) {
+      addPending(replies);
+      return picks;
+    }
+    addPending(held);
     posted.mailOpen = false;
     posted.important = mergeRefs(posted.important, others);
     refresh(true);
@@ -220,7 +257,6 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     const gmail = new Map(accounts.usable("gmail").map((account) => [account.id, account]));
     const waiting = pending().filter((entry) => entry.needsReply);
     const failedThisCheck = new Set<string>();
-    const unread = new Set<string>();
     const drop = new Set<string>();
     // Every failed read counts towards the account's Reconnect, so an account that failed once is not read again here.
     const read = async <T>(ref: EmailRef, load: (account: SourceAccount) => Promise<T>): Promise<T | null> => {
@@ -233,8 +269,8 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
 
     for (const ref of [...waiting, ...posted.important]) {
       const answer = await read(ref, async (account) => ({ email: await deps.sources.message(account, ref.messageId) }));
-      if (!answer) unread.add(refKey(ref));
-      else if (answer.email) remember(answer.email);
+      if (!answer) continue;
+      if (answer.email) remember(answer.email);
       else if (!accounts.selectionIgnored(ref.account)) drop.add(refKey(ref));
     }
 
@@ -255,10 +291,8 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       }
     }
 
-    const back = posted.important.filter((ref) => unread.has(refKey(ref)) && !headers.has(refKey(ref)));
-    posted.important = posted.important.filter((ref) => !drop.has(refKey(ref)) && !back.includes(ref));
-    const kept = mergeRefs(pending().filter((entry) => !drop.has(refKey(entry))), back.map((ref) => ({ ...ref, needsReply: false })));
-    savePending(prunePending(kept, { now: deps.now(), accounts: accounts.known() }));
+    posted.important = posted.important.filter((ref) => !drop.has(refKey(ref)));
+    savePending(prunePending(pending().filter((entry) => !drop.has(refKey(entry))), { now: deps.now(), accounts: accounts.known() }));
     posted.pendingChecked = true;
     refresh(true);
   }
@@ -303,7 +337,10 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     checkPending,
     refresh: (): void => refresh(false),
     checked(startedAt: number): void {
-      if (brief && startedAt >= brief.postedAt) brief.live = false;
+      const posted = brief;
+      if (!posted?.live || startedAt < posted.postedAt) return;
+      refresh(true);
+      posted.live = false;
     },
     dismiss,
     email: (accountId: string, messageId: string): EmailHeader | undefined => headers.get(emailKey({ account: accountId, id: messageId }))?.email,

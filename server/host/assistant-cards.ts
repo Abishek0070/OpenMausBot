@@ -221,6 +221,8 @@ export interface BriefFacts {
   missing: Array<{ account: string; what: "calendar" | "email" }>;
   replies: BriefEmail[];
   repliesChecking: boolean;
+  /** Emails waiting on a reply that get no row, because their account can't be read right now: one count per account. */
+  repliesUnreadable: Array<{ account: string; count: number }>;
   failedRoutines: RoutineRow[];
   clashes: BriefClash[];
   /** null: no Calendar account, so Your day is left out. */
@@ -321,18 +323,22 @@ function buildBrief(facts: BriefFacts, presses: boolean): BuiltCard {
     rowWithPressesUnder(emailText(email), email.why ? `${account(email)} · ${email.why}` : account(email), offer([gmail(email), dismiss(email, dismisses[replies.length + index]!)])));
   const routineRows = facts.routines.slice(0, BRIEF_ROWS).map((routine) => rowWithPressesBeside(routine.name, routine.line, offer([open(routine)])));
   const missing = facts.missing.map(({ account: name, what }) => text(`I couldn't read the ${what} of ${clip(name, BRIEF_TEXT.account)}.`));
+  const unreadable = facts.repliesUnreadable.map(({ account: name, count }) => text(`${plural(count, "email")} waiting in ${clip(name, BRIEF_TEXT.account)}, which can't be read right now`));
+  const needLines = [...(needRows.length ? capped(needRows, needs.length) : []), ...capped(unreadable, unreadable.length)];
+  const needCount = needs.length + facts.repliesUnreadable.reduce((sum, { count }) => sum + count, 0);
 
   const children: Node[] = [
     ...capped(missing, missing.length),
-    ...briefSection("Needs you", needRows, needs.length, facts.repliesChecking ? CHECKING_EMAIL : "Nothing needs you right now."),
-    ...(needRows.length && facts.repliesChecking ? [caption(CHECKING_EMAIL)] : []),
+    { type: "Title", value: "Needs you", size: "sm" },
+    ...(needLines.length ? needLines : [text(facts.repliesChecking ? CHECKING_EMAIL : "Nothing needs you right now.")]),
+    ...(needLines.length && facts.repliesChecking ? [caption(CHECKING_EMAIL)] : []),
     ...(facts.meetings === null ? [] : briefSection("Your day", meetingRows, meetings.length, facts.meetings === "checking" ? "Checking your calendar…" : "No meetings today.")),
     ...(importantRows.length ? briefSection("Important emails", importantRows, facts.important.length) : []),
     ...(routineRows.length ? briefSection("Routines", routineRows, facts.routines.length) : []),
   ];
   const parts = [
     facts.missing.length && `${plural(facts.missing.length, "account")} unreadable`,
-    needs.length && `${needs.length} ${needs.length === 1 ? "needs" : "need"} you`,
+    needCount && `${needCount} ${needCount === 1 ? "needs" : "need"} you`,
     facts.repliesChecking && CHECKING_EMAIL.toLowerCase(),
     facts.meetings === "checking" ? "checking your calendar…" : facts.meetings && plural(facts.meetings.length, "meeting"),
     facts.important.length && plural(facts.important.length, "important email"),
