@@ -12,10 +12,12 @@ import {
   eventsFromData,
   firstAccountSources,
   GMAIL_FETCH_TOOL,
+  GMAIL_HEADERS_OPTION,
   GMAIL_MESSAGE_TOOL,
   GMAIL_PROFILE_TOOL,
   GMAIL_THREAD_TOOL,
   messageFromData,
+  messageGone,
   profileFromData,
   READ_TIMEOUT_MS,
   SourceError,
@@ -131,6 +133,17 @@ describe("emailsFromData", () => {
   });
 });
 
+describe("messageGone", () => {
+  it("calls a message gone only when the answer says the message itself is missing, never for an account, a tool or a stray 404", () => {
+    for (const text of ["Requested entity was not found.", "Message not found", "The email was deleted", "Thread no longer exists"]) expect(messageGone(text), text).toBe(true);
+    for (const text of [
+      "Connected account ca_g1 not found", "Connected account has been deleted", "Tool GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID not found",
+      "Rate limit exceeded for message 18c404ab", "404", "Not found", "Message not found: the OAuth token was revoked",
+      "Message not found: missing permission", "Messages not found", "Rate limit exceeded",
+    ]) expect(messageGone(text), text).toBe(false);
+  });
+});
+
 describe("accountsFromServices", () => {
   it("lists each Gmail and Calendar account with its status, and one implied account when a connected service lists none", () => {
     expect(accountsFromServices({
@@ -160,13 +173,22 @@ describe("Google resource parsers", () => {
 
   it("marks the primary calendar and the selected, visible ones to read, and the primary and owner ones as owned", () => {
     expect(calendarsFromData(fixture("composio-calendar-list.json"))).toEqual([
-      { id: "admin@example.test", primary: true, owned: true, read: true },
-      { id: "team@group.calendar.google.com", primary: false, owned: true, read: true },
-      { id: "ada@example.test", primary: false, owned: false, read: true },
-      { id: "en.indian#holiday@group.v.calendar.google.com", primary: false, owned: false, read: false },
-      { id: "hidden@group.calendar.google.com", primary: false, owned: true, read: false },
+      { id: "admin@example.test", name: "admin@example.test", primary: true, owned: true, read: true },
+      { id: "team@group.calendar.google.com", name: "Team", primary: false, owned: true, read: true },
+      { id: "ada@example.test", name: "Ada", primary: false, owned: false, read: true },
+      { id: "en.indian#holiday@group.v.calendar.google.com", name: "Holidays in India", primary: false, owned: false, read: false },
+      { id: "hidden@group.calendar.google.com", name: "Hidden", primary: false, owned: true, read: false },
     ]);
-    expect(calendarsFromData({ calendars: [{ id: "a@x.test", primary: true, hidden: true }] })).toEqual([{ id: "a@x.test", primary: true, owned: true, read: true }]);
+    expect(calendarsFromData({ calendars: [{ id: "a@x.test", primary: true, hidden: true }] })).toEqual([{ id: "a@x.test", name: "a@x.test", primary: true, owned: true, read: true }]);
+  });
+
+  it("names a calendar by its summary on one plain line of at most 80 characters, else by its id", () => {
+    const [named, unnamed] = calendarsFromData({ items: [
+      { id: "c1", summary: `Board\u202e\u001b[31m\n  room ${"\u{1F600}".repeat(100)}` },
+      { id: "c2", summary: " \u200b " },
+    ] });
+    expect(named!.name).toBe(`Board[31m room ${"\u{1F600}".repeat(65)}`);
+    expect(unnamed!.name).toBe("c2");
   });
 
   it("an unreadable profile, calendar list, message or thread answer is an error, never empty data", () => {
@@ -218,11 +240,27 @@ describe("createComposioSources", () => {
     expect(toolItems()[0]).toEqual({ tool_slug: "GOOGLECALENDAR_LIST_CALENDARS", arguments: {}, account: "ca_c1" });
   });
 
-  it("asks Gmail for the inbox since a time, without promotions or social, with each message's headers", async () => {
+  it("asks Gmail for the inbox since a time, without promotions or social, without payloads while one Gmail account is active", async () => {
     const { sources, toolItems } = google();
+    await sources.accounts();
     expect(await sources.emails(G1, Date.parse("2026-10-16T06:00:00Z"), 50)).toHaveLength(2);
     expect(toolItems()[0]).toEqual({ tool_slug: "GMAIL_FETCH_EMAILS", account: "ca_g1",
-      arguments: { user_id: "me", query: "in:inbox after:1792130400 -category:promotions -category:social", max_results: 50, include_payload: true, verbose: false } });
+      arguments: { user_id: "me", query: "in:inbox after:1792130400 -category:promotions -category:social", max_results: 50, include_payload: false, verbose: false } });
+  });
+
+  it("asks for each message's headers only while two or more Gmail accounts are active, the one case where copies can exist", async () => {
+    let gmail = [{ id: "ca_g1", status: "ACTIVE" }, { id: "ca_g2", status: "ACTIVE" }];
+    const { sources, toolItems } = google({ connectedServices: async () => ({ gmail: { connected: true, accounts: gmail } }) });
+    const payload = async () => {
+      await sources.emails(G1, 0, 5);
+      return toolItems().at(-1).arguments.include_payload;
+    };
+    expect(await payload()).toBe(false);
+    await sources.accounts();
+    expect(await payload()).toBe(GMAIL_HEADERS_OPTION.include_payload);
+    gmail = [{ id: "ca_g1", status: "ACTIVE" }, { id: "ca_g2", status: "EXPIRED" }];
+    await sources.accounts();
+    expect(await payload()).toBe(false);
   });
 
   it("asks whether attendees wrote since a time, with only well-formed addresses in the query", async () => {
@@ -331,20 +369,67 @@ describe("createComposioSources", () => {
     expect(events.find((event) => event.calendarId === "primary")).toMatchObject({ ownedCalendar: true });
   });
 
-  it("fails the whole account when any one of its calendars cannot be read", async () => {
+  it("fails the whole account when any one of its calendars cannot be read, naming that calendar", async () => {
     const { sources } = google({ answer: (item) => item.arguments.calendarId === "team@group.calendar.google.com" ? { successful: false, error: "insufficient authentication scopes" } : undefined });
-    await expect(sources.events(C1, 0, 1)).rejects.toMatchObject({ name: "SourceError", service: "googlecalendar", account: "ca_c1" });
+    await expect(sources.events(C1, 0, 1)).rejects.toMatchObject({ name: "SourceError", service: "googlecalendar", account: "ca_c1",
+      message: "calendar Team: insufficient authentication scopes" });
+  });
+
+  it("reads an account's calendars at most four at a time under one deadline, so a slow calendar does not multiply the time", async () => {
+    const extra = Array.from({ length: 6 }, (_, n) => ({ id: `c${n}@group.calendar.google.com`, accessRole: "reader", selected: true }));
+    const held: Array<() => void> = [];
+    const signals = new Set<AbortSignal | undefined>();
+    const relay = vi.fn(async (payload: any, _session?: string, signal?: AbortSignal) => {
+      signals.add(signal);
+      if (payload.method === "initialize") return { status: 200, bytes: encode({ jsonrpc: "2.0", id: payload.id, result: {} }), transportSessionId: "s1" };
+      if (payload.method === "notifications/initialized") return { status: 202, bytes: new Uint8Array() };
+      const item = payload.params.arguments.tools[0];
+      if (item.tool_slug === CALENDARS_TOOL) return { status: 200, bytes: encode(multi(CALENDARS_TOOL, { successful: true, data: { items: [{ id: "admin@example.test", primary: true }, ...extra] } })) };
+      await new Promise<void>((resolve) => held.push(resolve));
+      return { status: 200, bytes: encode(multi(CALENDAR_LIST_TOOL, { successful: true, data: { items: [{ id: `e-${item.arguments.calendarId}`, start: { dateTime: "2026-10-21T10:00:00Z" } }] } })) };
+    });
+    const reading = createComposioSources({ configured: () => true, connectedServices: services, relay }).events(C1, 0, 1);
+    await expect.poll(() => held.length).toBe(4);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(held.length).toBe(4);
+    held.splice(0).forEach((release) => release());
+    await expect.poll(() => held.length).toBe(3);
+    held.splice(0).forEach((release) => release());
+    expect((await reading).map((event) => event.calendarId)).toEqual(["admin@example.test", ...extra.map((calendar) => calendar.id)]);
+    expect(signals.size).toBe(1);
+  });
+
+  it("fails the whole account once its one deadline passes, naming the calendar that did not answer", async () => {
+    const relay = vi.fn(async (payload: any, _session?: string, signal?: AbortSignal) => {
+      if (payload.method === "initialize") return { status: 200, bytes: encode({ jsonrpc: "2.0", id: payload.id, result: {} }), transportSessionId: "s1" };
+      if (payload.method === "notifications/initialized") return { status: 202, bytes: new Uint8Array() };
+      const item = payload.params.arguments.tools[0];
+      if (item.tool_slug === CALENDAR_LIST_TOOL && item.arguments.calendarId === "ada@example.test") {
+        return new Promise<never>((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
+      }
+      return { status: 200, bytes: encode(multi(item.tool_slug, { successful: true, data: fixture(ANSWERS[item.tool_slug]!) })) };
+    });
+    const sources = createComposioSources({ configured: () => true, connectedServices: services, relay, readTimeoutMs: 20 });
+    await expect(sources.events(C1, 0, 1)).rejects.toMatchObject({ name: "SourceError", account: "ca_c1",
+      message: expect.stringMatching(/^calendar Ada: GOOGLECALENDAR_EVENTS_LIST did not answer within/) });
   });
 
   it("reads one message by id with its Message-ID header, and null only when the service says it is gone", async () => {
     const { sources, toolItems } = google({ answer: (item) => ({
       "m-9": { successful: false, error: "Requested entity was not found." },
+      "m-7": { successful: false, error: "Message not found" },
       "m-8": { successful: false, error: "Rate limit exceeded" },
+      "m-6": { successful: false, error: "Connected account ca_g1 not found" },
+      "m-5": { successful: false, error: "Tool GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID not found" },
+      "m-4": { successful: false, error: "Rate limit exceeded for message 18c404ab" },
     } as Record<string, unknown>)[item.arguments.message_id] });
     expect(await sources.message(G1, "m-1")).toMatchObject({ id: "m-1", threadId: "t-1", account: "ca_g1", subject: "Q3 numbers", messageIdHeader: "<q3@pin.example>" });
     expect(toolItems()[0]).toEqual({ tool_slug: GMAIL_MESSAGE_TOOL, account: "ca_g1", arguments: { user_id: "me", message_id: "m-1", format: "metadata" } });
     expect(await sources.message(G1, "m-9")).toBeNull();
-    await expect(sources.message(G1, "m-8")).rejects.toMatchObject({ name: "SourceError", service: "gmail", account: "ca_g1" });
+    expect(await sources.message(G1, "m-7")).toBeNull();
+    for (const id of ["m-8", "m-6", "m-5", "m-4"]) {
+      await expect(sources.message(G1, id), id).rejects.toMatchObject({ name: "SourceError", service: "gmail", account: "ca_g1" });
+    }
   });
 
   it("never calls a message gone for a failure around the tool, however it is worded", async () => {

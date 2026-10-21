@@ -91,15 +91,19 @@ export const GMAIL_THREAD_TOOL = "GMAIL_FETCH_MESSAGE_BY_THREAD_ID";
 export const ACCOUNT_PARAM = "account";
 /** Composio's GMAIL_FETCH_EMAILS carries each message's `payload.headers`, Message-ID among them, only with its payload. */
 export const GMAIL_HEADERS_OPTION = { include_payload: true } as const;
-/** How a Gmail tool says the message it was asked for no longer exists. */
-export const MESSAGE_GONE = /not found|404|deleted/i;
+const CALENDAR_READS_AT_ONCE = 4;
+const CALENDAR_NAME_MAX = 80;
+const GOOGLE_NOT_FOUND = /\brequested entity was not found\b/i;
+const MESSAGE_WORD = /\b(?:message|email|thread)\b/i;
+const MISSING_WORD = /\b(?:not found|deleted|no longer exists)\b/i;
+const OTHER_SUBJECT = /\b(?:account|connect|o?auth|token|permission|scope|credential|tool|integration)/i;
 const SERVICES: readonly AssistantService[] = ["gmail", "googlecalendar"];
 const MULTI_EXECUTE = "COMPOSIO_MULTI_EXECUTE_TOOL";
 const CALL_ID = "omb-assistant-call";
 const PREVIEW_MAX = 300;
 const ADDRESS = /^[\w.+][\w.+-]*@[\w-]+(?:\.[\w-]+)+$/;
 const isAccountActive = /^active$/i;
-const PRIMARY_CALENDAR = { id: "primary", primary: true, owned: true, read: true } as const;
+const PRIMARY_CALENDAR = { id: "primary", name: "primary", primary: true, owned: true, read: true } as const;
 const GONE = Symbol("gone");
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -110,6 +114,26 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
 
 /** The tool itself answered that it failed, as opposed to the relay or Composio failing around it. */
 class ToolAnswerError extends Error {}
+
+/** Whether a Gmail tool's own error says the message asked for is missing, while naming no account, connection, token,
+ * permission or tool. */
+export function messageGone(toolError: string): boolean {
+  if (OTHER_SUBJECT.test(toolError)) return false;
+  return GOOGLE_NOT_FOUND.test(toolError) || (MESSAGE_WORD.test(toolError) && MISSING_WORD.test(toolError));
+}
+
+async function inParallel<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await run(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 type ConnectedServices = Record<string, { connected: boolean; accounts?: ReadonlyArray<{ id: string; alias?: string; status: string }> }>;
 
@@ -177,6 +201,10 @@ function sentAt(item: Record<string, unknown>): number {
 
 function senderOf(item: Record<string, unknown>): string {
   return flat(item.sender ?? item.from ?? headerValue(item, "from"));
+}
+
+function oneLine(value: unknown, max: number): string {
+  return Array.from(flat(typeof value === "string" ? value.replace(/[^\P{C}\s]/gu, "") : "")).slice(0, max).join("").trim();
 }
 
 function addressIn(sender: string): string {
@@ -302,14 +330,17 @@ export function profileFromData(data: unknown): string {
   return normalised;
 }
 
-export function calendarsFromData(data: unknown): Array<{ id: string; primary: boolean; owned: boolean; read: boolean }> {
+export function calendarsFromData(data: unknown): Array<{ id: string; name: string; primary: boolean; owned: boolean; read: boolean }> {
   const list = listIn(data, ["items", "calendars"]);
   if (!list) throw new Error("the answer had no calendar list");
   const calendars = list.flatMap((raw) => {
     const item = record(raw);
     if (!item || typeof item.id !== "string" || !item.id) return [];
     const primary = item.primary === true;
-    return [{ id: item.id, primary, owned: primary || item.accessRole === "owner", read: primary || (item.selected === true && item.hidden !== true) }];
+    return [{
+      id: item.id, name: oneLine(item.summary, CALENDAR_NAME_MAX) || item.id, primary,
+      owned: primary || item.accessRole === "owner", read: primary || (item.selected === true && item.hidden !== true),
+    }];
   });
   if (list.length > 0 && calendars.length === 0) throw new Error("none of the calendars could be read");
   return calendars;
@@ -327,10 +358,12 @@ export interface ComposioSourceDeps {
 export function createComposioSources(deps: ComposioSourceDeps): AssistantSources {
   const readTimeoutMs = deps.readTimeoutMs ?? READ_TIMEOUT_MS;
 
-  /** One tool's data, or GONE when the tool's own failure matches `gone`. */
-  async function call(account: SourceAccount, slug: string, args: Record<string, unknown>, gone?: RegExp): Promise<unknown> {
-    const signal = AbortSignal.timeout(readTimeoutMs);
+  /** One tool's data, or GONE when `gone` says the tool's own failure means the thing asked for is missing. */
+  async function call(account: SourceAccount, slug: string, args: Record<string, unknown>,
+    options: { signal?: AbortSignal; gone?: (toolError: string) => boolean } = {}): Promise<unknown> {
+    const { gone, signal = AbortSignal.timeout(readTimeoutMs) } = options;
     try {
+      signal.throwIfAborted();
       const init = await deps.relay({
         jsonrpc: "2.0", id: "omb-assistant-init", method: "initialize",
         params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "openmausbot-assistant", version: "1" } },
@@ -347,7 +380,7 @@ export function createComposioSources(deps: ComposioSourceDeps): AssistantSource
       return toolData(slug, parseMcpResponse(new TextDecoder().decode(answer.bytes), CALL_ID));
     } catch (error) {
       if (error instanceof SourceError) throw error;
-      if (gone && error instanceof ToolAnswerError && gone.test(error.message)) return GONE;
+      if (gone && error instanceof ToolAnswerError && gone(error.message)) return GONE;
       if (signal.aborted) throw new SourceError(account.service, `${slug} did not answer within ${Math.round(readTimeoutMs / 1000)} seconds`, account.id);
       throw new SourceError(account.service, errorText(error), account.id);
     }
@@ -370,16 +403,21 @@ export function createComposioSources(deps: ComposioSourceDeps): AssistantSource
     return parsed(account, () => emailsFromData(data, account.id));
   }
 
-  async function calendars(account: SourceAccount): Promise<ReturnType<typeof calendarsFromData>> {
-    const data = await call(account, CALENDARS_TOOL, {});
+  async function calendars(account: SourceAccount, signal?: AbortSignal): Promise<ReturnType<typeof calendarsFromData>> {
+    const data = await call(account, CALENDARS_TOOL, {}, signal ? { signal } : {});
     return parsed(account, () => calendarsFromData(data));
   }
+
+  let activeGmailAccounts = 0;
+  const copiesAcrossInboxes = (): boolean => activeGmailAccounts >= 2;
 
   return {
     async accounts() {
       if (!deps.configured()) return null;
       try {
-        return accountsFromServices(await deps.connectedServices());
+        const listed = accountsFromServices(await deps.connectedServices());
+        activeGmailAccounts = listed.filter((account) => account.service === "gmail" && account.active).length;
+        return listed;
       } catch {
         return null;
       }
@@ -394,21 +432,27 @@ export function createComposioSources(deps: ComposioSourceDeps): AssistantSource
     },
     async events(account, fromMs, toMs) {
       requireFinite(account, fromMs, toMs);
-      const listed = await calendars(account);
+      const failed = new AbortController();
+      const signal = AbortSignal.any([AbortSignal.timeout(readTimeoutMs), failed.signal]);
+      const listed = await calendars(account, signal);
       const read = [...(listed.some((calendar) => calendar.primary) ? [] : [PRIMARY_CALENDAR]), ...listed.filter((calendar) => calendar.read)];
-      const events: CalendarEvent[] = [];
-      for (const calendar of read) {
-        const data = await call(account, CALENDAR_LIST_TOOL, {
-          calendarId: calendar.id, timeMin: new Date(fromMs).toISOString(), timeMax: new Date(toMs).toISOString(),
-          singleEvents: true, orderBy: "startTime", maxResults: 100, showDeleted: true,
-        });
-        events.push(...parsed(account, () => eventsFromData(data, { id: calendar.id, owned: calendar.owned })));
-      }
-      return events;
+      const perCalendar = await inParallel(read, CALENDAR_READS_AT_ONCE, async (calendar) => {
+        try {
+          const data = await call(account, CALENDAR_LIST_TOOL, {
+            calendarId: calendar.id, timeMin: new Date(fromMs).toISOString(), timeMax: new Date(toMs).toISOString(),
+            singleEvents: true, orderBy: "startTime", maxResults: 100, showDeleted: true,
+          }, { signal });
+          return eventsFromData(data, { id: calendar.id, owned: calendar.owned });
+        } catch (error) {
+          failed.abort();
+          throw new SourceError(account.service, `calendar ${calendar.name}: ${errorText(error)}`, account.id);
+        }
+      });
+      return perCalendar.flat();
     },
     async emails(account, sinceMs, limit) {
       requireFinite(account, sinceMs);
-      return gmail(account, `in:inbox after:${seconds(sinceMs)} -category:promotions -category:social`, limit, GMAIL_HEADERS_OPTION);
+      return gmail(account, `in:inbox after:${seconds(sinceMs)} -category:promotions -category:social`, limit, copiesAcrossInboxes() ? GMAIL_HEADERS_OPTION : {});
     },
     async mailFrom(account, addresses, sinceMs) {
       requireFinite(account, sinceMs);
@@ -417,7 +461,7 @@ export function createComposioSources(deps: ComposioSourceDeps): AssistantSource
       return (await gmail(account, `from:(${valid.join(" OR ")}) after:${seconds(sinceMs)}`, 1)).length > 0;
     },
     async message(account, id) {
-      const data = await call(account, GMAIL_MESSAGE_TOOL, { user_id: "me", message_id: id, format: "metadata" }, MESSAGE_GONE);
+      const data = await call(account, GMAIL_MESSAGE_TOOL, { user_id: "me", message_id: id, format: "metadata" }, { gone: messageGone });
       return data === GONE ? null : parsed(account, () => messageFromData(data, account.id));
     },
     async thread(account, threadId) {
