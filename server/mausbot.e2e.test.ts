@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
 import { BRIEF_STATE_FILE } from "./host/chief-brief.ts";
+import { MAUSBOT_SETUP } from "./mausbot.ts";
 import { PRESENCE_FILE } from "./host/presence.ts";
 import { SessionRegistry } from "./sessions.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
@@ -320,6 +321,18 @@ it("does not offer a Chief again after Not now", async () => {
   await s.api("POST", "/api/presence/active", { source: "phone" }, BOSS);
   expect(await offers()).toHaveLength(1);
 }, 120_000);
+
+it("refuses /setup for MausBot where its turn starts, so an edited message cannot set it up for a job either", async () => {
+  const s = await start();
+  const mausbot = (await s.bots()).find((bot) => bot.builtIn === "mausbot");
+  expect((await s.api("POST", `/api/bots/${mausbot.id}/messages`, { threadId: mausbot.threadId, text: "What is on my calendar today?" })).status).toBe(202);
+  await expect.poll(async () => (await s.lines(mausbot.threadId)).some((line) => line.role === "bot" && line.kind === "text"), { timeout: 15_000 }).toBe(true);
+  await expect.poll(async () => (await s.bots()).find((bot) => bot.id === mausbot.id).busy, { timeout: 15_000 }).toBeFalsy();
+  const asked = (await s.lines(mausbot.threadId)).find((line) => line.role === "user");
+  const edited = await s.api("POST", `/api/bots/${mausbot.id}/messages/${asked.id}/edit`, { threadId: mausbot.threadId, text: "/setup Every morning at 8, summarize Hacker News" });
+  expect(edited).toEqual({ status: 409, body: { error: MAUSBOT_SETUP } });
+  expect((await s.lines(mausbot.threadId)).filter((line) => line.role === "user").map((line) => line.text)).toEqual(["What is on my calendar today?"]);
+}, 90_000);
 
 it("seeds no MausBot on a hosted team workspace, which starts with its Chief of Staff alone", async () => {
   const home = mkdtempSync(join(tmpdir(), "omb-mb-"));
