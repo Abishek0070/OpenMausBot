@@ -175,7 +175,7 @@ export function createChiefBrief(deps: ChiefBriefDeps) {
     return true;
   }
 
-  /** Routine runs `poster`'s readers may see: what MausBot's brief lists. */
+  /** Routine runs `poster`'s readers may see. */
   function routineRowsFor(poster: BotRecord, since: number): RoutineRow[] {
     return routineRows(recapInputs(seenWith(poster)), since);
   }

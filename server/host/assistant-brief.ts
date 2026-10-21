@@ -372,7 +372,6 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
   }
 
   return {
-    due,
     post,
     waiting: (): boolean => waitingForListing,
     judged,

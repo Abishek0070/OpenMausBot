@@ -58,7 +58,7 @@ function runTarget(run: RoutineRun): OpenTarget | undefined {
   return run.target === "bot" ? { botId: run.botId, threadId: run.threadId } : undefined;
 }
 
-/** The runs a reader of the card may see, from `deps.routineRuns`; the recap and the routine rows share this one filter. */
+/** The runs a reader of the card may see, from `deps.routineRuns`. */
 function visibleRuns(deps: RecapDeps, since: number, known: Map<string, BotRecord>, excluded?: string): RoutineRun[] {
   return deps.routineRuns(since).filter((run) => {
     if (!known.has(run.botId) || !RUN_STATUSES.has(run.status)) return false;

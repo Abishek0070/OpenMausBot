@@ -591,7 +591,6 @@ describe("MausBot's daily brief", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("the daily brief was not posted"));
     expect(w.posts).toEqual([]);
     expect(w.state.get().lastBriefDate).toBeUndefined();
-    expect(w.brief.due()).toBe(true);
     w.refuse = (built) => JSON.stringify(built.card).includes('"Button"');
     w.tick(15 * MINUTE); w.brief.post();
     expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("so its plain version was posted"));
