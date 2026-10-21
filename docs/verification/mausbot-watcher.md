@@ -29,8 +29,10 @@ on top of
   folder keeps, per connected account: its address, alias, email cursor, judged
   ids, failure count, whether Reconnect was shown, whether it was seen
   connected, and how many listings in a row it was missing from. It also keeps
-  the pending emails `{ account, messageId, threadId, judgedAt, needsReply }`,
-  `lastBriefDate` and `lastBriefAt`, meeting ids, times and attendee
+  the pending emails `{ account, messageId, threadId, judgedAt, needsReply,
+  copyGroup }` (`copyGroup` is a hash of the email's `Message-ID` header, never
+  the header itself), `lastBriefDate`, `lastBriefAt` and `lastBriefCard` (the
+  message id of that day's brief), meeting ids, times and attendee
   fingerprints, the day's turn count, in-flight jobs, Retry cards and hidden job
   threads. Never a subject, a sender or a body.
 - **Every call names its account.** Each connected-apps call carries the
@@ -41,10 +43,11 @@ on top of
   Calendar from its primary calendar. Gmail links open as
   `mail.google.com/mail/u/<address>/#all/<threadId>` when the address is known.
 - **Calendar reads.** The primary calendar and every selected, not hidden
-  calendar are read. A calendar counts as the person's own when it is the
-  primary one or its role is owner. Each account shares one 60-second deadline,
-  with at most 4 calendars read at a time. One unreadable calendar fails that
-  account's read.
+  calendar are read, except one shared as free/busy only (access role
+  `freeBusyReader`), which has no event details. A calendar counts as the
+  person's own when it is the primary one or its role is owner. Each account
+  shares one 60-second deadline, with at most 4 calendars read at a time. One
+  unreadable calendar fails that account's read.
 - **One meeting, many calendars.** A meeting found on several calendars or
   accounts is one meeting, matched by `iCalUID` (plus the original start for a
   recurring instance), else by the same title, start and end. It gets one prep,
@@ -52,22 +55,31 @@ on top of
   meeting, and a fresh cancellation or decline wins.
 - **One email, many inboxes.** The same email in two inboxes, matched by its
   `Message-ID` header, is one row and one triage item; without the header both
-  show. Showing it releases both copies. Triage is one batch of up to 20 emails
-  across all accounts.
+  show. Showing it releases both copies. Each pending copy keeps the hash of
+  that header, so the copies stay grouped after a restart. Triage is one batch
+  of up to 20 emails across all accounts.
 - **The daily brief.** On the first presence of the person's day MausBot posts
   one card, "Daily brief", at once, so opening the app lands on MausBot. It has
   four sections: **Needs you**, **Your day**, **Important emails** and
   **Routines**.
+  - Above the sections, the brief names every account it could not read
+    ("I couldn't read the email of …"). An account stays named while any of
+    its waiting or held emails could not be re-read, even after a later inbox
+    read of that account succeeds.
   - **Needs you** lists emails waiting on a reply (pending for 7 days), a missed
-    or failed routine, an account it could not read, and emails waiting on an
-    account that cannot be read right now. Until the pending emails are
-    re-read it says "Checking your email…". If the account listing fails it says
-    "Couldn't reach your connected apps. I'll try again soon." while the brief
-    can still be edited.
-  - **Your day** lists today's timed meetings that have not ended, with the
-    clashes called out and solo blocks marked "Just you". With no usable
-    Calendar account the section is left out; before the first read it says
-    "Checking your calendar…".
+    or failed routine, two meetings that overlap, and a count of the waiting
+    emails it cannot show, per account ("2 emails waiting in …, which can't be
+    read right now"). A waiting email whose re-read failed stays in that count
+    until a re-read succeeds or it is a week old; the failed re-reads are tried
+    again at each later check that day. Needs you never says "Nothing needs you
+    right now." while such an email is unshown. It says "Checking your email…"
+    until the pending emails are re-read, and, after a cold start, until the
+    first email check in that process has finished. If the account listing
+    fails it says "Couldn't reach your connected apps. I'll try again soon."
+    while the brief can still be edited.
+  - **Your day** lists today's timed meetings that have not ended, with solo
+    blocks marked "Just you". With no usable Calendar account the section is
+    left out; before the first read it says "Checking your calendar…".
   - **Important emails** lists the important ones, up to six, then "and N
     more". Buttons are Join, Open, Open in Gmail, Draft a reply and Dismiss,
     each with a label derived from its row.
@@ -78,21 +90,33 @@ on top of
     a run that finishes later appears in the next day's brief.
 - **The brief is edited in place.** The reads of the first check that starts
   after it posts, and the first email check that finishes after it, edit the
-  same card with no notification. After that only Dismiss edits it. If the
-  brief is refused, a plain-text fallback posts, and `lastBriefDate` is saved
-  only once something has posted. If both are refused it retries after 15
-  minutes. It posts when a Google account is usable or there are routine
-  results; otherwise nothing posts.
+  same card with no notification. After that only a re-read that succeeds on a
+  later check, the first finished email check after a cold start, and Dismiss
+  edit it. If the brief is refused, a plain-text fallback posts, and
+  `lastBriefDate` is saved only once something has posted. If both are refused
+  it retries after 15 minutes. It posts when a Google account is usable or
+  there are routine results; otherwise nothing posts.
 - **Morning mail is held for the brief.** An important email is held, not
-  carded, until an email check finishes with no triage queued or running and
-  nothing deferred; a 30-minute backstop after the brief posts also closes the
-  window. A held email stays in `assistant.json` until a delivered card shows
-  it.
-- **Dismiss costs no turn.** Dismiss is answered by the server: the press route
+  carded, until an email check reads every usable Gmail account and finishes
+  with no triage queued or running and nothing deferred. A check where one
+  account's read failed leaves the window open. A 30-minute backstop after the
+  brief posts also closes the window. A held email stays in `assistant.json`
+  until a delivered card shows it.
+- **Dismiss costs no turn.** Dismiss is answered by the server only on a card
+  the server built (`serverCard`) in MausBot's main thread: the press route
   answers `202 { ok: true, threadId, handled: true }`, runs no model turn and
-  adds no chat message. Only the owner or an admin can dismiss; anyone else is
-  refused and the card stays open. It clears the email and its copies from
-  today's brief, including a Dismiss pressed on an old card.
+  adds no chat message. A `dismiss_email` button on a widget a MausBot turn drew
+  goes to MausBot as an ordinary press. Only the owner or an admin can dismiss;
+  anyone else is refused and the card stays open. Dismiss drops the email and
+  every copy grouped with it from `assistant.json`, and takes its row off
+  today's brief, including a Dismiss pressed on an old card while today's brief
+  is in memory. After a restart, a Dismiss on today's brief (`lastBriefCard`)
+  edits that card's stored tree: the pressed row goes, an emptied Needs you
+  says "Nothing needs you right now.", an emptied Important emails section
+  goes, and the rest of the card stays as it was. A Dismiss on an older card
+  after a restart only drops the email. With the switch off or before the
+  intro, Dismiss drops the email, edits nothing and starts no turn. A hosted
+  workspace answers no press.
 - **Routines and the Chief's recap.** Routine runs leave the Chief's recap only
   when MausBot's watcher is on (switch on, intro saved, not hosted) and every
   reader of the recap can see MausBot (`takesRoutines` in
@@ -125,7 +149,12 @@ on top of
   (up to 5 per app). It asks for a label, as Settings does; MausBot names an
   account by its address everywhere.
 - **Draft a reply** names the receiving account (its address and id) in the
-  press text, and MausBot's draft call names that account.
+  press text, and MausBot's draft call names that account. After a restart,
+  when MausBot no longer holds the email, the press text names the message by
+  id and the account from `assistant.json`'s account table, never from the
+  card's text. A press naming another account than the one MausBot holds the
+  message under gets no records.
+- Every meeting card names its accounts, the Cancelled card included.
 - At most 12 prep turns a day, counted in the person's time zone: preps,
   updates and repeat preps all count. Email checks are separate, at most one
   per check interval.
