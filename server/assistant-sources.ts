@@ -3,7 +3,8 @@
 // checked against the live service.
 import { parseMcpResponse } from "./connector-tools-list.ts";
 
-export type AssistantService = "gmail" | "googlecalendar";
+export const ASSISTANT_SERVICES = ["gmail", "googlecalendar"] as const;
+export type AssistantService = (typeof ASSISTANT_SERVICES)[number];
 
 export interface CalendarEvent {
   id: string;
@@ -97,7 +98,6 @@ const GOOGLE_NOT_FOUND = /\brequested entity was not found\b/i;
 const MESSAGE_WORD = /\b(?:message|email|thread)\b/i;
 const MISSING_WORD = /\b(?:not found|deleted|no longer exists)\b/i;
 const OTHER_SUBJECT = /\b(?:account|connect|o?auth|token|permission|scope|credential|tool|integration)/i;
-const SERVICES: readonly AssistantService[] = ["gmail", "googlecalendar"];
 const MULTI_EXECUTE = "COMPOSIO_MULTI_EXECUTE_TOOL";
 const CALL_ID = "omb-assistant-call";
 const PREVIEW_MAX = 300;
@@ -111,6 +111,7 @@ const record = (value: unknown): Record<string, unknown> | undefined =>
 const flat = (value: unknown): string => (typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "");
 const seconds = (ms: number): number => Math.floor(ms / 1000);
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+export const isAddress = (value: string): boolean => ADDRESS.test(value);
 
 /** The tool itself answered that it failed, as opposed to the relay or Composio failing around it. */
 class ToolAnswerError extends Error {}
@@ -138,7 +139,7 @@ async function inParallel<T, R>(items: readonly T[], limit: number, run: (item: 
 type ConnectedServices = Record<string, { connected: boolean; accounts?: ReadonlyArray<{ id: string; alias?: string; status: string }> }>;
 
 export function accountsFromServices(services: ConnectedServices): SourceAccount[] {
-  return SERVICES.flatMap((service): SourceAccount[] => {
+  return ASSISTANT_SERVICES.flatMap((service): SourceAccount[] => {
     const state = services[service];
     if (!state?.accounts?.length) return [{ service, id: service, active: state?.connected === true, implied: true }];
     return state.accounts.map(({ id, alias, status }) => ({ service, id, ...(alias ? { alias } : {}), active: isAccountActive.test(status) }));

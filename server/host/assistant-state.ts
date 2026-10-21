@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 
+import { ASSISTANT_SERVICES } from "../assistant-sources.ts";
 import { writeFileAtomic } from "../atomic.ts";
 import { failure } from "../failure.ts";
 
@@ -11,7 +12,7 @@ export const MAX_WORK_THREADS = 1_000;
 export const MAX_ID_LENGTH = 256;
 export const MAX_ACCOUNTS = 12;
 export const MAX_PENDING_EMAILS = 200;
-const MAX_ADDRESS_LENGTH = 320;
+export const MAX_ADDRESS_LENGTH = 320;
 
 const at = z.number().finite().nonnegative();
 const id = z.string().min(1).max(MAX_ID_LENGTH);
@@ -34,7 +35,7 @@ const meetingSchema = z.object({
 }).strict();
 
 const accountRecordSchema = z.object({
-  service: z.enum(["gmail", "googlecalendar"]),
+  service: z.enum(ASSISTANT_SERVICES),
   address: z.string().min(1).max(MAX_ADDRESS_LENGTH).optional(),
   alias: z.string().min(1).max(MAX_ID_LENGTH).optional(),
   /** The service was reported connected without a list of accounts, so the account is the service itself. */
