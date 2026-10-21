@@ -330,6 +330,9 @@ export function profileFromData(data: unknown): string {
   return normalised;
 }
 
+// Google Calendar's access role for a calendar shared as free/busy only: its events carry no details to read.
+const FREE_BUSY_ONLY = "freeBusyReader";
+
 export function calendarsFromData(data: unknown): Array<{ id: string; name: string; primary: boolean; owned: boolean; read: boolean }> {
   const list = listIn(data, ["items", "calendars"]);
   if (!list) throw new Error("the answer had no calendar list");
@@ -339,7 +342,7 @@ export function calendarsFromData(data: unknown): Array<{ id: string; name: stri
     const primary = item.primary === true;
     return [{
       id: item.id, name: oneLine(item.summary, CALENDAR_NAME_MAX) || item.id, primary,
-      owned: primary || item.accessRole === "owner", read: primary || (item.selected === true && item.hidden !== true),
+      owned: primary || item.accessRole === "owner", read: primary || (item.selected === true && item.hidden !== true && item.accessRole !== FREE_BUSY_ONLY),
     }];
   });
   if (list.length > 0 && calendars.length === 0) throw new Error("none of the calendars could be read");

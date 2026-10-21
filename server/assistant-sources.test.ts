@@ -170,11 +170,12 @@ describe("Google resource parsers", () => {
       calendarId: "admin@example.test", ownedCalendar: true });
   });
 
-  it("marks the primary calendar and the selected, visible ones to read, and the primary and owner ones as owned", () => {
+  it("marks the primary calendar and the selected, visible ones with event details to read, and the primary and owner ones as owned", () => {
     expect(calendarsFromData(fixture("composio-calendar-list.json"))).toEqual([
       { id: "admin@example.test", name: "admin@example.test", primary: true, owned: true, read: true },
       { id: "team@group.calendar.google.com", name: "Team", primary: false, owned: true, read: true },
       { id: "ada@example.test", name: "Ada", primary: false, owned: false, read: true },
+      { id: "boss@example.test", name: "Boss (free/busy)", primary: false, owned: false, read: false },
       { id: "en.indian#holiday@group.v.calendar.google.com", name: "Holidays in India", primary: false, owned: false, read: false },
       { id: "hidden@group.calendar.google.com", name: "Hidden", primary: false, owned: true, read: false },
     ]);
