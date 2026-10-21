@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseWidgetInput, WIDGET_LIMITS, widgetActions, widgetToText } from "../../shared/widget.ts";
+import { WIDGET_SAMPLES } from "../../shared/widget-samples.ts";
 import type { RoutineRun } from "../routines.ts";
 import type { BotRecord, Message, TaskRecord } from "../store.ts";
 import { buildRecap, firstSentence, RECAP_LIMITS, RECAP_TAIL, RECAP_TITLE, ROUTINE_LINE_MAX, routineRows, type RecapDeps } from "./brief-recap.ts";
@@ -236,5 +237,28 @@ describe("routineRows", () => {
     expect(recap.facts.routineRuns).toEqual([]);
     expect(recap.facts.finished.length).toBeGreaterThan(0);
     expect(buildRecap(world, { since: SINCE })!.facts.routineRuns.length).toBe(1);
+  });
+});
+
+describe("the recap sample", () => {
+  it("is the card buildRecap builds, opening a bot's thread and a room's", () => {
+    const at = Date.UTC(2026, 9, 21, 8, 0, 0), since = at - 10 * 3_600_000, after = since + 60_000;
+    const recap = buildRecap({
+      store: {
+        bots: [bot("bot-scout", "Scout"), bot("bot-atlas", "Atlas")],
+        tasks: (id) => (id === "bot-scout" ? [task("thr-pr", after)] : id === "bot-atlas" ? [task("thr-tests", after + 1)] : []),
+        messagesTail: (threadId, n) => ({ "thr-pr": [digest(after, "Pushed the branch and opened a pull request.")], "thr-tests": [failure(after, "Bash: pnpm test"), digest(after + 1, "", false)] } as Record<string, Message[]>)[threadId]?.slice(-n) ?? [],
+      },
+      visible: { bot: () => true, room: () => true, thread: () => true },
+      threadBusy: () => false,
+      routineRuns: () => [{ id: "run-1", routineId: "rt-launch", routineName: "Launch room goal", status: "completed", target: "room-goal", botId: "bot-atlas", groupId: "room-launch", threadId: "thr-launch-goal", scheduledFor: after, finishedAt: after + 5 } as RoutineRun],
+      now: () => at,
+    }, { since, timeZone: "UTC" })!;
+    expect(recap.card).toEqual(WIDGET_SAMPLES.recap);
+    const parsed = parseWidgetInput(WIDGET_SAMPLES.recap);
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect(widgetActions(parsed.value).map((entry) => entry.action.payload)).toEqual(expect.arrayContaining([
+      { botId: "bot-scout", threadId: "thr-pr" }, { groupId: "room-launch", threadId: "thr-launch-goal" },
+    ]));
   });
 });

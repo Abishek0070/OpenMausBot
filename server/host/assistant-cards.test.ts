@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseWidgetInput, WIDGET_LIMITS, widgetActions } from "../../shared/widget.ts";
+import { WIDGET_SAMPLES } from "../../shared/widget-samples.ts";
 import type { CalendarEvent } from "../assistant-sources.ts";
 import {
   attendeeNames, BRIEF_MAX, BRIEF_ROWS, briefCard, briefFallbackCard, clockTime, cancelledCard, DISMISS_ACTION, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, updateCard,
@@ -456,5 +457,26 @@ describe("the daily brief", () => {
     expect(briefCard({ ...full, missing, repliesChecking: true }).summary)
       .toBe("Daily brief: 2 accounts unreadable, 3 need you, checking your email…, 2 meetings, 1 important email, 1 routine result");
     expect(briefFallbackCard({ ...empty, meetings: null, repliesChecking: true }).summary).toBe("Daily brief: checking your email…");
+  });
+});
+
+describe("the daily brief sample", () => {
+  it("is the card briefCard builds, with a reply to draft, emails to dismiss and a bot thread and a room thread to open", () => {
+    const at = Date.UTC(2026, 9, 21, 8, 0, 0);
+    const built = briefCard({
+      now: at, timeZone: "UTC", missing: [], repliesChecking: false, repliesUnreadable: [], clashes: [], unreachable: false,
+      replies: [{ accountId: "ca_work", account: "omkar@example.test", address: "omkar@example.test", messageId: "msg-redlines", threadId: "thr-redlines", from: "Priya Shah <priya@example.test>", subject: "Contract redlines" }],
+      failedRoutines: [{ name: "Launch standup notes", status: "failed", line: "The room's goal stopped at the step limit.", open: { groupId: "room-launch", threadId: "thr-launch-goal" } }],
+      meetings: [
+        { title: "Design review", start: at + 2 * 3_600_000, end: at + 3 * 3_600_000, accounts: "omkar@example.test", status: "You accepted", joinUrl: "https://meet.example.test/abc-defg-hij" },
+        { title: "1:1 with Sam", start: at + 6 * 3_600_000, end: at + 6.5 * 3_600_000, accounts: "omkar@example.test", status: "Not answered yet" },
+      ],
+      important: [{ accountId: "ca_work", account: "omkar@example.test", address: "omkar@example.test", messageId: "msg-invoice", threadId: "thr-invoice", from: "Billing <billing@vendor.example.test>", subject: "Invoice 2041 is overdue", why: "A payment is past due" }],
+      routines: [{ name: "Inbox check", status: "completed", line: "Three newsletters archived, nothing urgent.", open: { botId: "bot-scout", threadId: "thr-inbox-check" } }],
+    });
+    expect(built.card).toEqual(WIDGET_SAMPLES.dailyBrief);
+    const parsed = parseWidgetInput(WIDGET_SAMPLES.dailyBrief);
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect(new Set(widgetActions(parsed.value).map((entry) => entry.action.type))).toEqual(new Set(["draft_reply", "dismiss_email", "open_thread", "open_url"]));
   });
 });

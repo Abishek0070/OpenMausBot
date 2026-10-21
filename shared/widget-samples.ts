@@ -210,4 +210,190 @@ export const WIDGET_SAMPLES: Record<string, unknown> = {
       },
     ],
   },
+
+  // A card the server builds: MausBot's daily brief, with every press it offers.
+  dailyBrief: {
+    type: "Card",
+    id: "root",
+    title: "Daily brief",
+    caption: "Wednesday, October 21",
+    children: [
+      { type: "Title", value: "Needs you", size: "sm" },
+      {
+        type: "Col",
+        gap: 1,
+        children: [
+          { type: "Text", value: "Priya Shah: Contract redlines", weight: "medium" },
+          { type: "Caption", value: "omkar@example.test · waiting on your reply" },
+          {
+            type: "Row",
+            gap: 2,
+            wrap: true,
+            children: [
+              { type: "Button", label: "Draft a reply to Priya Shah", style: "secondary", onClickAction: { type: "draft_reply", payload: { messageId: "msg-redlines", account: "ca_work" } } },
+              { type: "Button", label: "Open in Gmail", style: "secondary", onClickAction: { type: "open_url", payload: { url: "https://mail.google.com/mail/u/omkar%40example.test/#all/thr-redlines" } } },
+              { type: "Button", label: "Dismiss Priya Shah's email", style: "secondary", onClickAction: { type: "dismiss_email", payload: { messageId: "msg-redlines", account: "ca_work" } } },
+            ],
+          },
+        ],
+      },
+      {
+        type: "Row",
+        gap: 3,
+        align: "center",
+        children: [
+          {
+            type: "Col",
+            flex: 1,
+            children: [
+              { type: "Text", value: "Launch standup notes failed", weight: "medium" },
+              { type: "Caption", value: "The room's goal stopped at the step limit." },
+            ],
+          },
+          { type: "Button", label: "Open", style: "secondary", onClickAction: { type: "open_thread", payload: { groupId: "room-launch", threadId: "thr-launch-goal" } } },
+        ],
+      },
+      { type: "Title", value: "Your day", size: "sm" },
+      {
+        type: "Row",
+        gap: 3,
+        align: "center",
+        children: [
+          {
+            type: "Col",
+            flex: 1,
+            children: [
+              { type: "Text", value: "10:00 AM · Design review", weight: "medium" },
+              { type: "Caption", value: "You accepted · omkar@example.test" },
+            ],
+          },
+          { type: "Button", label: "Join", style: "secondary", onClickAction: { type: "open_url", payload: { url: "https://meet.example.test/abc-defg-hij" } } },
+        ],
+      },
+      {
+        type: "Row",
+        gap: 3,
+        align: "center",
+        children: [
+          {
+            type: "Col",
+            flex: 1,
+            children: [
+              { type: "Text", value: "2:00 PM · 1:1 with Sam", weight: "medium" },
+              { type: "Caption", value: "Not answered yet · omkar@example.test" },
+            ],
+          },
+        ],
+      },
+      { type: "Title", value: "Important emails", size: "sm" },
+      {
+        type: "Col",
+        gap: 1,
+        children: [
+          { type: "Text", value: "Billing: Invoice 2041 is overdue", weight: "medium" },
+          { type: "Caption", value: "omkar@example.test · A payment is past due" },
+          {
+            type: "Row",
+            gap: 2,
+            wrap: true,
+            children: [
+              { type: "Button", label: "Open in Gmail", style: "secondary", onClickAction: { type: "open_url", payload: { url: "https://mail.google.com/mail/u/omkar%40example.test/#all/thr-invoice" } } },
+              { type: "Button", label: "Dismiss Billing's email", style: "secondary", onClickAction: { type: "dismiss_email", payload: { messageId: "msg-invoice", account: "ca_work" } } },
+            ],
+          },
+        ],
+      },
+      { type: "Title", value: "Routines", size: "sm" },
+      {
+        type: "Row",
+        gap: 3,
+        align: "center",
+        children: [
+          {
+            type: "Col",
+            flex: 1,
+            children: [
+              { type: "Text", value: "Inbox check", weight: "medium" },
+              { type: "Caption", value: "Three newsletters archived, nothing urgent." },
+            ],
+          },
+          { type: "Button", label: "Open", style: "secondary", onClickAction: { type: "open_thread", payload: { botId: "bot-scout", threadId: "thr-inbox-check" } } },
+        ],
+      },
+    ],
+  },
+
+  // A card the server builds: what happened while the person was away, each row opening its bot's or room's thread.
+  recap: {
+    type: "Card",
+    id: "root",
+    title: "Since you last looked",
+    children: [
+      { type: "Caption", value: "Away since Tue 10:00 PM, about 10 hours." },
+      { type: "Title", value: "Finished", size: "sm" },
+      {
+        type: "Col",
+        gap: 2,
+        children: [
+          {
+            type: "Row",
+            gap: 3,
+            align: "center",
+            children: [
+              {
+                type: "Col",
+                flex: 1,
+                children: [
+                  { type: "Text", value: "Scout", weight: "medium", truncate: true },
+                  { type: "Caption", value: "Pushed the branch and opened a pull request.", truncate: true },
+                ],
+              },
+              { type: "Button", label: "Open", style: "secondary", onClickAction: { type: "open_thread", payload: { botId: "bot-scout", threadId: "thr-pr" } } },
+            ],
+          },
+        ],
+      },
+      { type: "Title", value: "Failed", size: "sm" },
+      {
+        type: "Col",
+        gap: 2,
+        children: [
+          {
+            type: "Row",
+            gap: 3,
+            align: "center",
+            children: [
+              {
+                type: "Col",
+                flex: 1,
+                children: [
+                  { type: "Text", value: "Atlas", weight: "medium", truncate: true },
+                  { type: "Caption", value: "Bash: pnpm test", truncate: true },
+                ],
+              },
+              { type: "Badge", label: "Failed", color: "danger", variant: "dot" },
+              { type: "Button", label: "Open", style: "secondary", onClickAction: { type: "open_thread", payload: { botId: "bot-atlas", threadId: "thr-tests" } } },
+            ],
+          },
+        ],
+      },
+      { type: "Title", value: "Routines", size: "sm" },
+      {
+        type: "Col",
+        gap: 2,
+        children: [
+          {
+            type: "Row",
+            gap: 3,
+            align: "center",
+            children: [
+              { type: "Col", flex: 1, children: [{ type: "Text", value: "Launch room goal", weight: "medium", truncate: true }] },
+              { type: "Badge", label: "completed", color: "success", variant: "dot" },
+              { type: "Button", label: "Open", style: "secondary", onClickAction: { type: "open_thread", payload: { groupId: "room-launch", threadId: "thr-launch-goal" } } },
+            ],
+          },
+        ],
+      },
+    ],
+  },
 };
