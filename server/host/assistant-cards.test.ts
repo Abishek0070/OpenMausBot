@@ -81,6 +81,8 @@ describe("MausBot's cards", () => {
     const cancelled = valid(cancelledCard({ title: "Supamaus demo with Jake", start: demo.start, timeZone: ZONE, now: NOW }));
     expect(cancelled.root.title).toBe("Cancelled: Supamaus demo with Jake");
     expect(cancelled.actions).toEqual([]);
+    const named = valid(cancelledCard({ title: "Supamaus demo with Jake", start: demo.start, timeZone: ZONE, now: NOW, accounts: "me@example.test, admin@example.test" }));
+    expect(named.root.caption).toBe(`${cancelled.root.caption} · me@example.test, admin@example.test`);
   });
 });
 

@@ -240,6 +240,7 @@ describe("meeting prep", () => {
     w.live.events = [{ ...original, status: "cancelled" }];
     await w.settle();
     expect(w.titles().at(-1)).toBe("Cancelled: Meeting a");
+    expect(w.widgets().at(-1)!.caption).toMatch(/ · me@example\.test$/);
     expect(w.jobs).toHaveLength(2);
     w.tick(4 * HOUR);
     w.live.events = [{ ...original, start: original.start + HOUR, end: original.end + HOUR }];

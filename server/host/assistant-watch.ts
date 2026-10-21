@@ -345,8 +345,8 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
         continue;
       } else if (job.kind === "cancelled") {
         setMeeting(job.eventId, { cancelledAt: at });
-        const allDay = events.find((event) => event.id === job.eventId)?.allDay ?? false;
-        post(bot, threadId, cancelledCard({ title: job.title, start: job.start, allDay, timeZone: deps.timeZone(), now: at }));
+        const event = events.find((one) => one.id === job.eventId);
+        post(bot, threadId, cancelledCard({ title: job.title, start: job.start, allDay: event?.allDay ?? false, timeZone: deps.timeZone(), now: at, ...(event ? { accounts: accountNames(event) } : {}) }));
       } else if (job.kind === "update") {
         const previous = meetings()[job.event.id]!;
         const turn = takeTurn();

@@ -156,10 +156,11 @@ export function updateCard(input: { event: CalendarEvent; text: string; timeZone
   };
 }
 
-export function cancelledCard(input: { title: string; start: number; allDay?: boolean; timeZone?: string; now: number }): BuiltCard {
+export function cancelledCard(input: { title: string; start: number; allDay?: boolean; timeZone?: string; now: number; accounts?: string }): BuiltCard {
   const title = `Cancelled: ${input.title}`;
+  const was = input.allDay ? `Was ${meetingWhen(input.start, input.start, input.timeZone, input.now, true)}` : `Was ${dayLabel(input.start, input.timeZone, input.now, false)}, ${clockTime(input.start, input.timeZone)}`;
   return {
-    card: root(title, input.allDay ? `Was ${meetingWhen(input.start, input.start, input.timeZone, input.now, true)}` : `Was ${dayLabel(input.start, input.timeZone, input.now, false)}, ${clockTime(input.start, input.timeZone)}`, [text("It is off your calendar.")]),
+    card: root(title, withAccounts(was, input.accounts), [text("It is off your calendar.")]),
     summary: summary(title),
   };
 }
