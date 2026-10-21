@@ -69,6 +69,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
   let unreachable = false;
   let postFailedAt: number | undefined;
   let rereading: Promise<void> | undefined;
+  const rereadFailed = new Set<string>();
 
   const pending = (): PendingEmail[] => deps.state.get().pendingEmails ?? [];
   const savePending = (list: readonly PendingEmail[]): void => { deps.state.patch({ pendingEmails: keepNewest(list, MAX_PENDING_EMAILS) }); };
@@ -132,10 +133,14 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     return listed.length === 0 && accounts.unreadable("googlecalendar").length > 0 ? null : listed;
   }
 
-  function unshownCounts(waiting: readonly PendingEmail[], unreadable: ReadonlySet<string>): BriefFacts["repliesUnreadable"] {
+  function unshownCounts(unread: readonly PendingEmail[], shown: ReadonlySet<string>): BriefFacts["repliesUnreadable"] {
+    const counted = new Set(shown);
     const counts = new Map<string, number>();
-    for (const entry of waiting) {
-      if (!headers.has(refKey(entry)) && unreadable.has(entry.account)) counts.set(entry.account, (counts.get(entry.account) ?? 0) + 1);
+    for (const entry of unread) {
+      const group = groupOf(refKey(entry));
+      if (counted.has(group)) continue;
+      counted.add(group);
+      counts.set(entry.account, (counts.get(entry.account) ?? 0) + 1);
     }
     return [...counts].map(([id, count]) => ({ account: accounts.label(id), count }));
   }
@@ -143,8 +148,12 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
   function facts(posted: Omit<PostedBrief, keyof CardRef>, at: number): BriefFacts {
     const known = accounts.known();
     const gmail = usableIds("gmail");
-    const unreadableMail = accounts.unreadable("gmail");
+    const unreadableMail = new Set(accounts.unreadable("gmail").map((account) => account.id));
     const waiting = pending().filter((entry) => entry.needsReply && known.has(entry.account));
+    const important = posted.important.filter((ref) => known.has(ref.account));
+    const unread = (ref: EmailRef): boolean => !headers.has(refKey(ref)) && (unreadableMail.has(ref.account) || (posted.pendingChecked && gmail.has(ref.account)));
+    const unreadWaiting = waiting.filter(unread);
+    const replies = rows(waiting);
     const day = yourDay(at);
     const meetings = Array.isArray(day) ? day : [];
     const meeting = (one: Meeting): BriefMeeting => ({
@@ -156,15 +165,16 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       timeZone: deps.timeZone(),
       missing: [
         ...accounts.unreadable("googlecalendar").map((account) => ({ account: accounts.label(account.id), what: "calendar" as const })),
-        ...unreadableMail.map((account) => ({ account: accounts.label(account.id), what: "email" as const })),
+        ...[...new Set([...unreadableMail, ...[...unreadWaiting, ...important.filter(unread)].map((ref) => ref.account)])]
+          .map((id) => ({ account: accounts.label(id), what: "email" as const })),
       ],
-      replies: rows(waiting).map(briefEmail),
+      replies: replies.map(briefEmail),
       repliesChecking: !unreachable && !posted.pendingChecked && [...waiting, ...posted.important].some((ref) => gmail.has(ref.account)),
-      repliesUnreadable: unshownCounts(waiting, new Set(unreadableMail.map((account) => account.id))),
+      repliesUnreadable: unshownCounts(unreadWaiting, new Set(replies.map((row) => sameEmail(row.email)))),
       failedRoutines: posted.routines.filter((row) => row.status !== "completed"),
       clashes: clashes(meetings, { now: at, timeZone: deps.timeZone() }).map(([first, second]) => ({ first: side(first), second: side(second) })),
       meetings: Array.isArray(day) ? day.map(meeting) : day,
-      important: rows(posted.important.filter((ref) => known.has(ref.account))).map(briefEmail),
+      important: rows(important).map(briefEmail),
       routines: posted.routines.filter((row) => row.status === "completed"),
       ...(unreachable ? { unreachable: true } : {}),
     };
@@ -257,11 +267,16 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     return unheld;
   }
 
+  const rereadRefs = (posted: PostedBrief): EmailRef[] => [...pending().filter((entry) => entry.needsReply), ...posted.important];
+
   async function readMessages(posted: PostedBrief, scheduled: boolean): Promise<void> {
+    const retry = posted.pendingChecked;
+    if (!retry) rereadFailed.clear();
     const gmail = new Map(accounts.usable("gmail").map((account) => [account.id, account]));
     const waiting = pending().filter((entry) => entry.needsReply);
     const failedThisCheck = new Set<string>();
     const drop = new Set<string>();
+    const learned = new Set<string>();
     // Every failed read counts towards the account's Reconnect, so an account that failed once is not read again here.
     const read = async <T>(ref: EmailRef, load: (account: SourceAccount) => Promise<T>): Promise<T | null> => {
       const account = gmail.get(ref.account);
@@ -271,9 +286,14 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
       return answer;
     };
 
-    for (const ref of [...waiting, ...posted.important]) {
+    for (const ref of rereadRefs(posted).filter((one) => !retry || rereadFailed.has(refKey(one)))) {
       const answer = await read(ref, async (account) => ({ email: await deps.sources.message(account, ref.messageId) }));
-      if (!answer) continue;
+      if (!answer) {
+        if (gmail.has(ref.account)) rereadFailed.add(refKey(ref));
+        continue;
+      }
+      rereadFailed.delete(refKey(ref));
+      learned.add(refKey(ref));
       if (answer.email) remember(answer.email);
       else if (!accounts.selectionIgnored(ref.account)) drop.add(refKey(ref));
     }
@@ -285,6 +305,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     }
     const addresses = accounts.addresses();
     for (const group of groups.values()) {
+      if (retry && !group.some((entry) => learned.has(refKey(entry)))) continue;
       for (const entry of group) {
         const email = headers.get(refKey(entry))?.email;
         const thread = email && await read(entry, (account) => deps.sources.thread(account, email.threadId));
@@ -302,7 +323,8 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
 
   function checkPending(scheduled: boolean): Promise<void> {
     const posted = brief;
-    if (!posted || posted.pendingChecked) return Promise.resolve();
+    const retry = posted?.pendingChecked && posted === todays(deps.now()) && rereadRefs(posted).some((ref) => rereadFailed.has(refKey(ref)));
+    if (!posted || (posted.pendingChecked && !retry)) return Promise.resolve();
     rereading ??= readMessages(posted, scheduled).finally(() => { rereading = undefined; });
     return rereading;
   }

@@ -607,6 +607,46 @@ describe("MausBot's daily brief", () => {
     expect(expired.lastCard()).toContain("2 emails waiting in admin@example.test, which can't be read right now");
   });
 
+  it("keeps counting a waiting email whose re-read failed after a restart, and names its account, though a later inbox read of that account succeeds", async () => {
+    const w = briefWorld();
+    w.state.patch({ pendingEmails: [entry("m1")] });
+    w.inbox.set("ca_g1/m1", new Error("Gmail did not answer"));
+    const again = w.restart(); again.brief.post(); await again.brief.checkPending(true);
+    again.readState.set("ca_g1", "ok");
+    again.brief.checked(NOW);
+    const card = again.lastCard();
+    expect(card).toContain("1 email waiting in me@example.test, which can't be read right now");
+    expect(card).toContain("I couldn't read the email of me@example.test.");
+    expect(card).not.toContain("Nothing needs you right now.");
+    expect(again.lastSummary()).not.toContain("nothing needs you");
+  });
+
+  it("reads a waiting email it could not re-read again at the next check, shows its row once it can, then stops reading it", async () => {
+    const w = briefWorld();
+    w.state.patch({ pendingEmails: [entry("m1")] });
+    w.inbox.set("ca_g1/m1", new Error("Gmail did not answer"));
+    const again = w.restart(); again.brief.post(); await again.brief.checkPending(true);
+    again.readState.set("ca_g1", "ok");
+    again.inbox.delete("ca_g1/m1");
+    again.tick(15 * MINUTE); await again.brief.checkPending(true);
+    const card = again.lastCard();
+    expect(card).toContain("Subject m1");
+    expect(card).not.toContain("can't be read right now");
+    expect(card).not.toContain("I couldn't read the email");
+    again.tick(15 * MINUTE); await again.brief.checkPending(true);
+    expect(again.messageReads.filter((read) => read.id === "m1")).toHaveLength(2);
+  });
+
+  it("names the account of a held important email it could not re-read, so the brief never looks complete", async () => {
+    const w = briefWorld();
+    w.state.patch({ pendingEmails: [entry("m2", { needsReply: false })] });
+    w.inbox.set("ca_g1/m2", new Error("Gmail did not answer"));
+    const again = w.restart(); again.brief.post(); await again.brief.checkPending(true);
+    again.readState.set("ca_g1", "ok");
+    again.brief.checked(NOW);
+    expect(again.lastCard()).toContain("I couldn't read the email of me@example.test.");
+  });
+
   it("edits the brief in place only until a check that started after it has finished, unless email or Dismiss changes it", async () => {
     const w = briefWorld();
     w.meetings = null; w.brief.post();
