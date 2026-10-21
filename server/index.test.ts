@@ -633,7 +633,7 @@ beforeAll(async () => {
     ]),
   );
   // A job thread the watcher never recorded is one a restart cut short, and is deleted on start.
-  writeFileSync(join(home, ".openmausbot", "assistant.json"), JSON.stringify({ version: 1, workThreads: [{ threadId: MAUSBOT_JOB_THREAD, at: Date.now() }] }));
+  writeFileSync(join(home, ".openmausbot", "assistant.json"), JSON.stringify({ version: 2, workThreads: [{ threadId: MAUSBOT_JOB_THREAD, at: Date.now() }] }));
   writeFileSync(
     join(home, ".openmausbot", "messages-test-bot-seed-thread.json"),
     JSON.stringify({

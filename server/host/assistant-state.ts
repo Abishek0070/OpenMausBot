@@ -9,6 +9,9 @@ export const MAX_JUDGED = 500;
 export const MAX_IN_FLIGHT = 100;
 export const MAX_WORK_THREADS = 1_000;
 export const MAX_ID_LENGTH = 256;
+export const MAX_ACCOUNTS = 12;
+export const MAX_PENDING_EMAILS = 200;
+const MAX_ADDRESS_LENGTH = 320;
 
 const at = z.number().finite().nonnegative();
 const id = z.string().min(1).max(MAX_ID_LENGTH);
@@ -30,10 +33,29 @@ const meetingSchema = z.object({
   updateFailedAt: at.optional(),
 }).strict();
 
+const accountRecordSchema = z.object({
+  service: z.enum(["gmail", "googlecalendar"]),
+  address: z.string().min(1).max(MAX_ADDRESS_LENGTH).optional(),
+  alias: z.string().min(1).max(MAX_ID_LENGTH).optional(),
+  /** The service was reported connected without a list of accounts, so the account is the service itself. */
+  implied: z.boolean().optional(),
+  emailCursor: at.optional(),
+  judged: z.array(id).max(MAX_JUDGED).optional(),
+  failures: z.number().int().min(0).optional(),
+  reconnectShown: z.boolean().optional(),
+  connectedSeen: z.boolean().optional(),
+}).strict();
+
+const pendingEmailSchema = z.object({ account: id, messageId: id, threadId: id, judgedAt: at, needsReply: z.boolean() }).strict();
+
 const perService = <T extends z.ZodType>(value: T) => z.object({ gmail: value.optional(), googlecalendar: value.optional() }).strict();
 
 export const assistantStateSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
+  accounts: z.record(id, accountRecordSchema).refine((accounts) => Object.keys(accounts).length <= MAX_ACCOUNTS).optional(),
+  pendingEmails: z.array(pendingEmailSchema).max(MAX_PENDING_EMAILS).optional(),
+  lastBriefDate: day.optional(),
+  lastBriefAt: at.optional(),
   meetings: z.record(id, meetingSchema).optional(),
   /** Gmail is asked for mail after this time on the next check. */
   emailCursor: at.optional(),
@@ -56,6 +78,8 @@ export const assistantStateSchema = z.object({
 });
 
 export type AssistantState = z.infer<typeof assistantStateSchema>;
+export type AccountRecord = z.infer<typeof accountRecordSchema>;
+export type PendingEmail = z.infer<typeof pendingEmailSchema>;
 export type MeetingRecord = z.infer<typeof meetingSchema>;
 export type AssistantStatePatch = Partial<Omit<AssistantState, "version">>;
 
@@ -66,7 +90,7 @@ export interface AssistantStateStore {
 }
 
 export function createAssistantState(file: string): AssistantStateStore {
-  let state: AssistantState = { version: 1 };
+  let state: AssistantState = { version: 2 };
   try {
     const parsed = assistantStateSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
     if (parsed.success) state = parsed.data;
