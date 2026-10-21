@@ -38,6 +38,12 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
       opening.current = null;
     };
   }, [target, connector.dismissed]);
+  const connected = connector.status === "connected";
+  useEffect(() => {
+    if (connected) return;
+    setLabel("");
+    setAdding(false);
+  }, [connected]);
   const checkStatus = useCallback(async () => {
     const result = await api(`${endpoint}/status?threadId=${encodeURIComponent(threadId)}`);
     return Boolean(result.connected);
@@ -122,7 +128,6 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
     void api(`${endpoint}/dismiss`, { method: "POST", body: JSON.stringify({ threadId }) }).catch(() => {});
   };
 
-  const connected = connector.status === "connected";
   const authorizing = connector.status === "authorizing";
   const error = localError ?? connector.error;
   const stopped = connector.stopped === true;

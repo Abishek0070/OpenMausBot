@@ -57,4 +57,21 @@ describe("ConnectorCard Add another account", () => {
       body: JSON.stringify({ threadId: "m-main", alias: "admin" }),
     }));
   });
+
+  it("closes the form and forgets its label once the card leaves connected, so it never reopens with the old label", async () => {
+    const at = (status: string) => flushSync(() => root.render(createElement(ConnectorCard, {
+      botId: "m", threadId: "m-main", message: { ...message, connector: { ...message.connector, status } } as never,
+    })));
+    const aliasInput = () => input(t("connectors.aliasAriaAnother", { service: "Gmail" }));
+    click(button(t("connectors.card.addAccount")));
+    type(aliasInput(), "Work");
+    submit();
+    await vi.waitFor(() => expect(fixture.api).toHaveBeenCalledTimes(1));
+    at("authorizing");
+    at("connected");
+    expect(aliasInput()).toBeNull();
+    await vi.waitFor(() => expect(button(t("connectors.card.addAccount")).disabled).toBe(false));
+    click(button(t("connectors.card.addAccount")));
+    expect(aliasInput().value).toBe("");
+  });
 });
