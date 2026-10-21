@@ -7,7 +7,7 @@ import { DEFAULT_OUTBOUND_POLICY } from "../shared/outbound.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
 import {
-  builtInWireOutbound, builtInWireTask, CHIEF_OF_STAFF_NAME, findMausBot, isMausBot, MAUSBOT_ASKS, MAUSBOT_FIXED, MAUSBOT_PERSONA, mausbotPatchRefusal, mausbotPersona, mausbotRoomRefusal, mausbotTeamRefusal, seedBots,
+  builtInWireOutbound, builtInWireTask, CHIEF_OF_STAFF_NAME, findMausBot, isMausBot, MAUSBOT_ASKS, MAUSBOT_FIXED, MAUSBOT_PERSONA, mausbotPatchRefusal, mausbotPersona, mausbotRoomRefusal, seedBots,
   SILVER_RESERVED,
 } from "./mausbot.ts";
 import { Store, type BotRecord } from "./store.ts";
@@ -160,18 +160,6 @@ describe("mausbotPatchRefusal", () => {
     expect(mausbotPatchRefusal(other, { color: "silver" })).toBe(SILVER_RESERVED);
     expect(mausbotPatchRefusal(null, { color: "silver" })).toBe(SILVER_RESERVED);
     expect(mausbotPatchRefusal(other, { color: "blue", name: "Tangerine", hidden: true, chiefOfStaff: true })).toBeNull();
-  });
-});
-
-describe("mausbotTeamRefusal", () => {
-  const mausbot = { id: "m", builtIn: "mausbot" } as BotRecord;
-  const other = { id: "o" } as BotRecord;
-
-  it("refuses putting MausBot in a team but allows taking it out and moving other bots", () => {
-    expect(mausbotTeamRefusal([other, mausbot], "Sales")).toBe(MAUSBOT_FIXED);
-    expect(mausbotTeamRefusal([mausbot], "")).toBeNull();
-    expect(mausbotTeamRefusal([mausbot], undefined)).toBeNull();
-    expect(mausbotTeamRefusal([other, undefined], "Sales")).toBeNull();
   });
 });
 

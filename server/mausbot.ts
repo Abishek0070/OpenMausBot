@@ -99,11 +99,6 @@ export function mausbotPatchRefusal(bot: BotRecord | null | undefined, body: obj
   return null;
 }
 
-export function mausbotTeamRefusal(bots: readonly (BotRecord | null | undefined)[], destination: string | undefined): string | null {
-  if (!destination?.trim()) return null;
-  return bots.some(isMausBot) ? MAUSBOT_FIXED : null;
-}
-
 export function mausbotRoomRefusal(members: readonly { id: string; builtIn?: string }[], existing: readonly string[]): string | null {
   return members.some((bot) => isMausBot(bot) && !existing.includes(bot.id)) ? MAUSBOT_FIXED : null;
 }

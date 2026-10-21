@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { WireBot } from "../../shared/wire.ts";
-import { mausbotTeamRefusal } from "../mausbot.ts";
+import { isMausBot } from "../mausbot.ts";
 import type { BotRecord, Store } from "../store.ts";
 import type { TeamComputers } from "../team-computers.ts";
 import { PASS, type RouteHandler } from "./table.ts";
@@ -21,6 +21,8 @@ export function createSidebarSectionRoutes(deps: SidebarSectionRouteDeps): Route
     name: z.string(),
     botIds: z.array(z.string().regex(/^[\w-]+$/)).max(MAX_WORKSPACE_BOTS).default([]),
   }).strict();
+  // A phone's Select all lists MausBot with the rest; it stays where it is and the others go.
+  const withoutMausBot = (ids: readonly string[]): string[] => ids.filter((id) => !isMausBot(store.bot(id)));
 
   return async ({ req, res, url, path, method, json, readBody }) => {
     if (path === "/api/sidebar-sections" && method === "GET") {
@@ -46,15 +48,14 @@ export function createSidebarSectionRoutes(deps: SidebarSectionRouteDeps): Route
       const ids = z.array(z.string().regex(/^[\w-]+$/)).max(MAX_WORKSPACE_BOTS);
       const parsed = z.object({ addBotIds: ids, removeBotIds: ids }).strict().safeParse(await readBody(req));
       if (!parsed.success) return json(res, 400, { error: "Provide addBotIds and removeBotIds" });
-      const teamRefusal = mausbotTeamRefusal(parsed.data.addBotIds.map((id) => store.bot(id)), section);
-      if (teamRefusal) return json(res, 409, { error: teamRefusal });
-      for (const [botIds, destination] of [[parsed.data.addBotIds, section], [parsed.data.removeBotIds, undefined]] as const) {
+      const addBotIds = withoutMausBot(parsed.data.addBotIds), removeBotIds = withoutMausBot(parsed.data.removeBotIds);
+      for (const [botIds, destination] of [[addBotIds, section], [removeBotIds, undefined]] as const) {
         for (const id of botIds) {
           const bot = store.bot(id);
           if (bot) assertTeamComputerChangeIdle(bot, { ...bot, section: destination });
         }
       }
-      const result = store.updateTeamMembers(section, parsed.data.addBotIds, parsed.data.removeBotIds);
+      const result = store.updateTeamMembers(section, addBotIds, removeBotIds);
       if (!result.ok) return json(res, result.reason === "unavailable" ? 404 : 409, { error:
         result.reason === "chief-conflict" ? "A team can have only one Chief of Staff. Change the Chief before moving this bot."
           : result.reason === "membership-changed" ? "Team membership changed. Reopen the dialog and try again."
@@ -70,10 +71,8 @@ export function createSidebarSectionRoutes(deps: SidebarSectionRouteDeps): Route
       if (name.length > 60) {
         return json(res, 400, { error: "name must be at most 60 characters" });
       }
-      const botIds = [...new Set(parsed.data.botIds)];
+      const botIds = withoutMausBot([...new Set(parsed.data.botIds)]);
       if (!name && !botIds.length) return json(res, 400, { error: "Team name is required" });
-      const teamRefusal = mausbotTeamRefusal(botIds.map((id) => store.bot(id)), name);
-      if (teamRefusal) return json(res, 409, { error: teamRefusal });
       for (const botId of botIds) {
         const bot = store.bot(botId);
         if (bot) assertTeamComputerChangeIdle(bot, { ...bot, section: name || undefined });

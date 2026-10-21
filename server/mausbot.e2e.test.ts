@@ -193,10 +193,18 @@ it("keeps MausBot's name, look, place, access and life, keeps silver for it, and
   expect((await s.api("PATCH", `/api/bots/${mausbot.id}/tasks/${task.threadId}`, { approvalMode: "full" })).status).toBe(409);
   expect((await s.api("PATCH", `/api/bots/${mausbot.id}/tasks/${task.threadId}`, { approvalMode: "custom" })).status).toBe(409);
 
-  // A team and a room refuse it, and a room that already holds it can still let it go.
-  expect((await s.api("POST", "/api/sidebar-sections", { name: "Sales", botIds: [mausbot.id] })).status).toBe(409);
-  expect((await s.api("POST", "/api/sidebar-sections", { name: "Sales", botIds: [other.id] })).status).toBe(200);
-  expect((await s.api("PUT", "/api/sidebar-sections?section=Sales", { addBotIds: [mausbot.id], removeBotIds: [] })).status).toBe(409);
+  // A team request leaves MausBot where it is and takes the rest, so a phone's Select all still makes the team.
+  const sales = await s.api("POST", "/api/sidebar-sections", { name: "Sales", botIds: [other.id, mausbot.id] });
+  expect(sales.status, JSON.stringify(sales.body)).toBe(200);
+  expect(sales.body.bots.map((bot: any) => bot.id)).toEqual([other.id]);
+  const alone = await s.api("POST", "/api/sidebar-sections", { name: "Support", botIds: [mausbot.id] });
+  expect(alone.status, JSON.stringify(alone.body)).toBe(200);
+  expect(alone.body).toMatchObject({ section: "Support", bots: [] });
+  expect(alone.body.sections).toEqual(expect.arrayContaining(["Sales", "Support"]));
+  const moved = await s.api("PUT", "/api/sidebar-sections?section=Sales", { addBotIds: [mausbot.id], removeBotIds: [mausbot.id] });
+  expect(moved.status, JSON.stringify(moved.body)).toBe(200);
+  expect(moved.body.bots).toEqual([]);
+  // A room refuses it, and a room that already holds it can still let it go.
   expect((await s.api("POST", "/api/groups", { name: "Room", memberIds: [chief.id, mausbot.id] })).status).toBe(409);
   const room = (await s.api("POST", "/api/groups", { name: "Room", memberIds: [chief.id, other.id] })).body.group;
   expect((await s.api("PATCH", `/api/groups/${room.id}`, { memberIds: [chief.id, other.id, mausbot.id] })).status).toBe(409);
