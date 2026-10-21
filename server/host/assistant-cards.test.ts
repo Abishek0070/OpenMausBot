@@ -387,7 +387,7 @@ describe("the daily brief", () => {
     const routine = (n: number) => ({ name: "\u{1F680}".repeat(120), status: "failed" as const, line: "\u{1F680}".repeat(70), open: { botId: long(40), threadId: `${n}${long(127)}` } });
     const at = (n: number) => ({ title: long(2_000), start: meeting.start + n, accounts: long(1_000) });
     const facts: BriefFacts = {
-      now: NOW, timeZone: ZONE, repliesChecking: true,
+      now: NOW, timeZone: ZONE, repliesChecking: true, unreachable: true,
       missing: many((n) => ({ account: `${n}${long(400)}`, what: n % 2 ? "email" as const : "calendar" as const })),
       repliesUnreadable: many((n) => ({ account: `${n}${long(400)}`, count: 999 })),
       replies: many(email), failedRoutines: many(routine), clashes: many((n) => ({ first: at(n), second: at(n + 1) })),
@@ -396,6 +396,7 @@ describe("the daily brief", () => {
     };
     for (const built of [briefCard(facts), briefCard({ ...facts, replies: [], failedRoutines: [], clashes: [] }), briefFallbackCard(facts)]) {
       const { root } = valid(built);
+      for (const line of ["Couldn't reach your connected apps.", "999 emails waiting in 0x"]) expect(JSON.stringify(root)).toContain(line);
       expect(JSON.stringify(root).length, JSON.stringify(root).length.toString()).toBeLessThan(WIDGET_LIMITS.bytes - 2_000);
       strings(root).forEach(noLoneSurrogate);
     }
