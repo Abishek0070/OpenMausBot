@@ -180,15 +180,35 @@ describe("createMausBotHost", () => {
     expect(w.host.pressRecords(w.mausbot, { type: "prep_notes", payload: { eventId: "not-on-the-calendar" } })).toBeNull();
   });
 
+  const serverBrief = (w: ReturnType<typeof setup>): string =>
+    w.store.appendMessage(w.mausbot.threadId, { role: "bot", kind: "widget", text: "Daily brief", widget: { v: 1, root: { type: "Card", id: "root", children: [] } as never }, serverCard: true }).id;
+
   it("answers a Dismiss on MausBot's brief itself for the owner or an admin, refuses a member, and leaves every other press alone", () => {
     const w = setup();
+    const brief = serverBrief(w);
     const dismiss = { type: "dismiss_email", payload: { messageId: "m1", account: "g1" } };
-    expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, "brief-1", dismiss, owner)).toBe("handled");
-    expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, "brief-1", dismiss, member)).toBe("refused");
+    expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, brief, dismiss, owner)).toBe("handled");
+    expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, brief, dismiss, member)).toBe("refused");
     expect(w.host.serverPress(w.scout, w.scout.threadId, "card-1", dismiss, owner)).toBeNull();
-    expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, "brief-1", { type: "draft_reply", payload: { messageId: "m1", account: "g1" } }, owner)).toBeNull();
-    expect(w.store.messagesFor(w.mausbot.threadId)).toEqual([]);
+    expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, brief, { type: "draft_reply", payload: { messageId: "m1", account: "g1" } }, owner)).toBeNull();
+    expect(w.store.messagesFor(w.mausbot.threadId).map((row) => row.id)).toEqual([brief]);
     expect(w.started).toEqual([]);
+  });
+
+  it("answers a Dismiss on MausBot's brief with the switch off and before the intro, starting no turn, and leaves it to MausBot on a hosted workspace", () => {
+    const dismiss = { type: "dismiss_email", payload: { messageId: "m1", account: "g1" } };
+    const off = setup();
+    off.switchOff();
+    const quiet = setup({ introduced: false });
+    for (const w of [off, quiet]) {
+      const brief = serverBrief(w);
+      const before = structuredClone(w.store.messagesFor(w.mausbot.threadId));
+      expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, brief, dismiss, owner)).toBe("handled");
+      expect(w.store.messagesFor(w.mausbot.threadId)).toEqual(before);
+      expect(w.started).toEqual([]);
+    }
+    const hosted = setup({ hosted: true });
+    expect(hosted.host.serverPress(hosted.mausbot, hosted.mausbot.threadId, serverBrief(hosted), dismiss, owner)).toBeNull();
   });
 
   it("moves routine runs to MausBot's brief on a single-person install with no sign-in, whoever can see the recap's poster", () => {

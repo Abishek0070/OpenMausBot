@@ -881,12 +881,41 @@ describe("the daily brief", () => {
     expect(day.briefs()[0]!.widget).toEqual(yesterday!.widget);
   });
 
-  it("posts no brief and answers no press with the switch off or on a hosted workspace", async () => {
+  it("posts no brief with the switch off or on a hosted workspace, and answers no press on a hosted one", async () => {
     for (const quiet of [world({ hosted: true }), (() => { const off = world(); off.switchOff(); return off; })()]) {
       quiet.watch.onPresence({ source: "desktop", returned: false }); await quiet.settle();
       expect(quiet.titles()).toEqual([]);
-      expect(quiet.watch.serverPress("m-main", "any", { type: "dismiss_email", payload: { messageId: "x", account: "g1" } }, owner)).toBeNull();
     }
+    const hosted = world({ hosted: true });
+    const card = hosted.store.appendMessage("m-main", { role: "bot", kind: "widget", text: "Daily brief", widget: { v: 1, root: { type: "Card", id: "root", children: [] } as never }, serverCard: true });
+    expect(hosted.watch.serverPress("m-main", card.id, { type: "dismiss_email", payload: { messageId: "x", account: "g1" } }, owner)).toBeNull();
+  });
+
+  it("answers a Dismiss on its brief with the switch off, or before the intro, with no turn: the email leaves state and the card stays as it was", async () => {
+    const day = world({ emails: [mail("waiting-1", NOW - HOUR)] });
+    const waiting: PendingEmail = { account: "g1", messageId: "waiting-1", threadId: "thread-waiting-1", judgedAt: NOW - HOUR, needsReply: true };
+    day.watch.state.patch({ ...SEEN, pendingEmails: [waiting] });
+    day.watch.onPresence({ source: "desktop", returned: false }); await day.settle();
+    const [brief] = day.briefs();
+    const shown = structuredClone(brief!.widget);
+    const jobs = day.runJob.mock.calls.length;
+    day.switchOff();
+    const press = { type: "dismiss_email", payload: { messageId: "waiting-1", account: "g1" } };
+    expect(day.watch.serverPress("m-main", brief!.id, press, member)).toBe("refused");
+    expect(day.watch.serverPress("m-main", brief!.id, press, owner)).toBe("handled");
+    expect(day.watch.state.get().pendingEmails ?? []).toEqual([]);
+    expect(day.briefs()[0]!.widget).toEqual(shown);
+    expect(day.runJob).toHaveBeenCalledTimes(jobs);
+  });
+
+  it("leaves a Dismiss pressed on a widget a MausBot turn drew to MausBot, as an ordinary press", async () => {
+    const day = world();
+    const waiting: PendingEmail = { account: "g1", messageId: "waiting-1", threadId: "thread-waiting-1", judgedAt: NOW - HOUR, needsReply: true };
+    day.watch.state.patch({ ...SEEN, pendingEmails: [waiting] });
+    const drawn = day.store.appendMessage("m-main", { role: "bot", kind: "widget", text: "Waiting on you", widget: { v: 1, root: { type: "Card", id: "root", children: [] } as never } });
+    expect(day.watch.serverPress("m-main", drawn.id, { type: "dismiss_email", payload: { messageId: "waiting-1", account: "g1" } }, owner)).toBeNull();
+    expect(day.watch.serverPress("m-main", "no-such-card", { type: "dismiss_email", payload: { messageId: "waiting-1", account: "g1" } }, owner)).toBeNull();
+    expect(day.watch.state.get().pendingEmails).toEqual([waiting]);
   });
 
   it("lists today's timed meetings in Your day with their prep status, a solo block as Just you, and no all-day event", async () => {

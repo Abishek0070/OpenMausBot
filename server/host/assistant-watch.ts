@@ -716,15 +716,17 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     return null;
   }
 
-  /** Security invariant: only the owner or an admin may dismiss, and only on MausBot's main thread; the press starts no
-   * turn. Null for any other press, which then goes to MausBot as usual. */
+  /** Security invariant: only the owner or an admin may dismiss, only on a card the server built in MausBot's main
+   * thread, and never on a hosted workspace; the press starts no turn, and with the watcher off it edits nothing. Null for
+   * any other press, which then goes to MausBot as usual. */
   function serverPress(threadId: string, pressedCard: string, action: { type: string; payload?: unknown }, auth: RequestAuth): "handled" | "refused" | null {
-    const here = context();
-    if (!here || action.type !== DISMISS_ACTION || threadId !== here.threadId) return null;
+    const bot = deps.hosted || action.type !== DISMISS_ACTION ? null : deps.mausbot();
+    if (!bot || threadId !== deps.mainThread(bot) || deps.store.messagesFor(threadId).find((row) => row.id === pressedCard)?.serverCard !== true) return null;
     if (!ownerOrAdmin(auth)) return "refused";
     const payload = action.payload && typeof action.payload === "object" ? action.payload as Record<string, unknown> : {};
     const { account, messageId } = payload;
-    if (typeof account === "string" && typeof messageId === "string") quietly("an email was not dismissed", () => brief.dismiss(account, messageId, { messageId: pressedCard, threadId }));
+    if (typeof account !== "string" || typeof messageId !== "string") return "handled";
+    quietly("an email was not dismissed", () => (context() ? brief.dismiss(account, messageId, { messageId: pressedCard, threadId }) : brief.forget(account, messageId)));
     return "handled";
   }
 
