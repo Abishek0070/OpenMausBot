@@ -430,7 +430,8 @@ describe("the daily brief", () => {
   });
 
   it("falls back to the same sections as plain text with no buttons", () => {
-    const fallback = briefFallbackCard({ ...full, missing: [{ account: "admin@example.test", what: "calendar" }], repliesChecking: true });
+    const facts: BriefFacts = { ...full, missing: [{ account: "admin@example.test", what: "calendar" }], repliesChecking: true };
+    const fallback = briefFallbackCard(facts);
     const { root, actions } = valid(fallback);
     expect(actions).toEqual([]);
     expect(root.title).toBe("Daily brief");
@@ -440,7 +441,7 @@ describe("the daily brief", () => {
       expect(text).toContain(shown);
     }
     expect(nodeTypes(root)).not.toContain("Button");
-    expect(fallback.summary).toBe(briefCard(full).summary);
+    expect(fallback.summary).toBe(briefCard(facts).summary);
   });
 
   it("summarises the brief in one short line", () => {
@@ -451,5 +452,14 @@ describe("the daily brief", () => {
     expect(briefCard({ ...empty, meetings: null }).summary).toBe("Daily brief: nothing needs you right now");
     const counted = briefCard({ ...empty, replies: Array.from({ length: 40 }, (_, n) => ({ ...reply, messageId: `m${n}` })) }).summary;
     expect(counted).toBe("Daily brief: 40 need you, 0 meetings");
+  });
+
+  it("never sums the brief up as nothing needing you while email is still being checked or an account could not be read", () => {
+    const missing: BriefFacts["missing"] = [{ account: "admin@example.test", what: "calendar" }, { account: "me@example.test", what: "email" }];
+    expect(briefCard({ ...empty, meetings: null, repliesChecking: true }).summary).toBe("Daily brief: checking your email…");
+    expect(briefCard({ ...empty, meetings: null, missing: missing.slice(0, 1) }).summary).toBe("Daily brief: 1 account unreadable");
+    expect(briefCard({ ...full, missing, repliesChecking: true }).summary)
+      .toBe("Daily brief: 2 accounts unreadable, 3 need you, checking your email…, 2 meetings, 1 important email, 1 routine result");
+    expect(briefFallbackCard({ ...empty, meetings: null, repliesChecking: true }).summary).toBe("Daily brief: checking your email…");
   });
 });

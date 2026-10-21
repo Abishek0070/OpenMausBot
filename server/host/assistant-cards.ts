@@ -331,7 +331,9 @@ function buildBrief(facts: BriefFacts, presses: boolean): BuiltCard {
     ...(routineRows.length ? briefSection("Routines", routineRows, facts.routines.length) : []),
   ];
   const parts = [
+    facts.missing.length && `${plural(facts.missing.length, "account")} unreadable`,
     needs.length && `${needs.length} ${needs.length === 1 ? "needs" : "need"} you`,
+    facts.repliesChecking && CHECKING_EMAIL.toLowerCase(),
     facts.meetings === "checking" ? "checking your calendar…" : facts.meetings && plural(facts.meetings.length, "meeting"),
     facts.important.length && plural(facts.important.length, "important email"),
     facts.routines.length && plural(facts.routines.length, "routine result"),
