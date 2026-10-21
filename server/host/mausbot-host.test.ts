@@ -53,7 +53,7 @@ describe("assistantCheckMs", () => {
 /** A calendar with one meeting an hour out, served the way Composio's multi-execute tool answers. */
 function connectedApps(): MausBotHostDeps["composio"] {
   const event = {
-    id: "demo-1", status: "confirmed", summary: "Supamaus demo with Jake",
+    id: "demo-1", iCalUID: "demo-1", status: "confirmed", summary: "Supamaus demo with Jake",
     start: { dateTime: new Date(Date.now() + HOUR).toISOString() }, end: { dateTime: new Date(Date.now() + 2 * HOUR).toISOString() },
     attendees: [{ email: "me@example.test", self: true }, { email: "jake@pin.example", displayName: "Jake Price" }],
   };

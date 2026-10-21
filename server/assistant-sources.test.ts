@@ -10,7 +10,6 @@ import {
   createComposioSources,
   emailsFromData,
   eventsFromData,
-  firstAccountSources,
   GMAIL_FETCH_TOOL,
   GMAIL_HEADERS_OPTION,
   GMAIL_MESSAGE_TOOL,
@@ -451,31 +450,5 @@ describe("createComposioSources", () => {
   it("a refusal to pick an account is that account's read failure, never empty data", async () => {
     const { sources } = google({ answer: () => ({ successful: false, error: "Multiple connected accounts found for gmail. Specify which account to use." }) });
     await expect(sources.emails(G1, 0, 5)).rejects.toMatchObject({ name: "SourceError", service: "gmail", account: "ca_g1" });
-  });
-});
-
-describe("firstAccountSources", () => {
-  it("reads the first active account of each service for a single-account reader", async () => {
-    const { sources, toolItems } = google({ connectedServices: async () => ({
-      gmail: { connected: true, accounts: [{ id: "ca_g0", status: "EXPIRED" }, { id: "ca_g1", status: "ACTIVE" }] },
-      googlecalendar: { connected: true, accounts: [{ id: "ca_c1", status: "ACTIVE" }] },
-    }) });
-    const single = firstAccountSources(sources);
-    expect(await single.connected()).toEqual({ gmail: true, googlecalendar: true });
-    await single.emails(0, 5);
-    expect(toolItems().at(-1)?.[ACCOUNT_PARAM]).toBe("ca_g1");
-    await single.events(0, 1);
-    expect(toolItems().at(-1)?.[ACCOUNT_PARAM]).toBe("ca_c1");
-    await single.mailFrom(["ada@pin.example"], 0);
-    expect(toolItems().at(-1)).toMatchObject({ tool_slug: GMAIL_FETCH_TOOL, [ACCOUNT_PARAM]: "ca_g1" });
-  });
-
-  it("reports no service as connected without an active account, null when listing fails, and refuses to read a service with none", async () => {
-    const none = firstAccountSources(google({ connectedServices: async () => ({ gmail: { connected: false, accounts: [{ id: "ca_g0", status: "EXPIRED" }] } }) }).sources);
-    expect(await none.connected()).toEqual({ gmail: false, googlecalendar: false });
-    await expect(none.emails(0, 5)).rejects.toMatchObject({ name: "SourceError", service: "gmail" });
-    await expect(none.events(0, 1)).rejects.toMatchObject({ name: "SourceError", service: "googlecalendar" });
-    const down = firstAccountSources(google({ connectedServices: async () => { throw new Error("down"); } }).sources);
-    expect(await down.connected()).toBeNull();
   });
 });

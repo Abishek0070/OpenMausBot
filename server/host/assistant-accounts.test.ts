@@ -8,7 +8,6 @@ import { removeTempDir } from "../testing/cleanup.ts";
 import { accountLabel, createAssistantAccounts, disconnectedText, reconnectText, type AssistantAccounts } from "./assistant-accounts.ts";
 import { prunePending } from "./assistant-plan.ts";
 import { createAssistantState, MAX_ACCOUNTS, MAX_ADDRESS_LENGTH, MAX_ID_LENGTH, type AssistantStatePatch, type PendingEmail } from "./assistant-state.ts";
-import { DISCONNECTED_TEXT, RECONNECT_TEXT } from "./assistant-watch.ts";
 
 const MINUTE = 60_000;
 const CHECK_MS = 15 * MINUTE;
@@ -179,10 +178,10 @@ describe("createAssistantAccounts", () => {
   });
 
   it("keeps today's Reconnect wording for an implied account with no address", () => {
-    expect(reconnectText("gmail")).toBe(RECONNECT_TEXT.gmail);
-    expect(reconnectText("googlecalendar")).toBe(RECONNECT_TEXT.googlecalendar);
-    expect(disconnectedText("gmail")).toBe(DISCONNECTED_TEXT.gmail);
-    expect(disconnectedText("googlecalendar")).toBe(DISCONNECTED_TEXT.googlecalendar);
+    expect(reconnectText("gmail")).toBe("Reconnect Gmail: I couldn't read your email three times in a row.");
+    expect(reconnectText("googlecalendar")).toBe("Reconnect Calendar: I couldn't read your calendar three times in a row.");
+    expect(disconnectedText("gmail")).toBe("Reconnect Gmail: your Gmail connection stopped working, so I can't read your email.");
+    expect(disconnectedText("googlecalendar")).toBe("Reconnect Calendar: your Google Calendar connection stopped working, so I can't read your calendar.");
   });
 
   it("names the account in its Reconnect wording", () => {
@@ -199,7 +198,7 @@ describe("createAssistantAccounts", () => {
     expect(w.state.get().accounts?.gmail).toMatchObject({ service: "gmail", implied: true, connectedSeen: true });
     w.listed = [{ ...IMPLIED_GMAIL, active: false }, C1];
     await w.accounts.refresh();
-    expect(w.reconnect.mock.calls).toEqual([[{ ...IMPLIED_GMAIL, active: false }, undefined, DISCONNECTED_TEXT.gmail]]);
+    expect(w.reconnect.mock.calls).toEqual([[{ ...IMPLIED_GMAIL, active: false }, undefined, disconnectedText("gmail")]]);
   });
 
   it("names no account for a service that was never connected", async () => {
@@ -420,7 +419,7 @@ describe("createAssistantAccounts", () => {
     w.listed = [IMPLIED_GMAIL, C1];
     await w.accounts.refresh();
     for (let n = 0; n < 3; n++) { await w.accounts.read(IMPLIED_GMAIL, failing, true); w.tick(CHECK_MS); }
-    expect(w.reconnect.mock.calls).toEqual([[IMPLIED_GMAIL, undefined, RECONNECT_TEXT.gmail]]);
+    expect(w.reconnect.mock.calls).toEqual([[IMPLIED_GMAIL, undefined, reconnectText("gmail")]]);
   });
 
   it("labels a Reconnect card from the stored record, not from the account it was handed", async () => {

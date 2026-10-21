@@ -51,8 +51,6 @@ const accountRecordSchema = z.object({
 
 const pendingEmailSchema = z.object({ account: id, messageId: id, threadId: id, judgedAt: at, needsReply: z.boolean() }).strict();
 
-const perService = <T extends z.ZodType>(value: T) => z.object({ gmail: value.optional(), googlecalendar: value.optional() }).strict();
-
 export const assistantStateSchema = z.object({
   version: z.literal(2),
   accounts: z.record(id, accountRecordSchema).refine((accounts) => Object.keys(accounts).length <= MAX_ACCOUNTS).optional(),
@@ -60,18 +58,10 @@ export const assistantStateSchema = z.object({
   lastBriefDate: day.optional(),
   lastBriefAt: at.optional(),
   meetings: z.record(id, meetingSchema).optional(),
-  /** Gmail is asked for mail after this time on the next check. */
-  emailCursor: at.optional(),
-  /** Gmail message ids already judged, newest last. */
-  judged: z.array(id).max(MAX_JUDGED).optional(),
   lastTriageAt: at.optional(),
   lastTodayDate: day.optional(),
   turnDay: day.optional(),
   dayTurns: z.number().int().min(0).optional(),
-  failures: perService(z.number().int().min(0)).optional(),
-  reconnectShown: perService(z.boolean()).optional(),
-  /** Seen connected since its last Reconnect card for a lost connection. */
-  connectedSeen: perService(z.boolean()).optional(),
   notices: z.object({ noWebSearch: z.boolean().optional(), noConnectorTools: z.boolean().optional() }).strict().optional(),
   /** AI jobs started and not finished; after a restart each becomes one error card with Retry. */
   inFlight: z.array(z.object({ item, at }).strict()).max(MAX_IN_FLIGHT).optional(),

@@ -1,6 +1,6 @@
 import type { RuntimeEvent } from "../../shared/runtime-events.ts";
 import type { WidgetAction } from "../../shared/widget.ts";
-import { createComposioSources, firstAccountSources } from "../assistant-sources.ts";
+import { createComposioSources } from "../assistant-sources.ts";
 import { assistantActsEnabled } from "../brief-settings.ts";
 import type * as Composio from "../composio.ts";
 import type { AppConfig } from "../config.ts";
@@ -74,11 +74,11 @@ export function createMausBotHost(deps: MausBotHostDeps) {
       const engine = deps.registry.get(bot.modelSelection.instanceId)?.adapter.capabilities;
       return { agentsTools: engine?.agentsMcp === true, mailTools: engine?.composioMcp === true };
     },
-    sources: firstAccountSources(createComposioSources({
+    sources: createComposioSources({
       configured: () => composio.configured(cfg),
       connectedServices: () => composio.connectedServices(cfg),
       relay: (payload, session, signal) => composio.relayMcp(cfg, payload as Parameters<typeof composio.relayMcp>[1], session, undefined, signal),
-    })),
+    }),
     runJob: (bot, title, prompt) => turns.run(bot.id, title, prompt),
     noteCard: (card) => brief.noteAssistantCard(card),
     team: (since) => brief.teamLine(since),

@@ -3,15 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SourceError, type CalendarEvent, type EmailHeader } from "../assistant-sources.ts";
+import { SourceError, type CalendarEvent, type EmailHeader, type SourceAccount, type ThreadMessage } from "../assistant-sources.ts";
 import type { BotVisibility } from "../bot-visibility.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
-import { fingerprint } from "./assistant-plan.ts";
-import { MAX_JUDGED } from "./assistant-state.ts";
+import { disconnectedText, reconnectText } from "./assistant-accounts.ts";
+import { fingerprint, meetingKey } from "./assistant-plan.ts";
+import { MAX_JUDGED, type AssistantStatePatch } from "./assistant-state.ts";
 import type { JobResult } from "./assistant-turns.ts";
-import { createAssistantWatch, DISCONNECTED_TEXT, NO_CONNECTOR_TOOLS, NO_WEB_SEARCH, RECONNECT_TEXT, RETRY, TODAY_FAILED, type AssistantWatchDeps } from "./assistant-watch.ts";
+import { createAssistantWatch, NO_CONNECTOR_TOOLS, NO_WEB_SEARCH, RETRY, TODAY_FAILED, type AssistantWatchDeps } from "./assistant-watch.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -20,12 +21,21 @@ const owner: RequestAuth = { kind: "loopback", scopes: ["admin", "client"] };
 const member: RequestAuth = { kind: "session", scopes: ["client"], via: "cookie", session: {} as never };
 const ME = { email: "me@example.test", self: true, organizer: true };
 const JAKE = { email: "jake@pin.example", name: "Jake Price", self: false, organizer: false };
+const ADMIN = "admin@example.test";
+const G1: SourceAccount = { service: "gmail", id: "g1", active: true };
+const G2: SourceAccount = { service: "gmail", id: "g2", active: true };
+const C1: SourceAccount = { service: "googlecalendar", id: "c1", active: true };
+const C2: SourceAccount = { service: "googlecalendar", id: "c2", active: true };
+/** g1 and c1 as an earlier run left them: seen connected, with their address. */
+const SEEN: AssistantStatePatch = {
+  accounts: { g1: { service: "gmail", address: "me@example.test", connectedSeen: true }, c1: { service: "googlecalendar", address: "me@example.test", connectedSeen: true } },
+};
 const dirs: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) await removeTempDir(dir); });
 
 const meeting = (id: string, start: number, more: Partial<CalendarEvent> = {}): CalendarEvent => ({
-  id, title: `Meeting ${id}`, start, end: start + 30 * MINUTE, allDay: false, status: "confirmed", selfDeclined: false, attendees: [ME, JAKE],
-  joinUrl: "https://meet.google.com/abc-defg-hij", ...more,
+  id, iCalUID: id, title: `Meeting ${id}`, start, end: start + 30 * MINUTE, allDay: false, status: "confirmed", selfDeclined: false, attendees: [ME, JAKE],
+  joinUrl: "https://meet.google.com/abc-defg-hij", calendarId: "me@example.test", ownedCalendar: true, ...more,
 });
 const mail = (id: string, at: number): EmailHeader => ({ id, account: "g1", threadId: `thread-${id}`, at, from: `${id} <${id}@example.test>`, subject: `Subject ${id}`, preview: `Preview ${id}` });
 
@@ -49,7 +59,9 @@ function gate(): { closed: Promise<void>; open(): void } {
 }
 
 function world(options: {
-  events?: CalendarEvent[]; emails?: EmailHeader[]; connected?: { gmail: boolean; googlecalendar: boolean } | null;
+  /** c1's events and g1's mail; other accounts' go in `live.calendars` and `live.inboxes`. */
+  events?: CalendarEvent[]; emails?: EmailHeader[]; listed?: SourceAccount[] | null;
+  /** The first `live.reply`. */
   reply?: (title: string, prompt: string) => JobResult | Promise<JobResult>; hosted?: boolean; tools?: { agentsTools: boolean; mailTools: boolean };
   notifications?: boolean; team?: ReturnType<AssistantWatchDeps["team"]>; threads?: Record<string, Owner>; visibility?: BotVisibility;
   connectorTools?: BotRecord["connectorTools"];
@@ -63,11 +75,19 @@ function world(options: {
   let zone = "Asia/Kolkata";
   let enabled = true;
   const live = {
+    listed: (options.listed === undefined ? [G1, C1] : options.listed) as SourceAccount[] | null,
+    addresses: { g1: "me@example.test", c1: "me@example.test" } as Record<string, string>,
     events: options.events ?? [], emails: options.emails ?? [], arrivals: options.arrivals ?? {},
-    connected: options.connected === undefined ? { gmail: true, googlecalendar: true } : options.connected,
+    calendars: {} as Record<string, CalendarEvent[]>, inboxes: {} as Record<string, EmailHeader[]>, threads: {} as Record<string, ThreadMessage[]>,
+    /** Accounts whose every read fails. */
+    broken: new Set<string>(),
     calendarFailures: 0, newMailFromAttendees: false,
+    reply: options.reply ?? defaultReply,
     refuseAppend: undefined as ((message: Omit<Message, "id" | "at">) => boolean) | undefined,
   };
+  const eventsOf = (id: string): CalendarEvent[] => live.calendars[id] ?? (id === "c1" ? live.events : []);
+  const emailsOf = (id: string): EmailHeader[] => (live.inboxes[id] ?? (id === "g1" ? live.emails : [])).map((email) => ({ ...email, account: id }));
+  const refuse = (account: SourceAccount): void => { if (live.broken.has(account.id)) throw new SourceError(account.service, "token expired", account.id); };
   const messages: Message[] = [];
   const tasks = new Map<string, { routineRunId?: string }>([["m-main", {}], ["scout-main", {}]]);
   const bot = { id: "m", name: "MausBot", threadId: "m-main", builtIn: "mausbot", color: "silver", visibility: options.visibility ?? "admins", notifications: options.notifications ?? true, connectorTools: options.connectorTools } as BotRecord;
@@ -94,13 +114,20 @@ function world(options: {
     tasks: () => [...tasks].map(([threadId, task]) => ({ threadId, ...task })),
   };
   const sources = {
-    connected: vi.fn(async () => live.connected),
-    events: vi.fn(async () => {
-      if (live.calendarFailures > 0) { live.calendarFailures -= 1; throw new SourceError("googlecalendar", "token expired"); }
-      return live.events;
+    accounts: vi.fn(async () => live.listed),
+    address: vi.fn(async (account: SourceAccount) => live.addresses[account.id] ?? null),
+    events: vi.fn(async (account: SourceAccount, _fromMs: number, _toMs: number) => {
+      refuse(account);
+      if (live.calendarFailures > 0) { live.calendarFailures -= 1; throw new SourceError("googlecalendar", "token expired", account.id); }
+      return eventsOf(account.id);
     }),
-    emails: vi.fn(async (since: number) => live.emails.filter((email) => (live.arrivals[email.id] ?? email.at) >= since)),
-    mailFrom: vi.fn(async () => live.newMailFromAttendees),
+    emails: vi.fn(async (account: SourceAccount, since: number, _limit: number) => {
+      refuse(account);
+      return emailsOf(account.id).filter((email) => (live.arrivals[email.id] ?? email.at) >= since);
+    }),
+    mailFrom: vi.fn(async (_account: SourceAccount, _addresses: readonly string[], _sinceMs: number) => live.newMailFromAttendees),
+    message: vi.fn(async (account: SourceAccount, messageId: string) => emailsOf(account.id).find((email) => email.id === messageId) ?? null),
+    thread: vi.fn(async (account: SourceAccount, threadId: string) => live.threads[`${account.id}/${threadId}`] ?? []),
   };
   const jobs: Array<{ title: string; prompt: string }> = [];
   let jobThreads = 0;
@@ -108,7 +135,7 @@ function world(options: {
     jobs.push({ title, prompt });
     const threadId = `job-${++jobThreads}`;
     tasks.set(threadId, { routineRunId: `mausbot-${threadId}` });
-    return { ...(await (options.reply ?? defaultReply)(title, prompt)), threadId };
+    return { ...(await live.reply(title, prompt)), threadId };
   });
   const notify = vi.fn();
   const noteCard = vi.fn();
@@ -122,12 +149,13 @@ function world(options: {
     ...options.deps,
   });
   const watch = make();
-  const widgets = () => messages.filter((line) => line.kind === "widget").map((line) => line.widget!.root as unknown as { title: string });
+  const widgets = () => messages.filter((line) => line.kind === "widget").map((line) => line.widget!.root as unknown as { title: string; caption?: string });
   return {
     watch, make, live, store, sources, jobs, runJob, notify, noteCard, clocks, messages, tasks, dataDir,
     widgets,
     titles: () => widgets().map((card) => card.title),
     retries: () => messages.filter((line) => line.kind === "options" && line.card?.options.includes(RETRY)),
+    answerRetry: (row: Message) => watch.answerCard("m-main", row.card!.requestId!, "answer", RETRY, owner),
     todays: () => messages.filter((line) => line.kind === "widget" && (line.widget!.root as unknown as { title: string }).title === "Today"),
     texts: () => messages.filter((line) => line.kind === "text").map((line) => line.text),
     tick: (ms: number) => { now += ms; }, now: () => now, setZone: (next: string) => { zone = next; }, switchOff: () => { enabled = false; }, switchOn: () => { enabled = true; },
@@ -154,7 +182,7 @@ describe("meeting prep", () => {
   });
 
   it("gives a late booking the shorter brief at once, and leaves alone what does not qualify", async () => {
-    const w = world({ events: [meeting("late", NOW + HOUR), meeting("solo", NOW + HOUR, { attendees: [ME] }), meeting("declined", NOW + HOUR, { selfDeclined: true }), meeting("holiday", NOW + HOUR, { allDay: true })] });
+    const w = world({ events: [meeting("late", NOW + HOUR), meeting("solo", NOW + HOUR, { attendees: [ME] }), meeting("declined", NOW + HOUR, { selfDeclined: true, attendees: [{ ...ME, response: "declined" }, JAKE] }), meeting("holiday", NOW + HOUR, { allDay: true })] });
     await w.settle();
     expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting late"]);
     expect(w.jobs[0]!.prompt).toContain("keep it short");
@@ -168,7 +196,7 @@ describe("meeting prep", () => {
     quiet.watch.state.patch({ meetings: seed });
     await quiet.settle();
     expect(quiet.jobs).toEqual([]);
-    expect(quiet.sources.mailFrom).toHaveBeenCalledWith(["jake@pin.example"], earlier.start);
+    expect(quiet.sources.mailFrom).toHaveBeenCalledWith(G1, ["jake@pin.example"], earlier.start);
     const busy = world({ events: [next] });
     busy.watch.state.patch({ meetings: seed });
     busy.live.newMailFromAttendees = true;
@@ -183,10 +211,11 @@ describe("meeting prep", () => {
 
   it("marks a repeat as started and prepared, so the next check starts nothing", async () => {
     const earlier = meeting("w1", NOW - 7 * 24 * HOUR, { seriesId: "weekly" });
-    const w = world({ events: [meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" })] });
+    const next = meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" });
+    const w = world({ events: [next] });
     w.watch.state.patch({ meetings: { w1: { start: earlier.start, fingerprint: fingerprint(earlier), seriesId: "weekly", preppedAt: earlier.start - HOUR } } });
     await w.settle();
-    expect(w.watch.state.get().meetings?.w2).toMatchObject({ repeat: true, prepStartedAt: NOW, preppedAt: NOW });
+    expect(w.watch.state.get().meetings?.[meetingKey(next)]).toMatchObject({ repeat: true, prepStartedAt: NOW, preppedAt: NOW });
     w.tick(15 * MINUTE);
     await w.settle();
     expect(w.sources.mailFrom).toHaveBeenCalledTimes(1);
@@ -268,7 +297,7 @@ describe("email", () => {
   it("judges at most twenty new emails a turn, once per fifteen minutes, and cards only what matters", async () => {
     const recent = Array.from({ length: 25 }, (_, index) => mail(index === 3 ? "important-3" : index === 22 ? "important-22" : `plain-${index}`, NOW - (index + 1) * MINUTE));
     const w = world({ emails: [...recent, mail("ancient", NOW - 30 * HOUR)], arrivals: { ancient: NOW - MINUTE } });
-    w.watch.state.patch({ emailCursor: NOW - 2 * HOUR });
+    w.watch.state.patch({ accounts: { g1: { service: "gmail", connectedSeen: true, emailCursor: NOW - 2 * HOUR } } });
     await w.settle();
     expect(w.jobs.map((job) => job.title)).toEqual(["Email check"]);
     expect([...w.jobs[0]!.prompt.matchAll(/id (\S+) ·/g)]).toHaveLength(20);
@@ -283,13 +312,13 @@ describe("email", () => {
     w.tick(15 * MINUTE);
     await w.settle();
     expect(w.jobs).toHaveLength(2);
-    expect(w.watch.state.get().judged).toContain("ancient");
+    expect(w.watch.state.get().accounts?.g1?.judged).toContain("ancient");
   });
 
   it("never judges the backlog on a first run: it asks only for mail from one check back", async () => {
     const w = world({ emails: [mail("important-old", NOW - 2 * HOUR), mail("important-new", NOW - 5 * MINUTE)] });
     await w.settle();
-    expect(w.sources.emails).toHaveBeenCalledWith(NOW - 15 * MINUTE, expect.any(Number));
+    expect(w.sources.emails).toHaveBeenCalledWith(G1, NOW - 15 * MINUTE, expect.any(Number));
     expect(w.jobs[0]!.prompt).toContain("important-new");
     expect(w.jobs[0]!.prompt).not.toContain("important-old");
     expect(w.titles()).toEqual(["Subject important-new"]);
@@ -301,6 +330,140 @@ describe("email", () => {
     expect(w.jobs).toHaveLength(1);
     expect(w.widgets()).toEqual([]);
     expect(w.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("every account", () => {
+  /** g1 and c1 as me@example.test, plus c2 as admin@example.test holding a copy of the same meeting. */
+  const onTwoCalendars = (shared: CalendarEvent) => {
+    const w = world({ listed: [G1, C1, C2], events: [shared] });
+    w.live.addresses.c2 = ADMIN;
+    w.live.calendars.c2 = [{ ...shared, id: `${shared.id}-on-c2`, calendarId: ADMIN }];
+    return w;
+  };
+  const twoInboxes = (more: Parameters<typeof world>[0] = {}) => {
+    const w = world({ listed: [G1, G2, C1], ...more });
+    w.live.addresses.g2 = ADMIN;
+    return w;
+  };
+
+  it("reads every calendar account, and preps a meeting on two of them once, naming both accounts", async () => {
+    const w = onTwoCalendars(meeting("a", NOW + 2 * HOUR, { iCalUID: "uid-1" }));
+    await w.settle();
+    expect(w.sources.events.mock.calls.map(([account]) => account.id)).toEqual(["c1", "c2"]);
+    expect(w.jobs.filter((job) => job.title.startsWith("Prep: "))).toHaveLength(1);
+    expect(w.jobs[0]!.prompt).toContain("The person's Google accounts: me@example.test, admin@example.test.");
+    expect(w.widgets().find((card) => card.title.startsWith("Prep: "))).toMatchObject({ caption: expect.stringContaining("me@example.test, admin@example.test") });
+  });
+
+  it("judges new mail from every account in one email check, and cards an important one with its account", async () => {
+    const w = twoInboxes({ emails: [mail("important-1", NOW - MINUTE)] });
+    w.live.inboxes.g2 = [mail("important-2", NOW - 2 * MINUTE)];
+    await w.settle();
+    expect(w.jobs.filter((job) => job.title === "Email check")).toHaveLength(1);
+    expect(w.jobs[0]!.prompt).toContain("account admin@example.test");
+    expect(w.widgets().map((card) => card.caption)).toContain("From important-2 <important-2@example.test> · to admin@example.test");
+    expect(w.widgets().map((card) => card.caption)).toContain("From important-1 <important-1@example.test> · to me@example.test");
+  });
+
+  it("keeps each account's email cursor and judged ids, and Retry on an email check judges those emails again in each account", async () => {
+    const w = twoInboxes({ emails: [mail("important-1", NOW - 10 * MINUTE)], reply: () => ({ ok: true, threadId: "", reply: "I looked at your mail." }) });
+    w.live.inboxes.g2 = [mail("important-2", NOW - 5 * MINUTE)];
+    await w.settle();
+    expect(w.watch.state.get().accounts).toMatchObject({ g1: { judged: ["important-1"] }, g2: { judged: ["important-2"] } });
+    expect(w.answerRetry(w.retries()[0]!)).toBe("answered");
+    expect(w.watch.state.get().accounts?.g1?.judged ?? []).toEqual([]);
+    expect(w.watch.state.get().accounts?.g2?.judged ?? []).toEqual([]);
+    expect(w.watch.state.get().accounts?.g2?.emailCursor).toBeLessThanOrEqual(NOW - 10 * MINUTE);
+    w.live.reply = defaultReply;
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect(w.jobs.filter((job) => job.title === "Email check").at(-1)!.prompt).toMatch(/id important-1 .*\n.*id important-2|id important-2 .*\n.*id important-1/);
+    expect(w.titles()).toEqual(["Subject important-2", "Subject important-1"]);
+  });
+
+  it("answers a Draft a reply press with that email's own account, and never another's", async () => {
+    const w = twoInboxes({ emails: [mail("important-1", NOW - MINUTE)] });
+    w.live.inboxes.g2 = [mail("important-2", NOW - 2 * MINUTE)];
+    await w.settle();
+    expect(w.watch.pressRecords({ type: "draft_reply", payload: { messageId: "important-2", account: "g2" } }))
+      .toContain("Draft the reply from admin@example.test (connected account g2)");
+    expect(w.watch.pressRecords({ type: "draft_reply", payload: { messageId: "important-1", account: "g1" } }))
+      .toContain("Draft the reply from me@example.test (connected account g1)");
+    expect(w.watch.pressRecords({ type: "draft_reply", payload: { messageId: "important-2", account: "g1" } })).toBeNull();
+  });
+
+  it("counts one prep against the daily cap for a meeting on several accounts", async () => {
+    const w = onTwoCalendars(meeting("a", NOW + 2 * HOUR, { iCalUID: "uid-1" }));
+    await w.settle();
+    expect(w.watch.state.get().dayTurns).toBe(1);
+  });
+
+  it("keeps the key of a meeting with no iCalUID when a restart can read only one of its accounts, so it is not prepped again", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = onTwoCalendars(meeting("a", NOW + 2 * HOUR, { iCalUID: undefined }));
+    await w.settle();
+    w.live.broken.add("c1");
+    const restarted = w.make();
+    await restarted.check();
+    await restarted.idle();
+    expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a"]);
+    expect(restarted.state.get().dayTurns).toBe(1);
+  });
+
+  it("keeps an account's last events while it cannot be read, so its meeting still gets its reminder", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ listed: [G1, C1, C2] });
+    w.live.addresses.c2 = ADMIN;
+    w.live.calendars.c2 = [meeting("b", NOW + 3 * HOUR, { calendarId: ADMIN })];
+    await w.settle();
+    w.live.broken.add("c2");
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect(w.watch.state.get().accounts?.c2?.failures).toBe(1);
+    w.tick(3 * HOUR - 15 * MINUTE - 9 * MINUTE);
+    w.watch.reminders();
+    expect(w.titles()).toEqual(["Prep: Meeting b", "Call with Jake Price in 9 minutes"]);
+    expect(w.widgets().at(-1)?.caption).toContain("admin@example.test");
+  });
+
+  it("still reads the other accounts when one fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ listed: [G1, C1, C2], events: [meeting("a", NOW + 2 * HOUR)] });
+    w.live.addresses.c2 = ADMIN;
+    w.live.broken.add("c2");
+    await w.settle();
+    expect(w.titles()).toContain("Prep: Meeting a");
+    expect(w.sources.emails).toHaveBeenCalled();
+    expect(w.watch.state.get().accounts?.c2?.failures).toBe(1);
+  });
+
+  it("posts a Reconnect line and card naming the account, with its alias, after three failed reads of it", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ listed: [G1, C1, { ...C2, alias: "work" }] });
+    w.live.addresses.c2 = ADMIN;
+    w.live.broken.add("c2");
+    for (let check = 0; check < 4; check += 1) {
+      await w.settle();
+      w.tick(15 * MINUTE);
+    }
+    expect(w.texts()).toEqual([reconnectText("googlecalendar", ADMIN)]);
+    expect(w.messages.filter((line) => line.kind === "connector").map((line) => line.connector)).toEqual([expect.objectContaining({
+      slug: "googlecalendar", label: "Google Calendar", description: "Reconnect Google Calendar (admin@example.test) so MausBot can keep reading it.", status: "required", alias: "work",
+    })]);
+    expect(w.notify).toHaveBeenCalledWith(expect.objectContaining({ kind: "assistant", body: reconnectText("googlecalendar", ADMIN) }));
+  });
+
+  it("reads nothing for an account removed in Settings", async () => {
+    const w = world({ listed: [G1, C1, C2] });
+    w.live.addresses.c2 = ADMIN;
+    await w.settle();
+    w.live.listed = [G1, C1];
+    w.sources.events.mockClear();
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect(w.sources.events.mock.calls.map(([account]) => account.id)).toEqual(["c1"]);
+    expect(w.texts().some((text) => text?.startsWith("Reconnect"))).toBe(false);
   });
 });
 
@@ -327,7 +490,7 @@ describe("a prep that would start late", () => {
   it("drops a queued prep whose meeting started before its turn began, gives the turn back, and posts no error", async () => {
     const hold = gate();
     const w = world({
-      events: [meeting("first", NOW + 2 * HOUR), meeting("second", NOW + 30 * MINUTE)],
+      events: [meeting("first", NOW + 20 * MINUTE), meeting("second", NOW + 30 * MINUTE)],
       reply: async (title, prompt) => { if (title === "Prep: Meeting first") await hold.closed; return defaultReply(title, prompt); },
     });
     void w.watch.check();
@@ -457,7 +620,7 @@ describe("Today", () => {
     w.live.events = [meeting("b", w.now() + 6 * HOUR)];
     const connected = gate();
     const calendar = gate();
-    w.sources.connected.mockImplementationOnce(async () => { await connected.closed; return w.live.connected; });
+    w.sources.accounts.mockImplementationOnce(async () => { await connected.closed; return w.live.listed; });
     w.sources.events.mockImplementationOnce(async () => { await calendar.closed; return w.live.events; });
     const restarted = w.make();
     restarted.start();
@@ -484,7 +647,7 @@ describe("Today", () => {
   it("says on a waiting Today that the calendar could not be read, offers one Retry, and fills the card in once a read works", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const w = world({ events: [meeting("b", NOW + 6 * HOUR)] });
-    w.watch.state.patch({ connectedSeen: { gmail: true, googlecalendar: true } });
+    w.watch.state.patch(SEEN);
     w.watch.onPresence({ source: "desktop", returned: false });
     expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Checking your calendar…");
     w.live.calendarFailures = 2;
@@ -504,106 +667,21 @@ describe("Today", () => {
 
   it("offers the Reconnect card, not Retry, when the waiting Today's calendar turns out to be disconnected", async () => {
     const w = world({ events: [meeting("b", NOW + 6 * HOUR)] });
-    w.watch.state.patch({ connectedSeen: { gmail: true, googlecalendar: true } });
-    w.live.connected = { gmail: true, googlecalendar: false };
+    w.watch.state.patch(SEEN);
+    w.live.listed = [G1, { ...C1, active: false }];
     w.watch.onPresence({ source: "desktop", returned: false });
     expect(JSON.stringify(w.todays()[0]!.widget)).toContain("Checking your calendar…");
     await w.settle();
     expect(JSON.stringify(w.todays()[0]!.widget)).toContain("I couldn't read your calendar.");
-    expect(w.texts()).toContain(DISCONNECTED_TEXT.googlecalendar);
+    expect(w.texts()).toContain(disconnectedText("googlecalendar", "me@example.test"));
     expect(w.retries()).toEqual([]);
   });
 
   it("posts no Today when neither Gmail nor Calendar is connected", async () => {
-    const w = world({ connected: { gmail: false, googlecalendar: false } });
+    const w = world({ listed: [{ ...G1, active: false }, { ...C1, active: false }] });
     await w.settle();
     w.watch.onPresence({ source: "desktop", returned: false });
     expect(w.titles()).toEqual([]);
-  });
-});
-
-describe("connected-app failures", () => {
-  it("retries each check, posts one Reconnect card after three failures in a row, and resets after a success", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const w = world({ events: [meeting("a", NOW + 2 * HOUR)] });
-    w.live.calendarFailures = 4;
-    for (let check = 0; check < 4; check += 1) await w.settle();
-    expect(w.texts().filter((text) => text === RECONNECT_TEXT.googlecalendar)).toHaveLength(1);
-    expect(w.messages.filter((line) => line.kind === "connector").map((line) => line.connector?.slug)).toEqual(["googlecalendar"]);
-    expect(w.jobs).toEqual([]);
-    await w.settle();
-    expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a"]);
-    expect(w.watch.state.get().failures?.googlecalendar).toBe(0);
-    w.live.calendarFailures = 3;
-    for (let check = 0; check < 3; check += 1) await w.settle();
-    expect(w.texts().filter((text) => text === RECONNECT_TEXT.googlecalendar)).toHaveLength(2);
-  });
-
-  it("counts a failed read from a presence-driven check at most once per check interval, so Reconnect still takes three scheduled checks", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const w = world({ events: [meeting("a", NOW + 6 * HOUR)] });
-    w.live.calendarFailures = 100;
-    await w.settle();
-    for (let ping = 0; ping < 5; ping += 1) {
-      w.tick(MINUTE);
-      w.watch.onPresence({ source: "desktop", returned: true });
-      await w.watch.idle();
-    }
-    expect(w.sources.events).toHaveBeenCalledTimes(6);
-    expect(w.watch.state.get().failures?.googlecalendar).toBe(1);
-    w.tick(10 * MINUTE);
-    w.watch.onPresence({ source: "desktop", returned: true });
-    await w.watch.idle();
-    expect(w.watch.state.get().failures?.googlecalendar).toBe(2);
-    expect(w.texts()).not.toContain(RECONNECT_TEXT.googlecalendar);
-    w.tick(MINUTE);
-    await w.settle();
-    expect(w.watch.state.get().failures?.googlecalendar).toBe(3);
-    expect(w.texts().filter((text) => text === RECONNECT_TEXT.googlecalendar)).toHaveLength(1);
-  });
-
-  it("posts one Reconnect card when a service it saw connected is reported not connected, and again only after it reconnected and was lost again", async () => {
-    const w = world({ events: [meeting("a", NOW + 6 * HOUR)] });
-    const connectors = () => w.messages.filter((line) => line.kind === "connector").map((line) => line.connector?.slug);
-    await w.settle();
-    expect(w.watch.state.get().connectedSeen).toEqual({ gmail: true, googlecalendar: true });
-    w.live.connected = { gmail: true, googlecalendar: false };
-    await w.settle();
-    await w.settle();
-    expect(w.texts().filter((text) => text === DISCONNECTED_TEXT.googlecalendar)).toHaveLength(1);
-    expect(connectors()).toEqual(["googlecalendar"]);
-    expect(w.notify).toHaveBeenCalledWith(expect.objectContaining({ kind: "assistant", body: DISCONNECTED_TEXT.googlecalendar }));
-    w.live.connected = { gmail: true, googlecalendar: true };
-    await w.settle();
-    expect(w.watch.state.get().connectedSeen).toEqual({ gmail: true, googlecalendar: true });
-    expect(connectors()).toEqual(["googlecalendar"]);
-    w.live.connected = { gmail: false, googlecalendar: false };
-    await w.settle();
-    expect(connectors()).toEqual(["googlecalendar", "gmail", "googlecalendar"]);
-    expect(w.texts().filter((text) => text === DISCONNECTED_TEXT.gmail)).toHaveLength(1);
-  });
-
-  it("posts no Reconnect card for a service that was never connected, or one MausBot may not use", async () => {
-    const never = world({ connected: { gmail: false, googlecalendar: false } });
-    await never.settle();
-    await never.settle();
-    expect(never.messages.filter((line) => line.kind === "connector")).toEqual([]);
-    const barred = world({ connectorTools: { googlecalendar: { tools: "*" } } });
-    await barred.settle();
-    barred.live.connected = { gmail: false, googlecalendar: true };
-    await barred.settle();
-    expect(barred.messages.filter((line) => line.kind === "connector")).toEqual([]);
-    expect(barred.watch.state.get().connectedSeen).toEqual({ googlecalendar: true });
-  });
-
-  it("shows one Reconnect card for a service whose three failed reads already showed one, then lost its connection", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const w = world({ events: [meeting("a", NOW + 6 * HOUR)] });
-    w.live.calendarFailures = 3;
-    for (let check = 0; check < 3; check += 1) await w.settle();
-    w.live.connected = { gmail: true, googlecalendar: false };
-    await w.settle();
-    expect(w.messages.filter((line) => line.kind === "connector").map((line) => line.connector?.slug)).toEqual(["googlecalendar"]);
   });
 });
 
@@ -710,7 +788,7 @@ describe("Retry settles honestly", () => {
     await w.settle();
     w.switchOff();
     await unavailable(w);
-    expect(w.sources.connected).toHaveBeenCalledTimes(1);
+    expect(w.sources.accounts).toHaveBeenCalledTimes(1);
   });
 
   it("answers a dismissed card with its recorded outcome, never a fresh one", async () => {
@@ -772,7 +850,7 @@ describe("a throw inside a job or a step", () => {
     w.live.refuseAppend = (message) => refuse && message.kind === "widget" && JSON.stringify(message.widget).includes("Subject important-2");
     await w.settle();
     expect(w.titles()).toEqual(["Subject important-1"]);
-    expect(w.watch.state.get().judged).toEqual(["important-1"]);
+    expect(w.watch.state.get().accounts?.g1?.judged).toEqual(["important-1"]);
     refuse = false;
     w.tick(15 * MINUTE);
     await w.settle();
@@ -861,7 +939,8 @@ describe("a failing piece after delivery", () => {
   it("gives back the turn of a since-last-time note that threw while the switch was off", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const earlier = meeting("w1", NOW - 7 * 24 * HOUR, { seriesId: "weekly" });
-    const w = world({ events: [meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" })], reply: (title, prompt) => { w.switchOff(); return defaultReply(title, prompt); } });
+    const next = meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" });
+    const w = world({ events: [next], reply: (title, prompt) => { w.switchOff(); return defaultReply(title, prompt); } });
     w.watch.state.patch({ meetings: { w1: { start: earlier.start, fingerprint: fingerprint(earlier), seriesId: "weekly", preppedAt: earlier.start - HOUR } } });
     w.live.newMailFromAttendees = true;
     const patch = w.watch.state.patch.bind(w.watch.state);
@@ -873,7 +952,7 @@ describe("a failing piece after delivery", () => {
     expect(w.jobs.map((job) => job.title)).toEqual(["Since last time: Meeting w2"]);
     expect(w.watch.state.get().dayTurns).toBe(0);
     expect(w.retries()).toEqual([]);
-    expect(w.watch.state.get().meetings?.w2?.prepStartedAt).toBeUndefined();
+    expect(w.watch.state.get().meetings?.[meetingKey(next)]?.prepStartedAt).toBeUndefined();
   });
 });
 
@@ -883,7 +962,7 @@ describe("checks running together", () => {
     const first = w.watch.check();
     expect(w.watch.check()).toBe(first);
     await w.watch.idle();
-    expect(w.sources.connected).toHaveBeenCalledTimes(1);
+    expect(w.sources.accounts).toHaveBeenCalledTimes(1);
     expect(w.sources.events).toHaveBeenCalledTimes(1);
     expect(w.sources.emails).toHaveBeenCalledTimes(1);
     expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a", "Email check"]);
@@ -1007,13 +1086,13 @@ describe("bounded state", () => {
     const w = world({ events: [meeting("a", NOW + 2 * HOUR)], emails: [mail("important-1", NOW - MINUTE)] });
     const oldThreads = Array.from({ length: 1_000 }, (_, index) => ({ threadId: `job-old-${index}`, at: NOW }));
     for (const entry of oldThreads) w.tasks.set(entry.threadId, { routineRunId: `mausbot-${entry.threadId}` });
-    w.watch.state.patch({ judged: Array.from({ length: MAX_JUDGED }, (_, index) => `seen-${index}`), workThreads: oldThreads });
+    w.watch.state.patch({ accounts: { g1: { service: "gmail", connectedSeen: true, judged: Array.from({ length: MAX_JUDGED }, (_, index) => `seen-${index}`) } }, workThreads: oldThreads });
     await w.settle();
     expect(w.titles()).toEqual(["Prep: Meeting a", "Subject important-1"]);
     const state = w.watch.state.get();
-    expect(state.judged).toHaveLength(MAX_JUDGED);
-    expect(state.judged?.at(-1)).toBe("important-1");
-    expect(state.judged).not.toContain("seen-0");
+    expect(state.accounts?.g1?.judged).toHaveLength(MAX_JUDGED);
+    expect(state.accounts?.g1?.judged?.at(-1)).toBe("important-1");
+    expect(state.accounts?.g1?.judged).not.toContain("seen-0");
     expect(state.workThreads).toHaveLength(1_000);
     expect(state.workThreads?.slice(-2).map((entry) => entry.threadId)).toEqual(["job-1", "job-2"]);
     expect(state.workThreads?.map((entry) => entry.threadId)).not.toContain("job-old-1");
@@ -1043,7 +1122,7 @@ describe("when MausBot may not act, or says what it cannot do", () => {
     await off.settle();
     off.watch.onPresence({ source: "desktop", returned: true });
     await off.watch.idle();
-    expect(off.sources.connected).not.toHaveBeenCalled();
+    expect(off.sources.accounts).not.toHaveBeenCalled();
     expect(off.messages).toEqual([]);
     const hosted = world({ hosted: true, events: [meeting("a", NOW + HOUR)] });
     hosted.watch.start();
@@ -1051,7 +1130,7 @@ describe("when MausBot may not act, or says what it cannot do", () => {
     hosted.watch.onPresence({ source: "desktop", returned: true });
     hosted.watch.reminders();
     await hosted.watch.idle();
-    expect(hosted.sources.connected).not.toHaveBeenCalled();
+    expect(hosted.sources.accounts).not.toHaveBeenCalled();
     expect(hosted.clocks).toEqual([]);
     expect(hosted.messages).toEqual([]);
     expect(existsSync(join(hosted.dataDir, "assistant.json"))).toBe(false);
@@ -1059,14 +1138,15 @@ describe("when MausBot may not act, or says what it cannot do", () => {
 
   it("reads no Gmail, not even for a recurring meeting, when MausBot may not use it", async () => {
     const earlier = meeting("w1", NOW - 7 * 24 * HOUR, { seriesId: "weekly" });
-    const w = world({ events: [meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" })], emails: [mail("important-1", NOW - MINUTE)], connectorTools: { googlecalendar: { tools: "*" } } });
+    const next = meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" });
+    const w = world({ events: [next], emails: [mail("important-1", NOW - MINUTE)], connectorTools: { googlecalendar: { tools: "*" } } });
     w.watch.state.patch({ meetings: { w1: { start: earlier.start, fingerprint: fingerprint(earlier), seriesId: "weekly", preppedAt: earlier.start - HOUR } } });
     w.live.newMailFromAttendees = true;
     await w.settle();
     expect(w.sources.emails).not.toHaveBeenCalled();
     expect(w.sources.mailFrom).not.toHaveBeenCalled();
     expect(w.jobs).toEqual([]);
-    expect(w.watch.state.get().meetings?.w2?.preppedAt).toBe(NOW);
+    expect(w.watch.state.get().meetings?.[meetingKey(next)]?.preppedAt).toBe(NOW);
   });
 
   it("posts nothing from a job running when the switch goes off, gives its turn back, and plans it again once on", async () => {
@@ -1111,7 +1191,7 @@ describe("when MausBot may not act, or says what it cannot do", () => {
     } });
     await w.settle();
     expect(w.messages).toEqual([]);
-    expect(w.watch.state.get().judged ?? []).not.toContain("important-1");
+    expect(w.watch.state.get().accounts?.g1?.judged ?? []).not.toContain("important-1");
     w.switchOn();
     w.tick(15 * MINUTE);
     await w.settle();
@@ -1132,19 +1212,20 @@ describe("when MausBot may not act, or says what it cannot do", () => {
     expect(moving.watch.state.get().meetings?.a).toMatchObject({ start: original.start });
     expect(moving.watch.state.get().meetings?.a?.updateStartedAt).toBeUndefined();
     const earlier = meeting("w1", NOW - 7 * 24 * HOUR, { seriesId: "weekly" });
-    const repeating = world({ events: [meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" })], reply: (title, prompt) => { repeating.switchOff(); return defaultReply(title, prompt); } });
+    const next = meeting("w2", NOW + 2 * HOUR, { seriesId: "weekly" });
+    const repeating = world({ events: [next], reply: (title, prompt) => { repeating.switchOff(); return defaultReply(title, prompt); } });
     repeating.watch.state.patch({ meetings: { w1: { start: earlier.start, fingerprint: fingerprint(earlier), seriesId: "weekly", preppedAt: earlier.start - HOUR } } });
     repeating.live.newMailFromAttendees = true;
     await repeating.settle();
     expect(repeating.jobs.map((job) => job.title)).toEqual(["Since last time: Meeting w2"]);
     expect(repeating.watch.state.get().dayTurns).toBe(0);
-    expect(repeating.watch.state.get().meetings?.w2?.prepStartedAt).toBeUndefined();
-    expect(repeating.watch.state.get().meetings?.w2?.preppedAt).toBeUndefined();
+    expect(repeating.watch.state.get().meetings?.[meetingKey(next)]?.prepStartedAt).toBeUndefined();
+    expect(repeating.watch.state.get().meetings?.[meetingKey(next)]?.preppedAt).toBeUndefined();
   });
 
-  it("skips an event or an email whose id the state file could not hold, and carries on with the rest", async () => {
+  it("skips an event whose series id, or an email whose id, the state file could not hold, and carries on with the rest", async () => {
     const long = "x".repeat(300);
-    const w = world({ events: [meeting(long, NOW + HOUR), meeting("a", NOW + HOUR)], emails: [mail(long, NOW - MINUTE), mail("important-1", NOW - MINUTE)] });
+    const w = world({ events: [meeting("long", NOW + HOUR, { seriesId: long }), meeting("a", NOW + HOUR)], emails: [mail(long, NOW - MINUTE), mail("important-1", NOW - MINUTE)] });
     await w.settle();
     expect(w.jobs.map((job) => job.title)).toEqual(["Prep: Meeting a", "Email check"]);
     expect(w.jobs[1]!.prompt).not.toContain(long);

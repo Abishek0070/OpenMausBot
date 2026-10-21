@@ -15,16 +15,22 @@ describe("createAssistantState", () => {
     const file = join(folder(), "assistant.json");
     const state = createAssistantState(file);
     expect(state.get()).toEqual({ version: 2 });
-    state.patch({ meetings: { m1: { start: 10, fingerprint: "abc", seriesId: "s", preppedAt: 5 } }, judged: ["e1"], lastTodayDate: "2026-10-17", turnDay: "2026-10-17", dayTurns: 2 });
-    expect(createAssistantState(file).get()).toMatchObject({ meetings: { m1: { preppedAt: 5 } }, judged: ["e1"], dayTurns: 2 });
-    state.patch({ judged: undefined });
-    expect(JSON.parse(readFileSync(file, "utf8"))).not.toHaveProperty("judged");
+    state.patch({ meetings: { m1: { start: 10, fingerprint: "abc", seriesId: "s", preppedAt: 5 } }, lastTriageAt: 7, lastTodayDate: "2026-10-17", turnDay: "2026-10-17", dayTurns: 2 });
+    expect(createAssistantState(file).get()).toMatchObject({ meetings: { m1: { preppedAt: 5 } }, lastTriageAt: 7, dayTurns: 2 });
+    state.patch({ lastTriageAt: undefined });
+    expect(JSON.parse(readFileSync(file, "utf8"))).not.toHaveProperty("lastTriageAt");
+  });
+
+  it("keeps the email cursor, judged ids and connection record only per account", () => {
+    const file = join(folder(), "assistant.json");
+    writeFileSync(file, JSON.stringify({ version: 2, emailCursor: 3, judged: ["e1"], failures: { gmail: 1 }, reconnectShown: { gmail: true }, connectedSeen: { gmail: true } }));
+    expect(createAssistantState(file).get()).toEqual({ version: 2 });
   });
 
   it("has no room for a subject, a body or a title", () => {
     const state = createAssistantState(join(folder(), "assistant.json"));
     expect(() => state.patch({ meetings: { m1: { start: 1, fingerprint: "x", title: "Board review" } as never } })).toThrow();
-    expect(() => state.patch({ judged: [{ id: "e1", subject: "Salaries" }] as never })).toThrow();
+    expect(() => state.patch({ accounts: { g1: { service: "gmail", judged: [{ id: "e1", subject: "Salaries" }] } } as never })).toThrow();
     expect(state.get()).toEqual({ version: 2 });
   });
 

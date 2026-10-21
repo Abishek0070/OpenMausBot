@@ -18,12 +18,12 @@ export const RECONNECT_AFTER = 3;
 export const KEEP_MEETINGS_MS = 35 * 24 * HOUR;
 export const DEFAULT_CHECK_MS = 15 * MINUTE;
 
-export type MeetingJob =
-  | { kind: "prep"; event: CalendarEvent; short: boolean }
-  | { kind: "repeat"; event: CalendarEvent; previousStart: number }
-  | { kind: "update"; event: CalendarEvent; change: "time" | "attendees" | "both" }
+export type MeetingJob<T extends CalendarEvent = CalendarEvent> =
+  | { kind: "prep"; event: T; short: boolean }
+  | { kind: "repeat"; event: T; previousStart: number }
+  | { kind: "update"; event: T; change: "time" | "attendees" | "both" }
   | { kind: "cancelled"; eventId: string; title: string; start: number }
-  | { kind: "remind"; event: CalendarEvent };
+  | { kind: "remind"; event: T };
 
 export function qualifies(event: CalendarEvent): boolean {
   return event.status !== "cancelled" && !event.allDay && !event.selfDeclined && event.attendees.some((attendee) => !attendee.self);
@@ -47,9 +47,9 @@ function earlierOccurrence(meetings: Record<string, MeetingRecord>, event: Calen
     .sort((a, b) => b.start - a.start)[0];
 }
 
-export function planMeetings(input: { now: number; events: CalendarEvent[]; meetings: Record<string, MeetingRecord>; checkMs: number }): MeetingJob[] {
+export function planMeetings<T extends CalendarEvent>(input: { now: number; events: readonly T[]; meetings: Record<string, MeetingRecord>; checkMs: number }): MeetingJob<T>[] {
   const { now, meetings } = input;
-  const jobs: MeetingJob[] = [];
+  const jobs: MeetingJob<T>[] = [];
   for (const event of input.events) {
     const record = meetings[event.id];
     if (event.allDay) continue;
@@ -77,15 +77,6 @@ export function planMeetings(input: { now: number; events: CalendarEvent[]; meet
     if (!reminded && event.start - now <= REMINDER_LEAD_MS) jobs.push({ kind: "remind", event });
   }
   return jobs;
-}
-
-export function planTriage(input: { now: number; emails: EmailHeader[]; judged: ReadonlySet<string>; lastTriageAt?: number; spacingMs: number }): { batch: EmailHeader[]; quiet: string[]; pending: EmailHeader[] } {
-  const fresh = input.emails.filter((email) => !input.judged.has(email.id));
-  const quiet = fresh.filter((email) => input.now - email.at > EMAIL_MAX_AGE_MS).map((email) => email.id);
-  const recent = fresh.filter((email) => input.now - email.at <= EMAIL_MAX_AGE_MS).sort((a, b) => b.at - a.at);
-  const due = input.lastTriageAt === undefined || input.now - input.lastTriageAt >= input.spacingMs;
-  const batch = due ? recent.slice(0, TRIAGE_BATCH) : [];
-  return { batch, quiet, pending: recent.slice(batch.length) };
 }
 
 // Travel moves the local date back by at most one day; a stored day further ahead came from a clock jump.
@@ -131,14 +122,12 @@ export function isMine(event: CalendarEvent, addresses: ReadonlySet<string>): bo
   return event.attendees.some((attendee) => addresses.has(attendee.email.toLowerCase()));
 }
 
-export function meetingKey(event: CalendarEvent): string {
-  if (!event.iCalUID) return event.id;
-  const key = event.seriesId ? `${event.iCalUID}#${event.originalStart ?? event.id}` : event.iCalUID;
-  return key.length > MEETING_KEY_MAX ? `uid:${createHash("sha256").update(key).digest("hex").slice(0, 32)}` : key;
-}
+const hashed = (kind: string, value: string): string => `${kind}:${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
 
-function sameMeetingSignature(event: CalendarEvent): string {
-  return JSON.stringify([event.title.toLowerCase().replace(/\s+/g, " ").trim(), event.start, event.end]);
+export function meetingKey(event: CalendarEvent): string {
+  if (!event.iCalUID) return hashed("sig", JSON.stringify([event.title.toLowerCase().replace(/\s+/g, " ").trim(), event.start, event.end]));
+  const key = event.seriesId ? `${event.iCalUID}#${event.originalStart ?? event.id}` : event.iCalUID;
+  return key.length > MEETING_KEY_MAX ? hashed("uid", key) : key;
 }
 
 function mergeGroup(group: readonly AccountEvent[], id: string, addresses: ReadonlySet<string>): Meeting {
@@ -162,14 +151,10 @@ export function mergeMeetings(events: readonly AccountEvent[], addresses: Readon
   const withoutUid = new Map<string, AccountEvent[]>();
   for (const event of events.filter((one) => isMine(one, addresses))) {
     const groups = event.iCalUID ? withUid : withoutUid;
-    const key = event.iCalUID ? meetingKey(event) : sameMeetingSignature(event);
+    const key = meetingKey(event);
     groups.set(key, [...(groups.get(key) ?? []), event]);
   }
-  const merged = [
-    ...[...withUid].map(([key, group]) => mergeGroup(group, key, addresses)),
-    ...[...withoutUid.values()].map((group) => mergeGroup(group, group.map((copy) => copy.id).reduce((a, b) => (b < a ? b : a)), addresses)),
-  ];
-  return merged.sort((a, b) => a.start - b.start);
+  return [...withUid, ...withoutUid].map(([key, group]) => mergeGroup(group, key, addresses)).sort((a, b) => a.start - b.start);
 }
 
 export function clashes<T extends CalendarEvent>(meetings: readonly T[], input: { now: number; timeZone?: string }): Array<[T, T]> {

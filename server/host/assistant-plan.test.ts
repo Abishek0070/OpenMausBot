@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
 import {
-  answered, clashes, DAILY_TURN_CAP, emailKey, emailSince, fingerprint, isMine, keepNewest, KEEP_MEETINGS_MS, localDate, meetingKey, mergeMeetings, planMail, planMeetings, planTriage,
+  answered, clashes, DAILY_TURN_CAP, emailKey, emailSince, fingerprint, isMine, keepNewest, KEEP_MEETINGS_MS, localDate, meetingKey, mergeMeetings, planMail, planMeetings,
   prunePending, pruneMeetings, qualifies, todayDue, turnsLeft, type AccountEvent,
 } from "./assistant-plan.ts";
 import { MAX_WORK_THREADS, type MeetingRecord, type PendingEmail } from "./assistant-state.ts";
@@ -93,25 +93,6 @@ describe("planMeetings", () => {
     expect(kinds([event("a", -MINUTE)], { a: prepped(event("a", -MINUTE)) })).toEqual([]);
     expect(kinds([event("solo", 5 * MINUTE, { attendees: [ME] })])).toEqual([]);
     expect(kinds([item])).toEqual(["prep", "remind"]);
-  });
-});
-
-describe("planTriage", () => {
-  const mail = (id: string, ago: number): EmailHeader => ({ id, account: "g1", threadId: `t-${id}`, at: NOW - ago, from: id, subject: id, preview: "" });
-
-  it("sends the 20 newest unjudged emails of the last day, judges older ones silently and keeps the rest for later", () => {
-    const recent = Array.from({ length: 25 }, (_, index) => mail(`r${index}`, (index + 1) * MINUTE));
-    const old = [mail("old1", 25 * HOUR), mail("old2", 48 * HOUR)];
-    const result = planTriage({ now: NOW, emails: [...old, ...recent, mail("seen", MINUTE)], judged: new Set(["seen"]), spacingMs: CHECK });
-    expect(result.batch.map((item) => item.id)).toEqual(recent.slice(0, 20).map((item) => item.id));
-    expect(result.quiet).toEqual(["old1", "old2"]);
-    expect(result.pending.map((item) => item.id)).toEqual(recent.slice(20).map((item) => item.id));
-  });
-
-  it("waits fifteen minutes between batches, and still judges old mail meanwhile", () => {
-    const result = planTriage({ now: NOW, emails: [mail("new", MINUTE), mail("old", 30 * HOUR)], judged: new Set(), lastTriageAt: NOW - 14 * MINUTE, spacingMs: CHECK });
-    expect(result).toEqual({ batch: [], quiet: ["old"], pending: [mail("new", MINUTE)] });
-    expect(planTriage({ now: NOW, emails: [mail("new", MINUTE)], judged: new Set(), lastTriageAt: NOW - CHECK, spacingMs: CHECK }).batch).toHaveLength(1);
   });
 });
 
@@ -235,7 +216,8 @@ describe("one meeting on several calendars", () => {
   });
 
   it("merges by title, start and end only when neither copy has an iCalUID", () => {
-    expect(mergeMeetings([ev("a", { title: "Demo  with Jake" }), { ...ev("b", { title: "demo with jake" }), account: "c2" }], MINE)).toEqual([expect.objectContaining({ id: "a", accounts: ["c1", "c2"] })]);
+    expect(mergeMeetings([ev("a", { title: "Demo  with Jake" }), { ...ev("b", { title: "demo with jake" }), account: "c2" }], MINE))
+      .toEqual([expect.objectContaining({ id: expect.stringMatching(/^sig:[0-9a-f]{32}$/), accounts: ["c1", "c2"] })]);
     expect(mergeMeetings([ev("a", { title: "Demo" }), { ...ev("b", { title: "Demo", iCalUID: "uid-2" }), account: "c2" }], MINE)).toHaveLength(2);
     expect(mergeMeetings([ev("a", { iCalUID: "uid-1" }), { ...ev("b", { iCalUID: "uid-2" }), account: "c2" }], MINE)).toHaveLength(2);
   });
@@ -244,7 +226,15 @@ describe("one meeting on several calendars", () => {
     const merged = mergeMeetings([
       ev("a", { iCalUID: "uid-1" }), { ...ev("b", { iCalUID: "uid-2" }), account: "c2" }, { ...ev("c"), account: "c3" },
     ], MINE);
-    expect(merged.map((one) => [one.id, one.accounts])).toEqual([["uid-1", ["c1"]], ["uid-2", ["c2"]], ["c", ["c3"]]]);
+    expect(merged.map((one) => [one.id, one.accounts])).toEqual([["uid-1", ["c1"]], ["uid-2", ["c2"]], [meetingKey(ev("c")), ["c3"]]]);
+  });
+
+  it("keys a meeting with no iCalUID by its time and title, so it keeps its key when one account's copy is not read", () => {
+    const copies: AccountEvent[] = [ev("a", { title: "Demo  with Jake" }), { ...ev("b", { title: "demo with jake" }), account: "c2" }];
+    const [both] = mergeMeetings(copies, MINE);
+    expect(mergeMeetings([copies[1]!], MINE).map((one) => one.id)).toEqual([both!.id]);
+    expect(mergeMeetings([copies[0]!], MINE).map((one) => one.id)).toEqual([both!.id]);
+    expect(mergeMeetings([{ ...copies[0]!, start: copies[0]!.start + MINUTE }], MINE)[0]!.id).not.toBe(both!.id);
   });
 
   it("keys a recurring instance by its original start, so a moved instance keeps its key and two instances never share one", () => {

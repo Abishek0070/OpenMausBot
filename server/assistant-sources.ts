@@ -67,13 +67,6 @@ export interface AssistantSources {
   thread(account: SourceAccount, threadId: string): Promise<ThreadMessage[]>;
 }
 
-export interface SingleAccountSources {
-  connected(): Promise<Record<AssistantService, boolean> | null>;
-  events(fromMs: number, toMs: number): Promise<CalendarEvent[]>;
-  emails(sinceMs: number, limit: number): Promise<EmailHeader[]>;
-  mailFrom(addresses: readonly string[], sinceMs: number): Promise<boolean>;
-}
-
 export class SourceError extends Error {
   readonly service: AssistantService;
   readonly account?: string;
@@ -475,24 +468,5 @@ export function createComposioSources(deps: ComposioSourceDeps): AssistantSource
       const data = await call(account, GMAIL_THREAD_TOOL, { user_id: "me", thread_id: threadId });
       return parsed(account, () => threadFromData(data));
     },
-  };
-}
-
-export function firstAccountSources(sources: AssistantSources): SingleAccountSources {
-  let listed: SourceAccount[] | null = null;
-  async function first(service: AssistantService): Promise<SourceAccount> {
-    const account = (listed ?? await sources.accounts() ?? []).find((candidate) => candidate.service === service && candidate.active);
-    if (!account) throw new SourceError(service, `no ${service} account is connected`);
-    return account;
-  }
-  const anyActive = (accounts: readonly SourceAccount[], service: AssistantService) => accounts.some((account) => account.service === service && account.active);
-  return {
-    async connected() {
-      listed = await sources.accounts();
-      return listed && { gmail: anyActive(listed, "gmail"), googlecalendar: anyActive(listed, "googlecalendar") };
-    },
-    events: async (fromMs, toMs) => sources.events(await first("googlecalendar"), fromMs, toMs),
-    emails: async (sinceMs, limit) => sources.emails(await first("gmail"), sinceMs, limit),
-    mailFrom: async (addresses, sinceMs) => sources.mailFrom(await first("gmail"), addresses, sinceMs),
   };
 }

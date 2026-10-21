@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import type { AssistantService, CalendarEvent, EmailHeader, SingleAccountSources } from "../assistant-sources.ts";
+import { ASSISTANT_SERVICES, type AssistantService, type AssistantSources, type CalendarEvent, type EmailHeader, type SourceAccount } from "../assistant-sources.ts";
 import { audienceWithin } from "../bot-visibility.ts";
 import { createAgentCard } from "../chat-widgets.ts";
 import { connectorCardText } from "../connector-card-text.ts";
@@ -9,13 +9,14 @@ import { failure } from "../failure.ts";
 import { buildNotification, type Notification } from "../notify.ts";
 import { ownerOrAdmin, type RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
+import { createAssistantAccounts } from "./assistant-accounts.ts";
 import { cancelledCard, clockTime, emailCard, prepCard, reminderCard, todayCard, updateCard, type BuiltCard, type TodayMeeting, type TodayMeetings } from "./assistant-cards.ts";
 import { clip } from "./text-clip.ts";
 import {
-  DAILY_TURN_CAP, emailSince, fingerprint, keepNewest, localDate, LOOKAHEAD_MS, planMeetings, planTriage, PREP_LEAD_MS, pruneMeetings, qualifies, RECONNECT_AFTER,
-  todayDue, turnsLeft,
+  DAILY_TURN_CAP, emailKey, emailSince, fingerprint, keepNewest, localDate, LOOKAHEAD_MS, mergeMeetings, planMail, planMeetings, PREP_LEAD_MS, pruneMeetings, qualifies,
+  todayDue, turnsLeft, type AccountEvent, type Meeting,
 } from "./assistant-plan.ts";
-import { calendarRecords, emailRecords, lineReply, prepPrompt, prepReply, repeatPrompt, triagePrompt, triageReply, updatePrompt, type TurnTools } from "./assistant-prompts.ts";
+import { calendarRecords, lineReply, prepPrompt, prepReply, replyRecords, repeatPrompt, triagePrompt, triageReply, updatePrompt, type TurnTools } from "./assistant-prompts.ts";
 import {
   ASSISTANT_STATE_FILE, createAssistantState, MAX_ID_LENGTH, MAX_IN_FLIGHT, MAX_JUDGED, MAX_WORK_THREADS, type AssistantState, type AssistantStateStore, type MeetingRecord,
 } from "./assistant-state.ts";
@@ -38,15 +39,6 @@ const CALENDAR_UNREAD = "Google Calendar did not answer";
 const CALENDAR_DISCONNECTED = "Google Calendar is not connected";
 export const NO_WEB_SEARCH = "I can't search the web on this engine, so my meeting prep uses your calendar, your mail and earlier conversations only.";
 export const NO_CONNECTOR_TOOLS = "My engine can't use your connected apps inside its own turns, so my prep works from the calendar details I read for you and from earlier conversations.";
-export const RECONNECT_TEXT: Record<AssistantService, string> = {
-  gmail: "Reconnect Gmail: I couldn't read your email three times in a row.",
-  googlecalendar: "Reconnect Calendar: I couldn't read your calendar three times in a row.",
-};
-export const DISCONNECTED_TEXT: Record<AssistantService, string> = {
-  gmail: "Reconnect Gmail: your Gmail connection stopped working, so I can't read your email.",
-  googlecalendar: "Reconnect Calendar: your Google Calendar connection stopped working, so I can't read your calendar.",
-};
-const SERVICES: readonly AssistantService[] = ["gmail", "googlecalendar"];
 const LABEL: Record<AssistantService, string> = { gmail: "Gmail", googlecalendar: "Google Calendar" };
 const CUT_SHORT: Record<string, string> = {
   prep: "A meeting prep was cut short",
@@ -61,10 +53,10 @@ const RETRY_CLEARS: Record<string, ReadonlyArray<keyof MeetingRecord>> = {
 };
 
 type Job =
-  | { kind: "prep"; item: string; event: CalendarEvent; short: boolean; turn: string; delivered?: boolean }
-  | { kind: "repeat"; item: string; event: CalendarEvent; previousStart: number; turn?: string; delivered?: boolean }
-  | { kind: "update"; item: string; event: CalendarEvent; previous: MeetingRecord; turn: string; delivered?: boolean }
-  | { kind: "triage"; item: string; batch: EmailHeader[]; carded: Set<string> };
+  | { kind: "prep"; item: string; event: Meeting; short: boolean; turn: string; delivered?: boolean }
+  | { kind: "repeat"; item: string; event: Meeting; previousStart: number; turn?: string; delivered?: boolean }
+  | { kind: "update"; item: string; event: Meeting; previous: MeetingRecord; turn: string; delivered?: boolean }
+  | { kind: "triage"; item: string; batch: EmailHeader[]; copies: EmailHeader[]; carded: Set<string> };
 
 const FAILED: Record<Job["kind"], (title: string) => string> = {
   prep: (title) => `I couldn't prepare "${title}"`,
@@ -74,6 +66,7 @@ const FAILED: Record<Job["kind"], (title: string) => string> = {
 };
 
 type Target = { botId: string; threadId: string };
+type MailRead = { account: string; cursorAtRead: number | undefined; mail: EmailHeader[] };
 type Outcome = NonNullable<NonNullable<AssistantState["retryCards"]>[string]["outcome"]>;
 /** `key` is absent while the card waits for its first calendar read. */
 type TodayPost = { messageId: string; threadId: string; day: string; key?: string; failed?: boolean; emails: Array<{ from: string; subject: string }>; team?: { text: string; open: Target } };
@@ -89,7 +82,7 @@ export interface AssistantWatchDeps {
   mainThread(bot: BotRecord): string | undefined;
   timeZone(): string | undefined;
   capabilities(bot: BotRecord, threadId: string): { agentsTools: boolean; mailTools: boolean };
-  sources: SingleAccountSources;
+  sources: AssistantSources;
   runJob(bot: BotRecord, title: string, prompt: string): Promise<JobResult>;
   notify(notification: Notification | null): void;
   noteCard(card: Target): void;
@@ -102,16 +95,20 @@ export interface AssistantWatchDeps {
 
 const kindOf = (item: string): string => item.slice(0, item.indexOf(":"));
 const subjectOf = (item: string): string => item.slice(item.indexOf(":") + 1);
-const triageItem = (batch: readonly EmailHeader[]): string => `triage:${Math.min(...batch.map((email) => email.at))}:${batch.map((email) => email.id).join(",")}`;
+const triageItem = (emails: readonly EmailHeader[]): string => `triage:${Math.min(...emails.map((email) => email.at))}:${emails.map(emailKey).join(",")}`;
 const titleOf = (job: Job): string => (job.kind === "triage" ? "" : clip(job.event.title, TITLE_MAX));
 const turnOf = (job: Job): string | undefined => (job.kind === "triage" ? undefined : job.turn);
 const storable = (value: string | undefined): boolean => value === undefined || (value.length >= 1 && value.length <= MAX_ID_LENGTH);
 const meetingsKey = (list: readonly TodayMeeting[]): string => JSON.stringify(list.map((meeting) => [meeting.title, meeting.start, meeting.end, meeting.joinUrl ?? "", meeting.allDay === true]));
 
-function triageOf(item: string): { oldest: number; ids: string[] } {
+function triageOf(item: string): { oldest: number; emails: Array<{ account: string; id: string }> } {
   const subject = subjectOf(item);
   const cut = subject.indexOf(":");
-  return { oldest: Number(subject.slice(0, cut)), ids: subject.slice(cut + 1).split(",") };
+  const emails = subject.slice(cut + 1).split(",").map((key) => {
+    const slash = key.lastIndexOf("/");
+    return { account: slash < 0 ? "" : key.slice(0, slash), id: key.slice(slash + 1) };
+  });
+  return { oldest: Number(subject.slice(0, cut)), emails };
 }
 
 function remember<T>(map: Map<string, T>, key: string, value: T): void {
@@ -136,26 +133,34 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     timer.unref?.();
     return { cancel: () => clearInterval(timer) };
   });
-  let events: CalendarEvent[] = [];
+  let events: Meeting[] = [];
+  const calendarEvents = new Map<string, AccountEvent[]>();
   let calendarReadAt: number | undefined;
-  let lastConnected: Record<AssistantService, boolean> | null = null;
   let todayPending = false;
   let todayRefresh: TodayPost | undefined;
   let recovered = false;
   let missedCheck = false;
   let flagged: EmailHeader[] = [];
-  const cardEvents = new Map<string, CalendarEvent>();
+  const cardEvents = new Map<string, Meeting>();
   const cardEmails = new Map<string, EmailHeader>();
   const sinceLastTime = new Map<string, string>();
   const queue: Job[] = [];
   let working: Promise<void> | undefined;
   let checking: Promise<void> | undefined;
   let scheduledCheck = false;
-  const failureCountedAt: Partial<Record<AssistantService, number>> = {};
   const timers: Array<{ cancel(): void }> = [];
 
   const current = () => state.get();
   const meetings = (): Record<string, MeetingRecord> => current().meetings ?? {};
+  const accounts = createAssistantAccounts({
+    state, sources: deps.sources, now, checkMs: deps.checkMs, reconnect,
+    mayUse: (service) => {
+      const bot = deps.mausbot();
+      return bot !== null && mausbotMayUse(bot, service);
+    },
+  });
+  const accountNames = (meeting: Meeting): string => [...new Set(meeting.accounts.map((id) => accounts.label(id)))].join(", ");
+  const accountLabels = (): string[] => [...new Set(ASSISTANT_SERVICES.flatMap((service) => accounts.usable(service)).map((account) => accounts.label(account.id)))];
 
   function setMeeting(id: string, changes: Partial<MeetingRecord>, event?: CalendarEvent): void {
     const base = meetings()[id] ?? (event ? { start: event.start, fingerprint: fingerprint(event), ...(event.seriesId ? { seriesId: event.seriesId } : {}) } : undefined);
@@ -190,24 +195,19 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   const say = (threadId: string, text: string): void => { deps.store.appendMessage(threadId, { role: "bot", kind: "text", text }); };
 
-  function reconnect(bot: BotRecord, threadId: string, service: AssistantService, text: string): void {
-    state.patch({ reconnectShown: { ...current().reconnectShown, [service]: true } });
-    say(threadId, text);
-    deps.store.appendMessage(threadId, {
-      role: "bot", kind: "connector", text: connectorCardText(LABEL[service]),
-      connector: { slug: service, label: LABEL[service], description: `Reconnect ${LABEL[service]} so MausBot can keep reading it.`, status: "required", resumeKey: `mausbot-reconnect-${deps.newId()}` },
+  function reconnect(account: SourceAccount, label: string | undefined, text: string): void {
+    const here = context();
+    if (!here) return;
+    const app = LABEL[account.service];
+    say(here.threadId, text);
+    deps.store.appendMessage(here.threadId, {
+      role: "bot", kind: "connector", text: connectorCardText(app, account.alias),
+      connector: {
+        slug: account.service, label: app, description: `Reconnect ${app}${label ? ` (${label})` : ""} so MausBot can keep reading it.`, status: "required",
+        resumeKey: `mausbot-reconnect-${deps.newId()}`, ...(account.alias ? { alias: account.alias } : {}),
+      },
     });
-    announce(bot, threadId, text);
-  }
-
-  function noteConnections(bot: BotRecord, threadId: string, connected: Record<AssistantService, boolean>): void {
-    for (const service of SERVICES) {
-      const seen = current().connectedSeen?.[service] === true;
-      if (!mausbotMayUse(bot, service) || connected[service] === seen) continue;
-      state.patch({ connectedSeen: { ...current().connectedSeen, [service]: connected[service] } });
-      if (connected[service]) state.patch({ failures: { ...current().failures, [service]: 0 }, reconnectShown: { ...current().reconnectShown, [service]: false } });
-      else if (!current().reconnectShown?.[service]) reconnect(bot, threadId, service, DISCONNECTED_TEXT[service]);
-    }
+    announce(here.bot, here.threadId, text);
   }
 
   function failCard(bot: BotRecord, threadId: string, item: string, title: string, reason: string): void {
@@ -248,28 +248,6 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     if (day !== undefined && turnDay === day && dayTurns) state.patch({ dayTurns: dayTurns - 1 });
   }
 
-  async function readService<T>(bot: BotRecord, threadId: string, service: AssistantService, load: () => Promise<T>): Promise<T | null> {
-    try {
-      const value = await load();
-      if (current().failures?.[service] || current().reconnectShown?.[service]) {
-        state.patch({ failures: { ...current().failures, [service]: 0 }, reconnectShown: { ...current().reconnectShown, [service]: false } });
-      }
-      return value;
-    } catch (error) {
-      const at = now();
-      if (!scheduledCheck && at - (failureCountedAt[service] ?? -Infinity) < deps.checkMs) {
-        console.warn(`assistant: reading ${service} failed again within one check interval: ${failure(error)}`);
-        return null;
-      }
-      failureCountedAt[service] = at;
-      const count = (current().failures?.[service] ?? 0) + 1;
-      state.patch({ failures: { ...current().failures, [service]: count } });
-      console.warn(`assistant: reading ${service} failed (${count} in a row): ${failure(error)}`);
-      if (count >= RECONNECT_AFTER && !current().reconnectShown?.[service]) reconnect(bot, threadId, service, RECONNECT_TEXT[service]);
-      return null;
-    }
-  }
-
   function enqueue(job: Job): void {
     if (queue.some((queued) => queued.item === job.item)) return;
     startFlight(job.item);
@@ -288,13 +266,16 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     if (clears) setMeeting(subjectOf(item), Object.fromEntries(clears.map((key) => [key, undefined])) as Partial<MeetingRecord>);
     else if (kind === "today" && todayRefresh) todayRefresh.failed = false;
     else if (kind === "triage") {
-      const { oldest, ids } = triageOf(item);
-      const again = new Set(ids);
-      const cursor = current().emailCursor;
-      state.patch({
-        judged: (current().judged ?? []).filter((id) => !again.has(id)), lastTriageAt: undefined,
-        ...(Number.isFinite(oldest) ? { emailCursor: Math.min(cursor ?? oldest, oldest) } : {}),
-      });
+      const { oldest, emails } = triageOf(item);
+      const all = current().accounts ?? {};
+      const next = { ...all };
+      for (const account of new Set(emails.map((email) => email.account))) {
+        const record = all[account];
+        if (!record) continue;
+        const again = new Set(emails.filter((email) => email.account === account).map((email) => email.id));
+        next[account] = { ...record, judged: (record.judged ?? []).filter((id) => !again.has(id)), ...(Number.isFinite(oldest) ? { emailCursor: Math.min(record.emailCursor ?? oldest, oldest) } : {}) };
+      }
+      state.patch({ accounts: next, lastTriageAt: undefined });
     }
   }
 
@@ -312,7 +293,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   function threw(job: Job): void {
     endFlight(job.item);
     if (job.kind === "triage") {
-      const uncarded = job.batch.filter((email) => !job.carded.has(email.id));
+      const uncarded = [...job.batch, ...job.copies].filter((email) => !job.carded.has(emailKey(email)));
       if (uncarded.length) reopen(triageItem(uncarded));
       return;
     }
@@ -339,10 +320,10 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     return task && !isAssistantJobThread(task.routineRunId) ? { botId: owner.bot.id, threadId } : undefined;
   }
 
-  function remind(bot: BotRecord, threadId: string, event: CalendarEvent, at: number): void {
+  function remind(bot: BotRecord, threadId: string, event: Meeting, at: number): void {
     setMeeting(event.id, { remindedAt: at }, event);
     remember(cardEvents, event.id, event);
-    post(bot, threadId, reminderCard({ event, line: sinceLastTime.get(event.id), timeZone: deps.timeZone(), now: at }));
+    post(bot, threadId, reminderCard({ event, line: sinceLastTime.get(event.id), timeZone: deps.timeZone(), now: at, accounts: accountNames(event) }));
   }
 
   function meetingsDue(bot: BotRecord, threadId: string, remindersOnly: boolean): void {
@@ -377,14 +358,24 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     }
   }
 
-  function emailDue(mail: EmailHeader[], at: number, cursorAtRead: number | undefined): void {
+  function emailDue(answered: readonly MailRead[], at: number): void {
     const before = current();
-    const plan = planTriage({ now: at, emails: mail, judged: new Set(before.judged ?? []), lastTriageAt: before.lastTriageAt, spacingMs: deps.checkMs });
-    const read = Math.max(0, plan.pending.length ? Math.min(...plan.pending.map((email) => email.at)) : at - CURSOR_OVERLAP_MS);
-    const moved = before.emailCursor !== cursorAtRead;
-    const judged = keepNewest([...(before.judged ?? []), ...plan.quiet, ...plan.batch.map((email) => email.id)], MAX_JUDGED);
-    state.patch({ judged, emailCursor: moved ? Math.min(read, before.emailCursor ?? read) : read, ...(plan.batch.length ? { lastTriageAt: at } : {}) });
-    if (plan.batch.length) enqueue({ kind: "triage", item: triageItem(plan.batch), batch: plan.batch, carded: new Set() });
+    const all = before.accounts ?? {};
+    const reads = answered.filter(({ account }) => all[account]);
+    const judged = new Set(reads.flatMap(({ account }) => (all[account]?.judged ?? []).map((id) => emailKey({ account, id }))));
+    const plan = planMail({ now: at, emails: reads.flatMap((read) => read.mail), judged, lastTriageAt: before.lastTriageAt, spacingMs: deps.checkMs });
+    const next = { ...all };
+    for (const { account, cursorAtRead } of reads) {
+      const record = all[account]!;
+      const own = (list: readonly EmailHeader[]) => list.filter((email) => email.account === account);
+      const pending = own(plan.pending);
+      const read = Math.max(0, pending.length ? Math.min(...pending.map((email) => email.at)) : at - CURSOR_OVERLAP_MS);
+      const seen = [...own(plan.quiet), ...own(plan.batch), ...own(plan.copies)].map((email) => email.id);
+      const emailCursor = record.emailCursor !== cursorAtRead ? Math.min(read, record.emailCursor ?? read) : read;
+      next[account] = { ...record, judged: keepNewest([...(record.judged ?? []), ...seen], MAX_JUDGED), emailCursor };
+    }
+    state.patch({ accounts: next, ...(plan.batch.length ? { lastTriageAt: at } : {}) });
+    if (plan.batch.length) enqueue({ kind: "triage", item: triageItem([...plan.batch, ...plan.copies]), batch: plan.batch, copies: plan.copies, carded: new Set() });
   }
 
   function meetingToday(): string[] {
@@ -396,7 +387,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   async function prep(bot: BotRecord, threadId: string, job: Extract<Job, { kind: "prep" }>, tools: TurnTools): Promise<void> {
     const zone = deps.timeZone();
-    const result = await run(bot, `Prep: ${job.event.title}`, prepPrompt({ event: job.event, short: job.short, timeZone: zone, now: now(), ...tools }));
+    const result = await run(bot, `Prep: ${job.event.title}`, prepPrompt({ event: job.event, short: job.short, timeZone: zone, now: now(), accounts: accountLabels(), ...tools }));
     keepThread(result.threadId);
     if (!context()) return abandon(job, job.turn);
     endFlight(job.item);
@@ -404,7 +395,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     if (!reply) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
     const related = openTarget(bot, reply.relatedThreadId);
     remember(cardEvents, job.event.id, job.event);
-    if (post(bot, threadId, prepCard({ event: job.event, brief: reply.brief, ...(related ? { related } : {}), timeZone: zone, now: now() }))) job.delivered = true;
+    if (post(bot, threadId, prepCard({ event: job.event, brief: reply.brief, ...(related ? { related } : {}), timeZone: zone, now: now(), accounts: accountNames(job.event) }))) job.delivered = true;
     setMeeting(job.event.id, { preppedAt: now() });
     if (reply.noWebSearch && !current().notices?.noWebSearch) {
       say(threadId, NO_WEB_SEARCH);
@@ -414,11 +405,14 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   async function repeat(bot: BotRecord, threadId: string, job: Extract<Job, { kind: "repeat" }>, tools: TurnTools): Promise<void> {
     const others = job.event.attendees.filter((attendee) => !attendee.self).map((attendee) => attendee.email);
-    const gmail = lastConnected?.gmail === true && mausbotMayUse(bot, "gmail");
-    const wrote = gmail && await deps.sources.mailFrom(others, job.previousStart).catch((error: unknown) => {
-      console.warn(`assistant: could not look for new mail from a recurring meeting's people: ${failure(error)}`);
-      return false;
-    });
+    let wrote = false;
+    for (const account of accounts.usable("gmail")) {
+      wrote = await deps.sources.mailFrom(account, others, job.previousStart).catch((error: unknown) => {
+        console.warn(`assistant: could not look for new mail from a recurring meeting's people: ${failure(error)}`);
+        return false;
+      });
+      if (wrote) break;
+    }
     if (!context()) return abandon(job);
     const turn = wrote ? takeTurn() : null;
     if (!turn) {
@@ -447,23 +441,25 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const text = result.ok ? lineReply(result.reply, "update") : null;
     if (!text) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
     remember(cardEvents, job.event.id, job.event);
-    if (post(bot, threadId, updateCard({ event: job.event, text, timeZone: zone, now: now() }))) job.delivered = true;
+    if (post(bot, threadId, updateCard({ event: job.event, text, timeZone: zone, now: now(), accounts: accountNames(job.event) }))) job.delivered = true;
     setMeeting(job.event.id, { start: job.event.start, fingerprint: fingerprint(job.event), updateStartedAt: undefined });
   }
 
   async function triage(bot: BotRecord, threadId: string, job: Extract<Job, { kind: "triage" }>): Promise<void> {
-    const result = await run(bot, "Email check", triagePrompt({ emails: job.batch, meetingToday: meetingToday() }));
+    const result = await run(bot, "Email check", triagePrompt({ emails: job.batch, meetingToday: meetingToday(), label: accounts.label }));
     keepThread(result.threadId);
     if (!context()) return abandon(job);
     endFlight(job.item);
     const picks = result.ok ? triageReply(result.reply, new Set(job.batch.map((email) => email.id))) : null;
     if (!picks) return failed(bot, threadId, job, result.ok ? "the answer could not be read" : result.error);
     for (const pick of picks) {
-      const email = job.batch.find((candidate) => candidate.id === pick.id)!;
-      if (!post(bot, threadId, emailCard({ email, why: pick.why, action: pick.action }))) continue;
-      job.carded.add(email.id);
-      flagged = keepNewest([...flagged, email], MAX_REMEMBERED);
-      remember(cardEmails, email.id, email);
+      for (const email of job.batch.filter((candidate) => candidate.id === pick.id)) {
+        if (!post(bot, threadId, emailCard({ email, why: pick.why, action: pick.action, account: accounts.label(email.account), address: accounts.address(email.account) }))) continue;
+        const copies = email.messageIdHeader === undefined ? [] : job.copies.filter((copy) => copy.messageIdHeader === email.messageIdHeader);
+        for (const carded of [email, ...copies]) job.carded.add(emailKey(carded));
+        flagged = keepNewest([...flagged, email], MAX_REMEMBERED);
+        remember(cardEmails, emailKey(email), email);
+      }
     }
   }
 
@@ -537,10 +533,13 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       .map((event) => ({ allDay: event.allDay, title: event.title, start: event.start, end: event.end, status: statusOf(event, at, zone), ...(event.joinUrl ? { joinUrl: event.joinUrl } : {}) }));
   }
 
-  function lastKnownConnections(): Record<AssistantService, boolean> | null {
-    if (lastConnected) return lastConnected;
-    const seen = current().connectedSeen;
-    return seen?.gmail || seen?.googlecalendar ? { gmail: seen.gmail === true, googlecalendar: seen.googlecalendar === true } : null;
+  function calendarStatus(): "checking" | "unreadable" | "read" {
+    const reads = accounts.usable("googlecalendar").map((account) => accounts.readState(account.id));
+    return reads.includes(undefined) ? "checking" : reads.includes("ok") ? "read" : "unreadable";
+  }
+
+  function todayRetry(bot: BotRecord, threadId: string, day: string, reason: string): void {
+    if (accounts.usable("googlecalendar").some((account) => !current().accounts?.[account.id]?.reconnectShown)) failCard(bot, threadId, `today:${day}`, TODAY_FAILED, reason);
   }
 
   function today(bot: BotRecord, threadId: string): void {
@@ -549,15 +548,13 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     const zone = deps.timeZone();
     const day = todayDue({ now: at, timeZone: zone, lastTodayDate: current().lastTodayDate });
     if (!day) return;
-    const known = lastKnownConnections();
-    const calendar = known?.googlecalendar === true && mausbotMayUse(bot, "googlecalendar");
-    const gmail = known?.gmail === true && mausbotMayUse(bot, "gmail");
-    if (!calendar && !gmail) {
-      todayPending = !lastConnected;
+    const calendar = accounts.usable("googlecalendar").length > 0;
+    if (!calendar && !accounts.usable("gmail").length) {
+      todayPending = !accounts.listed();
       return;
     }
-    const waiting = calendar && calendarReadAt === undefined;
-    const shown: TodayMeetings = waiting ? "checking" : todayMeetings(day, at, zone);
+    const status = calendar ? calendarStatus() : "read";
+    const shown: TodayMeetings = status === "read" ? todayMeetings(day, at, zone) : status;
     let team: TodayPost["team"];
     try {
       team = deps.team(at - 24 * HOUR) ?? undefined;
@@ -569,9 +566,16 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     flagged = [];
     const messageId = post(bot, threadId, todayCard({ now: at, timeZone: zone, meetings: shown, emails, ...(team ? { team } : {}) }));
     if (!messageId) return;
-    const posted = { messageId, threadId, day, emails, ...(team ? { team } : {}) };
-    if (typeof shown === "string") todayRefresh = posted;
-    else if (calendar && at - calendarReadAt! > deps.checkMs) todayRefresh = { ...posted, key: meetingsKey(shown) };
+    const posted: TodayPost = { messageId, threadId, day, emails, ...(team ? { team } : {}) };
+    if (typeof shown !== "string") {
+      if (calendar && at - (calendarReadAt ?? at) > deps.checkMs) todayRefresh = { ...posted, key: meetingsKey(shown) };
+      return;
+    }
+    todayRefresh = posted;
+    if (shown === "unreadable") {
+      posted.failed = true;
+      todayRetry(bot, threadId, day, CALENDAR_UNREAD);
+    }
   }
 
   function editToday(bot: BotRecord, posted: TodayPost, meetings: TodayMeetings): void {
@@ -595,7 +599,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     if (!posted || posted.key !== undefined || posted.failed) return;
     posted.failed = true;
     editToday(bot, posted, "unreadable");
-    if (!current().reconnectShown?.googlecalendar) failCard(bot, posted.threadId, `today:${posted.day}`, TODAY_FAILED, reason);
+    todayRetry(bot, posted.threadId, posted.day, reason);
   }
 
   function recover(bot: BotRecord, threadId: string): void {
@@ -608,6 +612,30 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     }
   }
 
+  async function readCalendars(at: number): Promise<boolean> {
+    const usable = accounts.usable("googlecalendar");
+    const fresh = await Promise.all(usable.map((account) => accounts.read(account, () => deps.sources.events(account, at - HOUR, at + LOOKAHEAD_MS), scheduledCheck)));
+    const ids = new Set(usable.map((account) => account.id));
+    for (const id of calendarEvents.keys()) if (!ids.has(id)) calendarEvents.delete(id);
+    usable.forEach((account, index) => {
+      const read = fresh[index];
+      if (read) calendarEvents.set(account.id, read.map((event) => ({ ...event, account: account.id })));
+    });
+    events = mergeMeetings(usable.flatMap((account) => calendarEvents.get(account.id) ?? []), accounts.addresses())
+      .filter((meeting) => storable(meeting.id) && storable(meeting.seriesId));
+    return fresh.some((read) => read !== null);
+  }
+
+  async function readMail(at: number): Promise<MailRead[]> {
+    const reads = await Promise.all(accounts.usable("gmail").map(async (account): Promise<MailRead | null> => {
+      const cursorAtRead = current().accounts?.[account.id]?.emailCursor;
+      const since = emailSince({ now: at, emailCursor: cursorAtRead, checkMs: deps.checkMs });
+      const mail = await accounts.read(account, () => deps.sources.emails(account, since, EMAIL_FETCH_LIMIT), scheduledCheck);
+      return mail && { account: account.id, cursorAtRead, mail: mail.filter((email) => storable(email.id)) };
+    }));
+    return reads.filter((read): read is MailRead => read !== null);
+  }
+
   async function runCheck(): Promise<void> {
     const here = context();
     missedCheck = !here;
@@ -618,36 +646,25 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       quietly("jobs cut short by a restart were not settled", () => recover(bot, threadId));
     }
     try {
-      lastConnected = await deps.sources.connected();
-      if (!lastConnected || !context()) return;
-      quietly("a lost connection was not reported", () => noteConnections(bot, threadId, lastConnected!));
+      if (!await accounts.refresh() || !context()) return;
       const at = now();
-      let calendarProblem: string | undefined = CALENDAR_DISCONNECTED;
-      if (lastConnected.googlecalendar && mausbotMayUse(bot, "googlecalendar")) {
-        const fresh = await readService(bot, threadId, "googlecalendar", () => deps.sources.events(at - HOUR, at + LOOKAHEAD_MS));
-        if (!context()) return;
-        calendarProblem = fresh ? undefined : CALENDAR_UNREAD;
-        if (fresh) {
-          events = fresh.filter((event) => storable(event.id) && storable(event.seriesId));
-          calendarReadAt = at;
-          meetingsDue(bot, threadId, false);
-          quietly("Today was not updated", () => refreshToday(bot));
-        }
+      const fresh = await readCalendars(at);
+      if (!context()) return;
+      if (fresh) {
+        calendarReadAt = at;
+        meetingsDue(bot, threadId, false);
+        quietly("Today was not updated", () => refreshToday(bot));
       }
-      if (lastConnected.gmail && mausbotMayUse(bot, "gmail")) {
-        const cursor = current().emailCursor;
-        const since = emailSince({ now: at, emailCursor: cursor, checkMs: deps.checkMs });
-        const mail = await readService(bot, threadId, "gmail", () => deps.sources.emails(since, EMAIL_FETCH_LIMIT));
-        if (!context()) return;
-        if (mail) emailDue(mail.filter((email) => storable(email.id)), at, cursor);
-      }
+      const mail = await readMail(at);
+      if (!context()) return;
+      if (mail.length) emailDue(mail, at);
       quietly("old meetings were not forgotten", () => {
         const kept = pruneMeetings(meetings(), at);
         if (Object.keys(kept).length !== Object.keys(meetings()).length) state.patch({ meetings: kept });
       });
       quietly("old work threads were not swept", () => sweep(bot, at));
       if (todayPending) quietly("Today was not posted", () => today(bot, threadId));
-      if (calendarProblem) quietly("Today was not updated", () => todayUnread(bot, calendarProblem));
+      if (!fresh) quietly("Today was not updated", () => todayUnread(bot, accounts.usable("googlecalendar").length ? CALENDAR_UNREAD : CALENDAR_DISCONNECTED));
     } finally {
       void work();
     }
@@ -677,13 +694,16 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   }
 
   function retryable(item: string): "yes" | "no" | "unknown" {
-    const here = context();
-    if (!here) return "no";
+    if (!context()) return "no";
     const kind = kindOf(item);
-    if (kind === "today") return todayRefresh?.day === subjectOf(item) && mausbotMayUse(here.bot, "googlecalendar") && lastConnected?.googlecalendar !== false ? "yes" : "no";
-    if (kind === "triage") return mausbotMayUse(here.bot, "gmail") && lastConnected?.gmail !== false ? "yes" : "no";
-    if (!RETRY_CLEARS[kind] || !mausbotMayUse(here.bot, "googlecalendar") || lastConnected?.googlecalendar === false) return "no";
-    if (calendarReadAt === undefined) return "unknown";
+    const calendars = accounts.usable("googlecalendar").length > 0;
+    if (kind === "today") return todayRefresh?.day === subjectOf(item) && calendars ? "yes" : "no";
+    if (kind === "triage") {
+      const gmail = new Set(accounts.usable("gmail").map((account) => account.id));
+      return triageOf(item).emails.some((email) => gmail.has(email.account)) ? "yes" : "no";
+    }
+    if (!RETRY_CLEARS[kind] || !calendars) return "no";
+    if (calendarStatus() === "checking") return "unknown";
     const id = subjectOf(item);
     const event = events.find((candidate) => candidate.id === id);
     const record = meetings()[id];
@@ -738,8 +758,9 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       return event ? calendarRecords(event, deps.timeZone(), now()) : null;
     }
     if (action.type === "draft_reply" && typeof payload.messageId === "string") {
-      const email = cardEmails.get(payload.messageId);
-      return email ? emailRecords([email]) : null;
+      const id = payload.messageId;
+      const email = typeof payload.account === "string" ? cardEmails.get(emailKey({ account: payload.account, id })) : [...cardEmails.values()].findLast((one) => one.id === id);
+      return email ? replyRecords(email, accounts.label(email.account), current().accounts?.[email.account]?.implied ? undefined : email.account) : null;
     }
     return null;
   }
