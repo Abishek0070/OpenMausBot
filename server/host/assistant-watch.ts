@@ -13,8 +13,8 @@ import { createAssistantAccounts } from "./assistant-accounts.ts";
 import { cancelledCard, clockTime, emailCard, prepCard, reminderCard, todayCard, updateCard, type BuiltCard, type TodayMeeting, type TodayMeetings } from "./assistant-cards.ts";
 import { clip } from "./text-clip.ts";
 import {
-  DAILY_TURN_CAP, emailKey, emailSince, fingerprint, keepNewest, localDate, LOOKAHEAD_MS, mergeMeetings, planMail, planMeetings, PREP_LEAD_MS, pruneMeetings, qualifies,
-  todayDue, turnsLeft, type AccountEvent, type Meeting,
+  DAILY_TURN_CAP, emailKey, emailSince, eventsToMerge, fingerprint, keepNewest, localDate, LOOKAHEAD_MS, mergeMeetings, planMail, planMeetings, PREP_LEAD_MS, pruneMeetings,
+  qualifies, todayDue, turnsLeft, type CalendarRead, type Meeting,
 } from "./assistant-plan.ts";
 import { calendarRecords, lineReply, prepPrompt, prepReply, replyRecords, repeatPrompt, triagePrompt, triageReply, updatePrompt, type TurnTools } from "./assistant-prompts.ts";
 import {
@@ -134,7 +134,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     return { cancel: () => clearInterval(timer) };
   });
   let events: Meeting[] = [];
-  const calendarEvents = new Map<string, AccountEvent[]>();
+  const calendarReads = new Map<string, CalendarRead>();
   let calendarReadAt: number | undefined;
   let todayPending = false;
   let todayRefresh: TodayPost | undefined;
@@ -195,9 +195,9 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   const say = (threadId: string, text: string): void => { deps.store.appendMessage(threadId, { role: "bot", kind: "text", text }); };
 
-  function reconnect(account: SourceAccount, label: string | undefined, text: string): void {
+  function reconnect(account: SourceAccount, label: string | undefined, text: string): boolean {
     const here = context();
-    if (!here) return;
+    if (!here) return false;
     const app = LABEL[account.service];
     say(here.threadId, text);
     deps.store.appendMessage(here.threadId, {
@@ -208,6 +208,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
       },
     });
     announce(here.bot, here.threadId, text);
+    return true;
   }
 
   function failCard(bot: BotRecord, threadId: string, item: string, title: string, reason: string): void {
@@ -615,15 +616,16 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   async function readCalendars(at: number): Promise<boolean> {
     const usable = accounts.usable("googlecalendar");
     const fresh = await Promise.all(usable.map((account) => accounts.read(account, () => deps.sources.events(account, at - HOUR, at + LOOKAHEAD_MS), scheduledCheck)));
-    const ids = new Set(usable.map((account) => account.id));
-    for (const id of calendarEvents.keys()) if (!ids.has(id)) calendarEvents.delete(id);
+    const answered = new Set(usable.filter((_account, index) => fresh[index]).map((account) => account.id));
     usable.forEach((account, index) => {
       const read = fresh[index];
-      if (read) calendarEvents.set(account.id, read.map((event) => ({ ...event, account: account.id })));
+      if (read) calendarReads.set(account.id, { at, events: read });
     });
-    events = mergeMeetings(usable.flatMap((account) => calendarEvents.get(account.id) ?? []), accounts.addresses())
+    const kept = new Set([...usable, ...accounts.unreadable("googlecalendar")].map((account) => account.id));
+    for (const id of calendarReads.keys()) if (!kept.has(id)) calendarReads.delete(id);
+    events = mergeMeetings(eventsToMerge(calendarReads, { now: at, fresh: answered }), accounts.addresses())
       .filter((meeting) => storable(meeting.id) && storable(meeting.seriesId));
-    return fresh.some((read) => read !== null);
+    return answered.size > 0;
   }
 
   async function readMail(at: number): Promise<MailRead[]> {

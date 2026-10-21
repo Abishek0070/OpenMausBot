@@ -15,6 +15,7 @@ export const CARDS_PER_TRIAGE = 5;
 export const EMAIL_MAX_AGE_MS = 24 * HOUR;
 export const PENDING_MAX_AGE_MS = 7 * 24 * HOUR;
 export const RECONNECT_AFTER = 3;
+export const KEPT_READ_MS = 24 * HOUR;
 export const KEEP_MEETINGS_MS = 35 * 24 * HOUR;
 export const DEFAULT_CHECK_MS = 15 * MINUTE;
 
@@ -111,8 +112,9 @@ export function emailSince(input: { now: number; emailCursor?: number; checkMs: 
   return Math.max(input.emailCursor, input.now - EMAIL_MAX_AGE_MS);
 }
 
-export type AccountEvent = CalendarEvent & { account: string };
+export type AccountEvent = CalendarEvent & { account: string; kept?: true };
 export type Meeting = CalendarEvent & { accounts: string[] };
+export interface CalendarRead { at: number; events: readonly CalendarEvent[] }
 
 const MEETING_KEY_MAX = 256;
 
@@ -130,11 +132,18 @@ export function meetingKey(event: CalendarEvent): string {
   return key.length > MEETING_KEY_MAX ? hashed("uid", key) : key;
 }
 
+const copyOrder = (copy: AccountEvent): string => `${copy.account}\n${copy.id}`;
+
 function mergeGroup(group: readonly AccountEvent[], id: string, addresses: ReadonlySet<string>): Meeting {
-  const live = group.filter((copy) => copy.status !== "cancelled");
-  const pool = live.length > 0 ? live : group;
-  const lead = pool.reduce((best, copy) => (copy.attendees.length > best.attendees.length ? copy : best));
-  const { account: _account, ...details } = lead;
+  const fresh = group.filter((copy) => !copy.kept);
+  const deciding = fresh.length > 0 ? fresh : group;
+  const live = deciding.filter((copy) => copy.status !== "cancelled");
+  const pool = live.length > 0 ? live : deciding;
+  const lead = pool.reduce((best, copy) => {
+    const more = copy.attendees.length - best.attendees.length;
+    return more > 0 || (more === 0 && copyOrder(copy) < copyOrder(best)) ? copy : best;
+  });
+  const { account: _account, kept: _kept, ...details } = lead;
   const attendees = lead.attendees.map((attendee) => ({ ...attendee, self: addresses.has(attendee.email.toLowerCase()) || (attendee.self && lead.ownedCalendar === true) }));
   const mine = attendees.filter((attendee) => attendee.self);
   return {
@@ -142,7 +151,7 @@ function mergeGroup(group: readonly AccountEvent[], id: string, addresses: Reado
     id,
     attendees,
     selfDeclined: mine.length > 0 ? mine.every((attendee) => attendee.response === "declined") : lead.selfDeclined,
-    accounts: [...new Set(group.map((copy) => copy.account))],
+    accounts: [...new Set(group.map((copy) => copy.account))].sort(),
   };
 }
 
@@ -154,7 +163,16 @@ export function mergeMeetings(events: readonly AccountEvent[], addresses: Readon
     const key = meetingKey(event);
     groups.set(key, [...(groups.get(key) ?? []), event]);
   }
-  return [...withUid, ...withoutUid].map(([key, group]) => mergeGroup(group, key, addresses)).sort((a, b) => a.start - b.start);
+  return [...withUid, ...withoutUid].map(([key, group]) => mergeGroup(group, key, addresses))
+    .sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+export function eventsToMerge(reads: ReadonlyMap<string, CalendarRead>, input: { now: number; fresh: ReadonlySet<string> }): AccountEvent[] {
+  return [...reads].flatMap(([account, read]): AccountEvent[] => {
+    if (input.fresh.has(account)) return read.events.map((event) => ({ ...event, account }));
+    if (input.now - read.at > KEPT_READ_MS) return [];
+    return read.events.filter((event) => event.end > input.now).map((event) => ({ ...event, account, kept: true }));
+  });
 }
 
 export function clashes<T extends CalendarEvent>(meetings: readonly T[], input: { now: number; timeZone?: string }): Array<[T, T]> {

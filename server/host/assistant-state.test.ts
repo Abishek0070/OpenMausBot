@@ -23,8 +23,8 @@ describe("createAssistantState", () => {
 
   it("keeps the email cursor, judged ids and connection record only per account", () => {
     const file = join(folder(), "assistant.json");
-    writeFileSync(file, JSON.stringify({ version: 2, emailCursor: 3, judged: ["e1"], failures: { gmail: 1 }, reconnectShown: { gmail: true }, connectedSeen: { gmail: true } }));
-    expect(createAssistantState(file).get()).toEqual({ version: 2 });
+    writeFileSync(file, JSON.stringify({ version: 2, dayTurns: 1, emailCursor: 3, judged: ["e1"], failures: { gmail: 1 }, reconnectShown: { gmail: true }, connectedSeen: { gmail: true } }));
+    expect(createAssistantState(file).get()).toEqual({ version: 2, dayTurns: 1 });
   });
 
   it("has no room for a subject, a body or a title", () => {

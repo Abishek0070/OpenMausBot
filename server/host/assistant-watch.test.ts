@@ -335,8 +335,8 @@ describe("email", () => {
 
 describe("every account", () => {
   /** g1 and c1 as me@example.test, plus c2 as admin@example.test holding a copy of the same meeting. */
-  const onTwoCalendars = (shared: CalendarEvent) => {
-    const w = world({ listed: [G1, C1, C2], events: [shared] });
+  const onTwoCalendars = (shared: CalendarEvent, listed = [G1, C1, C2]) => {
+    const w = world({ listed, events: [shared] });
     w.live.addresses.c2 = ADMIN;
     w.live.calendars.c2 = [{ ...shared, id: `${shared.id}-on-c2`, calendarId: ADMIN }];
     return w;
@@ -346,6 +346,10 @@ describe("every account", () => {
     w.live.addresses.g2 = ADMIN;
     return w;
   };
+  const ORDERS = [{ order: "c1 listed first", listed: [G1, C1, C2] }, { order: "c2 listed first", listed: [G1, C2, C1] }];
+  /** One message in g1 and in g2: Gmail gives each inbox its own id, and both carry the same Message-ID header. */
+  const IN_G1 = { ...mail("important-1", NOW - MINUTE), messageIdHeader: "<q3@pin.example>" };
+  const IN_G2 = { ...mail("important-1-copy", NOW - 2 * MINUTE), messageIdHeader: "<q3@pin.example>" };
 
   it("reads every calendar account, and preps a meeting on two of them once, naming both accounts", async () => {
     const w = onTwoCalendars(meeting("a", NOW + 2 * HOUR, { iCalUID: "uid-1" }));
@@ -425,6 +429,137 @@ describe("every account", () => {
     w.watch.reminders();
     expect(w.titles()).toEqual(["Prep: Meeting b", "Call with Jake Price in 9 minutes"]);
     expect(w.widgets().at(-1)?.caption).toContain("admin@example.test");
+  });
+
+  it.each(ORDERS)("takes a moved meeting's time from the account read this time, not another account's kept copy ($order)", async ({ listed }) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const shared = meeting("a", NOW + 3 * HOUR, { iCalUID: "uid-1" });
+    const w = onTwoCalendars(shared, listed);
+    await w.settle();
+    w.live.broken.add("c1");
+    w.live.calendars.c2 = [{ ...w.live.calendars.c2![0]!, start: shared.start + 30 * MINUTE, end: shared.end + 30 * MINUTE }];
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect(w.titles()).toEqual(["Prep: Meeting a", "Changed: Meeting a"]);
+    w.tick(3 * HOUR - 15 * MINUTE - 9 * MINUTE);
+    w.watch.reminders();
+    expect(w.titles()).toHaveLength(2);
+    w.tick(30 * MINUTE);
+    w.watch.reminders();
+    expect(w.titles().at(-1)).toBe("Call with Jake Price in 9 minutes");
+  });
+
+  it.each(ORDERS)("keeps a meeting cancelled when the account read this time cancelled it, whatever another account's kept copy says ($order)", async ({ listed }) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = onTwoCalendars(meeting("a", NOW + 3 * HOUR, { iCalUID: "uid-1" }), listed);
+    await w.settle();
+    w.live.broken.add("c1");
+    w.live.calendars.c2 = [{ ...w.live.calendars.c2![0]!, status: "cancelled" }];
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect(w.titles()).toEqual(["Prep: Meeting a", "Cancelled: Meeting a"]);
+    w.tick(3 * HOUR - 15 * MINUTE - 9 * MINUTE);
+    w.watch.reminders();
+    expect(w.titles()).toHaveLength(2);
+  });
+
+  it("keeps the meetings of an account that is listed but no longer active, so they still get their reminder", async () => {
+    const w = world({ listed: [G1, C1, C2] });
+    w.live.addresses.c2 = ADMIN;
+    w.live.calendars.c2 = [meeting("b", NOW + 3 * HOUR, { calendarId: ADMIN })];
+    await w.settle();
+    w.live.listed = [G1, C1, { ...C2, active: false }];
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect(w.sources.events.mock.calls.map(([account]) => account.id)).toEqual(["c1", "c2", "c1"]);
+    expect(w.texts()).toEqual([disconnectedText("googlecalendar", ADMIN)]);
+    w.tick(3 * HOUR - 15 * MINUTE - 9 * MINUTE);
+    w.watch.reminders();
+    expect(w.titles()).toEqual(["Prep: Meeting b", "Call with Jake Price in 9 minutes"]);
+  });
+
+  it("drops an account's meetings once it is removed in Settings and forgotten", async () => {
+    const w = world({ listed: [G1, C1, C2] });
+    w.live.addresses.c2 = ADMIN;
+    w.live.calendars.c2 = [meeting("b", NOW + 3 * HOUR, { calendarId: ADMIN })];
+    await w.settle();
+    w.live.listed = [G1, C1];
+    for (let check = 0; check < 2; check += 1) {
+      w.tick(15 * MINUTE);
+      await w.settle();
+    }
+    expect(w.watch.state.get().accounts?.c2).toBeUndefined();
+    w.tick(3 * HOUR - 30 * MINUTE - 9 * MINUTE);
+    w.watch.reminders();
+    expect(w.titles()).toEqual(["Prep: Meeting b"]);
+  });
+
+  it("posts the Reconnect card at the next failed read when the switch went off just before the card", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world({ listed: [G1, C1, C2] });
+    w.live.addresses.c2 = ADMIN;
+    w.live.broken.add("c2");
+    const read = w.sources.events.getMockImplementation()!;
+    let c2Reads = 0;
+    w.sources.events.mockImplementation(async (account, fromMs, toMs) => {
+      if (account.id === "c2" && ++c2Reads === 3) w.switchOff();
+      return read(account, fromMs, toMs);
+    });
+    for (let check = 0; check < 3; check += 1) {
+      await w.settle();
+      w.tick(15 * MINUTE);
+    }
+    expect(w.texts()).toEqual([]);
+    expect(w.watch.state.get().accounts?.c2).toMatchObject({ failures: 3 });
+    expect(w.watch.state.get().accounts?.c2?.reconnectShown).toBeFalsy();
+    w.switchOn();
+    await w.settle();
+    expect(w.texts()).toEqual([reconnectText("googlecalendar", ADMIN)]);
+    expect(w.watch.state.get().accounts?.c2).toMatchObject({ failures: 4, reconnectShown: true });
+  });
+
+  it("judges one email in two inboxes in one item, cards it once, and marks both copies judged", async () => {
+    let flights: string[] = [];
+    const w = twoInboxes({ emails: [IN_G1], reply: (title, prompt) => {
+      flights = (w.watch.state.get().inFlight ?? []).map((flight) => flight.item);
+      return defaultReply(title, prompt);
+    } });
+    w.live.inboxes.g2 = [IN_G2];
+    await w.settle();
+    expect(flights).toEqual([`triage:${NOW - 2 * MINUTE}:g1/important-1,g2/important-1-copy`]);
+    expect(w.jobs.map((job) => job.title)).toEqual(["Email check"]);
+    expect(w.jobs[0]!.prompt).not.toContain("important-1-copy");
+    expect(w.titles()).toEqual(["Subject important-1"]);
+    expect(w.watch.state.get().accounts).toMatchObject({ g1: { judged: ["important-1"] }, g2: { judged: ["important-1-copy"] } });
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect(w.jobs).toHaveLength(1);
+  });
+
+  it("un-judges both copies of an email in two inboxes on Retry, and cards it once", async () => {
+    const w = twoInboxes({ emails: [IN_G1], reply: () => ({ ok: true, threadId: "", reply: "I looked at your mail." }) });
+    w.live.inboxes.g2 = [IN_G2];
+    await w.settle();
+    expect(w.answerRetry(w.retries()[0]!)).toBe("answered");
+    expect(w.watch.state.get().accounts?.g1?.judged ?? []).toEqual([]);
+    expect(w.watch.state.get().accounts?.g2?.judged ?? []).toEqual([]);
+    w.live.reply = defaultReply;
+    w.tick(15 * MINUTE);
+    await w.settle();
+    expect(w.titles()).toEqual(["Subject important-1"]);
+    expect(w.watch.state.get().accounts).toMatchObject({ g1: { judged: ["important-1"] }, g2: { judged: ["important-1-copy"] } });
+  });
+
+  it("moves the email cursor of an account it read, and leaves a failed account's where it was", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = twoInboxes();
+    const cursor = NOW - 2 * HOUR;
+    w.watch.state.patch({ accounts: { g1: { service: "gmail", connectedSeen: true, emailCursor: cursor }, g2: { service: "gmail", connectedSeen: true, emailCursor: cursor } } });
+    w.live.broken.add("g2");
+    await w.settle();
+    expect(w.sources.emails.mock.calls.map(([account, since]) => [account.id, since])).toEqual([["g1", cursor], ["g2", cursor]]);
+    expect(w.watch.state.get().accounts?.g1?.emailCursor).toBe(NOW - 5 * MINUTE);
+    expect(w.watch.state.get().accounts?.g2).toMatchObject({ emailCursor: cursor, failures: 1 });
   });
 
   it("still reads the other accounts when one fails", async () => {

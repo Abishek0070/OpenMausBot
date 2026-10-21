@@ -40,7 +40,7 @@ function world(options: { mayUse?: (service: AssistantService) => boolean; seed?
     if (answer instanceof Error) throw answer;
     return answer;
   });
-  const reconnect = vi.fn<(account: SourceAccount, label: string | undefined, text: string) => void>();
+  const reconnect = vi.fn<(account: SourceAccount, label: string | undefined, text: string) => boolean>(() => true);
   const make = (): AssistantAccounts => createAssistantAccounts({
     state,
     sources: { accounts: async () => live.listed, address },
@@ -120,6 +120,25 @@ describe("createAssistantAccounts", () => {
       await w.accounts.refresh();
     }
     expect(w.reconnect.mock.calls.map((call) => call[2])).toEqual([disconnectedText("gmail", "admin@example.test"), disconnectedText("gmail", "admin@example.test")]);
+  });
+
+  it("posts a Reconnect card that could not be posted at the next chance, on both the lost-connection and the failed-read path", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = world();
+    await w.accounts.refresh();
+    w.reconnect.mockReturnValueOnce(false);
+    w.listed = [{ ...G1, active: false }, C1];
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.ca_g1).toMatchObject({ connectedSeen: true });
+    expect(w.state.get().accounts?.ca_g1?.reconnectShown).toBeFalsy();
+    await w.accounts.refresh();
+    expect(w.state.get().accounts?.ca_g1).toMatchObject({ connectedSeen: false, reconnectShown: true });
+    expect(w.reconnect.mock.calls.map((call) => call[2])).toEqual([disconnectedText("gmail", "admin@example.test"), disconnectedText("gmail", "admin@example.test")]);
+    w.reconnect.mockClear();
+    w.reconnect.mockImplementationOnce(() => { throw new Error("messages.jsonl is read-only"); });
+    for (let n = 0; n < 4; n++) { await w.accounts.read(C1, failing, true); w.tick(CHECK_MS); }
+    expect(w.reconnect.mock.calls.map((call) => call[2])).toEqual([reconnectText("googlecalendar", "me@example.test"), reconnectText("googlecalendar", "me@example.test")]);
+    expect(w.state.get().accounts?.ca_c1).toMatchObject({ failures: 4, reconnectShown: true });
   });
 
   it("posts no lost-connection card for an account whose Reconnect card is already showing", async () => {

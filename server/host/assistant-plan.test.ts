@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
 import {
-  answered, clashes, DAILY_TURN_CAP, emailKey, emailSince, fingerprint, isMine, keepNewest, KEEP_MEETINGS_MS, localDate, meetingKey, mergeMeetings, planMail, planMeetings,
-  prunePending, pruneMeetings, qualifies, todayDue, turnsLeft, type AccountEvent,
+  answered, clashes, DAILY_TURN_CAP, emailKey, emailSince, eventsToMerge, fingerprint, isMine, keepNewest, KEEP_MEETINGS_MS, KEPT_READ_MS, localDate, meetingKey, mergeMeetings,
+  planMail, planMeetings, prunePending, pruneMeetings, qualifies, todayDue, turnsLeft, type AccountEvent, type CalendarRead,
 } from "./assistant-plan.ts";
 import { MAX_WORK_THREADS, type MeetingRecord, type PendingEmail } from "./assistant-state.ts";
 
@@ -226,7 +226,7 @@ describe("one meeting on several calendars", () => {
     const merged = mergeMeetings([
       ev("a", { iCalUID: "uid-1" }), { ...ev("b", { iCalUID: "uid-2" }), account: "c2" }, { ...ev("c"), account: "c3" },
     ], MINE);
-    expect(merged.map((one) => [one.id, one.accounts])).toEqual([["uid-1", ["c1"]], ["uid-2", ["c2"]], [meetingKey(ev("c")), ["c3"]]]);
+    expect(merged.map((one) => [one.id, one.accounts])).toEqual([[meetingKey(ev("c")), ["c3"]], ["uid-1", ["c1"]], ["uid-2", ["c2"]]]);
   });
 
   it("keys a meeting with no iCalUID by its time and title, so it keeps its key when one account's copy is not read", () => {
@@ -254,6 +254,45 @@ describe("one meeting on several calendars", () => {
     const merged = mergeMeetings([ev("late", { start: NOW + 3 * HOUR, end: NOW + 4 * HOUR, iCalUID: "l" }), ev("early", { iCalUID: "e" }), { ...ev("early2", { iCalUID: "e" }), calendarId: "other" }], MINE);
     expect(merged.map((one) => one.id)).toEqual(["e", "l"]);
     expect(merged[0]!.accounts).toEqual(["c1"]);
+  });
+});
+
+describe("a fresh read and a kept one", () => {
+  const both = (fresh: AccountEvent, kept: AccountEvent) => [[fresh, kept], [kept, fresh]].map((order) => mergeMeetings(order, MINE));
+
+  it("takes a meeting's time, title and status from the account read this time, still naming the kept account, in either order", () => {
+    const kept = { ...ev("x2", { iCalUID: "uid-1", title: "Old title" }), account: "c0", kept: true as const };
+    const moved = ev("x1", { iCalUID: "uid-1", start: NOW + 3 * HOUR, end: NOW + 4 * HOUR });
+    for (const merged of both(moved, kept)) expect(merged).toEqual([expect.objectContaining({ id: "uid-1", start: NOW + 3 * HOUR, title: "Meeting x1", accounts: ["c0", "c1"] })]);
+    const fewer = { ...moved, attendees: [ME, JAKE] };
+    const crowded = { ...kept, attendees: [ME, JAKE, { email: "ada@pin.example", self: false, organizer: false }] };
+    for (const merged of both(fewer, crowded)) expect(merged[0]).toMatchObject({ start: NOW + 3 * HOUR, attendees: fewer.attendees });
+  });
+
+  it("keeps a meeting cancelled or declined when the account read this time says so, whatever the kept copy says", () => {
+    const kept = { ...ev("x2", { iCalUID: "uid-1" }), account: "c2", kept: true as const };
+    for (const merged of both(ev("x1", { iCalUID: "uid-1", status: "cancelled" }), kept)) expect(merged[0]!.status).toBe("cancelled");
+    const declined = ev("x1", { iCalUID: "uid-1", attendees: [{ ...ME, response: "declined" }, JAKE] });
+    for (const merged of both(declined, kept)) expect(merged[0]!.selfDeclined).toBe(true);
+    expect(mergeMeetings([{ ...kept, status: "cancelled" }, { ...kept, id: "x3", account: "c3" }], MINE)[0]!.status).toBe("confirmed");
+  });
+
+  it("merges the same copies to the same meeting whatever order the accounts are listed in", () => {
+    const one = { ...ev("x1", { iCalUID: "uid-1", description: "From c1" }), account: "c1" };
+    const two = { ...ev("x2", { iCalUID: "uid-1", description: "From c2" }), account: "c2" };
+    const other = { ...ev("y", { iCalUID: "uid-2" }), account: "c2" };
+    expect(mergeMeetings([two, other, one], MINE)).toEqual(mergeMeetings([one, two, other], MINE));
+    expect(mergeMeetings([two, one], MINE)[0]).toMatchObject({ description: "From c1", accounts: ["c1", "c2"] });
+  });
+
+  it("merges each fresh read whole, and a kept read only for a day after it was read and only its meetings that have not ended", () => {
+    const ended = ev("ended", { start: NOW - 2 * HOUR, end: NOW - HOUR });
+    const ahead = ev("ahead", { start: NOW + HOUR, end: NOW + 2 * HOUR });
+    const reads = new Map<string, CalendarRead>([["c1", { at: NOW, events: [ended, ahead] }], ["c2", { at: NOW - HOUR, events: [ended, ahead] }]]);
+    expect(eventsToMerge(reads, { now: NOW, fresh: new Set(["c1"]) }).map((one) => [one.account, one.id, one.kept ?? false]))
+      .toEqual([["c1", "ended", false], ["c1", "ahead", false], ["c2", "ahead", true]]);
+    reads.set("c2", { at: NOW - KEPT_READ_MS - 1, events: [ahead] });
+    expect(eventsToMerge(reads, { now: NOW, fresh: new Set(["c1"]) }).map((one) => one.account)).toEqual(["c1", "c1"]);
   });
 });
 

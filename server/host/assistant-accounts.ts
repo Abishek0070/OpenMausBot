@@ -14,8 +14,8 @@ export interface AssistantAccountsDeps {
   now(): number;
   checkMs: number;
   mayUse(service: AssistantService): boolean;
-  /** Posts the Reconnect line and card for one account in MausBot's chat. */
-  reconnect(account: SourceAccount, label: string | undefined, text: string): void;
+  /** Posts the Reconnect line and card for one account in MausBot's chat; false when nothing was posted. */
+  reconnect(account: SourceAccount, label: string | undefined, text: string): boolean;
 }
 
 const shortId = (id: string): string => `account …${id.slice(-SHORT_ID)}`;
@@ -109,14 +109,16 @@ export function createAssistantAccounts(deps: AssistantAccountsDeps) {
     return { service, label: accountLabel({ id, alias: record?.alias ?? account?.alias, ...(implied ? { implied: true } : {}) }, record?.address) };
   }
 
-  function postReconnect(account: SourceAccount, text: (service: AssistantService, label?: string) => string): void {
-    patchRecord(account.id, { reconnectShown: true });
+  function postReconnect(account: SourceAccount, text: (service: AssistantService, label?: string) => string): boolean {
     const { label } = describe(account.id, account);
+    let posted = false;
     try {
-      deps.reconnect(account, label, text(account.service, label));
+      posted = deps.reconnect(account, label, text(account.service, label));
     } catch (error) {
       console.warn(`assistant: the Reconnect card for ${account.service} account ${account.id} was not posted: ${failure(error)}`);
     }
+    if (posted) patchRecord(account.id, { reconnectShown: true });
+    return posted;
   }
 
   function noteConnection(account: SourceAccount): void {
@@ -131,8 +133,7 @@ export function createAssistantAccounts(deps: AssistantAccountsDeps) {
       return;
     }
     if (!seen) return;
-    patchRecord(account.id, { connectedSeen: false });
-    if (!record.reconnectShown) postReconnect(account, disconnectedText);
+    if (record.reconnectShown || postReconnect(account, disconnectedText)) patchRecord(account.id, { connectedSeen: false });
   }
 
   function noteMissing(listed: readonly SourceAccount[]): void {
