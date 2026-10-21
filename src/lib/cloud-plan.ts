@@ -1,8 +1,14 @@
 import type { CloudAccountState, CloudPlanSnapshot } from "../../electron/cloud-account.mjs";
-import type { CloudCredit, CloudOffer, CloudOfferPlan, CloudSetupStep, CloudTrial, CloudTrialState } from "../../electron/cloud-home.mjs";
+import type { CloudCredit, CloudOffer, CloudOfferPlan, CloudPlanAllowances, CloudSetupStep, CloudTrial, CloudTrialState } from "../../electron/cloud-home.mjs";
 import { activeLocale, t } from "@/lib/i18n";
+import type { LocaleKey } from "@/locales";
 
-const PLAN_LABEL: Record<string, string> = { personal: "Personal", pro: "Pro", max: "Max" };
+const PLAN_LABEL: Record<string, string> = { starter: "Starter", personal: "Personal", pro: "Pro", max: "Max" };
+const CHEAPEST_FIRST: readonly string[] = ["starter", "personal", "pro", "max"];
+function switchesDown(tier: string | undefined, target: string): boolean {
+  const below = CHEAPEST_FIRST.indexOf(target);
+  return tier !== undefined && below >= 0 && CHEAPEST_FIRST.indexOf(tier) > below;
+}
 export function cloudPlanLabel(tier?: string): string {
   return tier === undefined ? "Pro" : Object.hasOwn(PLAN_LABEL, tier) ? PLAN_LABEL[tier] : "Cloud";
 }
@@ -42,6 +48,16 @@ export function buyOfferAllowed(view: CloudPlanView): boolean {
   return view.kind === "signed-out" || view.kind === "free";
 }
 
+/** What the X research card offers someone whose server has no plan credential yet: a paying desktop is still connecting
+ * it; signed out (or a sign-in that ended), sign in; verified free, get a plan. Nothing where the state is unknown or
+ * someone may already pay, and without a desktop bridge. */
+export function xResearchAction(view: CloudPlanView | null): "connecting" | "sign-in" | "get-pro" | null {
+  if (!view) return null;
+  if (view.kind === "paid") return "connecting";
+  if (view.kind === "signed-out" || view.kind === "reauth") return "sign-in";
+  return view.kind === "free" ? "get-pro" : null;
+}
+
 export function cloudPlanLine(view: CloudPlanView): string | null {
   switch (view.kind) {
     case "paid": return t(view.trial ? "cloudAccount.trialPlan" : "cloudAccount.pro", { plan: view.label });
@@ -75,8 +91,8 @@ export interface CloudTrialView {
   action: { kind: CloudTrialAction; label: string } | null;
 }
 
-export function cloudTrialView(trial: CloudTrial, credit?: CloudCredit, { personal = null }: { personal?: number | null } = {}): CloudTrialView {
-  personal = trial.personalAmount ?? personal;
+export function cloudTrialView(trial: CloudTrial, credit?: CloudCredit): CloudTrialView {
+  const switchTo = trial.switchTo ?? (trial.personalAmount ? { tier: "personal", amount: trial.personalAmount } : null);
   const plan = trial.tier ? cloudPlanLabel(trial.tier) : t("cloudTrial.yourPlan");
   const ends = shortDate(trial.endsAt), deleted = trial.deleteAt ? shortDate(trial.deleteAt) : null;
   const subscribe = { kind: "subscribe" as const, label: t("cloudTrial.subscribe") };
@@ -86,9 +102,8 @@ export function cloudTrialView(trial: CloudTrial, credit?: CloudCredit, { person
       body: trial.amount === null ? t("cloudTrial.activeNoPrice", { plan, date: shortDate(trial.chargeAt ?? trial.endsAt) })
         : t("cloudTrial.active", { plan, price: usd(trial.amount / 100), date: shortDate(trial.chargeAt ?? trial.endsAt) }),
       ...(credit?.state === "active" ? { credit: t("cloudTrial.credit", { granted: usd(credit.grantedUsd), left: usd(credit.remainingUsd) }) } : {}),
-      ...(trial.tier && trial.tier !== "personal" && Object.hasOwn(PLAN_LABEL, trial.tier) ? { switchPlan: personal
-        ? t("cloudTrial.preferPersonal", { price: usd(personal / 100), date: ends })
-        : t("cloudTrial.preferPersonalNoPrice", { date: ends }) } : {}),
+      ...(switchTo && switchesDown(trial.tier, switchTo.tier)
+        ? { switchPlan: t("cloudTrial.preferPlan", { plan: cloudPlanLabel(switchTo.tier), price: usd(switchTo.amount / 100), date: ends }) } : {}),
       action: { kind: "manage", label: t("cloudTrial.manage") },
     };
     case "ending": return trial.keep === "portal"
@@ -113,10 +128,6 @@ export function cloudCreditLine(credit: CloudCredit): string {
   return credit.state === "used_up"
     ? t("cloudCredit.usedUp", { granted: usd(credit.grantedUsd) })
     : t("cloudCredit.left", { left: usd(credit.remainingUsd), granted: usd(credit.grantedUsd) });
-}
-
-export function personalAmount(offer: CloudOffer | null | undefined): number | null {
-  return offer?.plans.find(plan => plan.tier === "personal")?.amount ?? null;
 }
 
 
@@ -149,26 +160,57 @@ export function moneyBackLine(offer: CloudOffer | null | undefined): string | nu
   return offer?.refundDays ? t("cloudAdd.moneyBack", { days: offer.refundDays }) : null;
 }
 
-export function planDetails(plan: CloudOfferPlan): { main: string; machine: string } | null {
-  const a = plan.allowances;
-  if (!a) return null;
-  const computers = a.computers === 1 ? t("cloudAdd.oneComputer") : t("cloudAdd.computers", { count: a.computers });
-  const storage = a.maxDiskGb > a.diskGb ? t("cloudAdd.storageGrows", { gb: a.diskGb, max: a.maxDiskGb }) : t("cloudAdd.storage", { gb: a.diskGb });
-  const memory = Math.max(1, Math.round(a.memoryMb / 1024));
-  return { main: `${computers} · ${storage}`, machine: t("cloudAdd.machine", { cpus: a.cpus, memory, hours: a.computerHours }) };
+/** `note` is small print under the benefit. */
+export interface CloudPlanBenefit { text: string; note?: string }
+/** `limit` is how many cloud computers may run at once, said only as small print; plans sell on `line`, their hours. */
+export interface CloudPlanRow {
+  tier: string; name: string; price: string; popular: boolean; promise: string | null;
+  line: string | null; limit: string | null; sleeps: string | null; benefits: CloudPlanBenefit[]; adds: string | null;
 }
-
-/** One plan card: its name, the Admin's price, what differs (cloud computers at once) and three allowance chips. */
-export interface CloudPlanRow { tier: string; name: string; price: string; popular: boolean; line: string | null; chips: string[] }
-export function planRow(plan: CloudOfferPlan, recommended?: string): CloudPlanRow {
+const PROMISE: Record<string, LocaleKey> = { starter: "cloudBuy.promise.starter", pro: "cloudBuy.promise.pro", max: "cloudBuy.promise.max" };
+const amount = (value: number) => new Intl.NumberFormat(activeLocale(), { maximumFractionDigits: 1 }).format(value);
+const gb = (mb: number) => amount(Math.round(mb / 102.4) / 10);
+const times = (value: number, base: number) => `${amount(Math.round((value / base) * 10) / 10)}×`;
+/** About a thousand characters of speech a minute. */
+function voiceLine(characters: number): string {
+  const minutes = Math.max(1, Math.round(characters / 1000));
+  if (minutes < 60) return t("cloudBuy.plan.voiceMinutes", { minutes: amount(minutes) });
+  const hours = Math.round(minutes / 6) / 10;
+  return hours === 1 ? t("cloudBuy.plan.voiceHour") : t("cloudBuy.plan.voiceHours", { hours: amount(hours) });
+}
+function addsLine(a: CloudPlanAllowances, below: CloudOfferPlan): string | null {
+  const b = below.allowances;
+  if (!b || a.computerHours <= b.computerHours) return null;
+  const extras = [t("cloudBuy.plan.addsHours", { times: times(a.computerHours, b.computerHours) })];
+  const bigger = a.cpus > b.cpus || a.memoryMb > b.memoryMb, sameRatio = a.cpus / b.cpus === a.memoryMb / b.memoryMb;
+  if (b.sleeps && !a.sleeps) extras.push(t(bigger ? "cloudBuy.plan.addsAwakeBigger" : "cloudBuy.plan.addsAwake"));
+  else if (bigger) extras.push(!sameRatio ? t("cloudBuy.plan.addsBigger") : a.cpus === b.cpus * 2 ? t("cloudBuy.plan.addsTwice") : t("cloudBuy.plan.addsTimes", { times: times(a.cpus, b.cpus) }));
+  if (!b.sleeps && a.voiceCharacters > b.voiceCharacters) extras.push(t("cloudBuy.plan.addsVoice", { times: times(a.voiceCharacters, b.voiceCharacters) }));
+  // The website's English lists have no serial comma ("a, b and c").
+  const list = new Intl.ListFormat(activeLocale() === "en" ? "en-GB" : activeLocale(), { type: "conjunction" });
+  return t("cloudBuy.plan.adds", { plan: offerPlanLabel(below), extras: list.format(extras) });
+}
+export function planBenefits(a: CloudPlanAllowances): CloudPlanBenefit[] {
+  const cpus = a.cpuKind === "shared" ? t("cloudBuy.plan.cpusShared", { count: a.cpus }) : t("cloudBuy.plan.cpus", { count: a.cpus });
+  const storage = a.maxDiskGb > a.diskGb
+    ? a.snapshotDays ? t("cloudBuy.plan.storageGrowsBackups", { max: a.maxDiskGb, days: a.snapshotDays }) : t("cloudBuy.plan.storageGrows", { max: a.maxDiskGb })
+    : a.snapshotDays ? t("cloudBuy.plan.storageBackups", { gb: a.diskGb, days: a.snapshotDays }) : t("cloudBuy.plan.storage", { gb: a.diskGb });
+  return [
+    { text: a.sleeps ? t("cloudBuy.plan.sleeps") : t("cloudBuy.plan.alwaysOn") },
+    { text: t("cloudAdd.computers", { hours: amount(a.computerHours) }), note: t("cloudBuy.plan.limit", { count: a.computers }) },
+    { text: voiceLine(a.voiceCharacters) },
+    { text: t("cloudBuy.plan.apps") },
+    { text: t("cloudBuy.plan.phone") },
+    { text: a.swapMb ? t("cloudBuy.plan.machineSwap", { cpus, memory: gb(a.memoryMb), swap: gb(a.swapMb) }) : t("cloudBuy.plan.machine", { cpus, memory: gb(a.memoryMb) }) },
+    { text: storage },
+  ];
+}
+export function planRow(plan: CloudOfferPlan, recommended?: string, below?: CloudOfferPlan | null): CloudPlanRow {
   const a = plan.allowances;
-  const chips = a ? [
-    t("cloudBuy.chip.machine", { cpus: a.cpus, memory: Math.max(1, Math.round(a.memoryMb / 1024)) }),
-    a.maxDiskGb > a.diskGb ? t("cloudBuy.chip.storageGrows", { gb: a.diskGb, max: a.maxDiskGb }) : t("cloudAdd.storage", { gb: a.diskGb }),
-    t("cloudBuy.chip.hours", { hours: a.computerHours }),
-  ] : [];
   return { tier: plan.tier, name: offerPlanLabel(plan), price: usd(plan.amount / 100), popular: plan.tier === recommended,
-    line: a ? (a.computers === 1 ? t("cloudAdd.oneComputer") : t("cloudAdd.computers", { count: a.computers })) : null, chips };
+    promise: Object.hasOwn(PROMISE, plan.tier) ? t(PROMISE[plan.tier]!) : null,
+    line: a ? t("cloudAdd.hours", { hours: amount(a.computerHours) }) : null, limit: a ? t("cloudAdd.atOnce", { count: a.computers }) : null,
+    sleeps: a?.sleeps ? t("cloudBuy.sleeps") : null, benefits: a ? planBenefits(a) : [], adds: a && below ? addsLine(a, below) : null };
 }
 
 const DAY_MS = 86_400_000;
@@ -237,7 +279,14 @@ export type CloudSignInPhase =
   | { step: "done"; intent: boolean };
 
 /** What the setup screen says about the plan that started: its tier, the running trial and the trial's credit. */
-export interface CloudStarted { tier: string | null; trial: CloudTrial | null; credit: CloudCredit | null }
+/** `sleeps`: the Admin says this Cloud's plan sleeps when idle. */
+export interface CloudStarted { tier: string | null; trial: CloudTrial | null; credit: CloudCredit | null; sleeps?: true }
+
+/** The Cloud being set up sleeps when idle: its own power, or the plan the offer showed for it says so. */
+export function startedSleeps(started: CloudStarted, offer: CloudOffer | null | undefined): boolean {
+  const tier = started.tier ?? started.trial?.tier;
+  return started.sleeps === true || Boolean(tier && offer?.plans.find(plan => plan.tier === tier)?.allowances?.sleeps);
+}
 
 export type CloudAddView =
   | { kind: "checking" }
@@ -263,7 +312,8 @@ export function cloudAddView(account: CloudAccountState | null | undefined, offe
   }): CloudAddView {
   const view = cloudPlanView(account);
   const started = (): CloudStarted => ({ tier: account?.entitlement?.tier ?? account?.purchase?.tier ?? null,
-    trial: account?.trial && trialRunning(account.trial) ? account.trial : null, credit: account?.credit?.state === "active" ? account.credit : null });
+    trial: account?.trial && trialRunning(account.trial) ? account.trial : null, credit: account?.credit?.state === "active" ? account.credit : null,
+    ...(account?.machine?.power?.sleeps ? { sleeps: true as const } : {}) });
   // Asked to sign in (Settings, the card, Already have a plan?): that needs no offer, and is the way back for a saved
   // sign-in that could not be read and was removed.
   if (signIn && !error && (view.kind === "signed-out" || view.kind === "removed")) return { kind: "sign-in", phase: signIn };

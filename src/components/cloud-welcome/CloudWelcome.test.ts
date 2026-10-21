@@ -4,8 +4,10 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudMoveBridge, CloudMoveOverview, CloudMoveState } from "../../../electron/cloud-move.mjs";
+import type { CloudSendNotice } from "../../../electron/cloud-send.mjs";
 import { EMPTY_ONBOARDING } from "@/lib/onboarding";
 import { setLocale } from "@/lib/i18n";
+import { ADVANCED_MODE_KEY } from "@/lib/interface-mode";
 
 const fixture = vi.hoisted(() => ({
   state: {} as any,
@@ -25,13 +27,14 @@ vi.mock("@/components/CloudTrialNotice", () => ({ useCloudPlanSnapshot: () => fi
 // The sign-in cards and the team library have their own tests.
 vi.mock("@/components/EngineSetup", async () => {
   const { createElement: h } = await import("react");
-  return { EngineSetup: ({ instance }: { instance: { instanceId: string } }) => h("div", { "data-engine-setup": instance.instanceId }) };
+  return { EngineSetup: ({ instance, description }: { instance: { instanceId: string }; description?: string }) =>
+    h("div", { "data-engine-setup": instance.instanceId, "data-description": description }) };
 });
 vi.mock("@/components/TeamLibraryPanel", async () => {
   const { createElement: h } = await import("react");
   return { TeamLibraryPanel: ({ onImported }: { onImported: () => void }) => { fixture.imported = onImported; return h("div", { "data-team-library": "" }); } };
 });
-import { CloudWelcome } from "./CloudWelcome";
+import { CloudWelcome, sentHere } from "./CloudWelcome";
 import { CLOUD_SETUP_MOVE_SKIPPED, CLOUD_WELCOME_DONE, CLOUD_WELCOME_SHOWN as SHOWN, welcomeStepHint } from "@/lib/cloud-setup";
 import { resetCloudWelcome, useCloudWelcome } from "@/lib/cloud-welcome";
 
@@ -41,7 +44,7 @@ const CLOUD = { id: "cloud", name: "Studio Cloud", origin: "https://omb-u-1a2b3c
 const overview = (extra: Partial<CloudMoveOverview> = {}): CloudMoveOverview => ({
   phase: "idle", local, cloud: emptyCloud, suggest: true, destination: CLOUD, blocked: null, fit: { fit: "now", neededBytes: 1, freeBytes: 2 }, ...extra,
 });
-const claude = { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", access: "subscription", snapshot: { state: "available", authenticated: false }, models: { default: "", options: [] } };
+const claude = { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", access: "subscription", authentication: { method: "paste-code" }, snapshot: { state: "available", authenticated: false }, models: { default: "", options: [] } };
 const codex = { ...claude, instanceId: "codex", driverKind: "codex", displayName: "Codex" };
 const credit = { instanceId: "trial", driverKind: "openai-compat", displayName: "Trial credit · Claude", readOnly: true, trialCredit: "active", snapshot: { state: "available" }, models: { default: "", options: [] } };
 
@@ -115,7 +118,7 @@ describe("CloudWelcome", () => {
     await vi.waitFor(() => expect(text()).toContain("Welcome to Studio Cloud"));
     await vi.waitFor(() => expect(text()).toContain("142 chats"));
     expect(text()).toContain("What should Studio Cloud start with?");
-    for (const line of ["Everything from this Mac", "6 bots", "4 routines", "1.2 GB", "Sign-ins and keys stay on this Mac. Routines arrive paused so nothing runs twice."]) {
+    for (const line of ["Everything from this Mac", "6 bots", "4 routines", "1.2 GB", "Your Claude or ChatGPT sign-in and API keys stay on this Mac. Routines arrive paused so nothing runs twice."]) {
       expect(text()).toContain(line);
     }
     expect(host.querySelector('[data-bring-choice="copy"]')!.getAttribute("aria-checked")).toBe("true");
@@ -178,7 +181,7 @@ describe("CloudWelcome", () => {
   it("on a Cloud that already has bots or chats, says they are already here instead of offering a copy or a fresh start", async () => {
     vi.mocked(bridge.state).mockResolvedValue(overview({ suggest: false, cloud: { ...emptyCloud, contents: { bots: 6, rooms: 1, chats: 142 }, empty: false } }));
     render();
-    await vi.waitFor(() => expect(text()).toContain("Studio Cloud already has bots or chats of its own, so nothing is copied over them from here."));
+    await vi.waitFor(() => expect(text()).toContain("Studio Cloud already has bots or chats, so nothing is copied over them from here."));
     expect(text()).toContain("Your bots are already here");
     expect(host.querySelector("[data-bring-choice]")).toBeNull();
     expect(button("Choose a team")).toBeUndefined();
@@ -197,7 +200,8 @@ describe("CloudWelcome", () => {
     expect(text()).not.toContain("Open the desktop app to bring your bots from your computer.");
   });
 
-  it("starting fresh opens the team library, and skipping keeps the copy's card from coming back", async () => {
+  it("in Advanced mode, starting fresh opens the team library, and skipping keeps the copy's card from coming back", async () => {
+    localStorage.setItem(ADVANCED_MODE_KEY, "1");
     render();
     await vi.waitFor(() => expect(text()).toContain("142 chats"));
     flushSync(() => (host.querySelector('[data-bring-choice="fresh"]') as HTMLButtonElement).click());
@@ -218,6 +222,19 @@ describe("CloudWelcome", () => {
     expect(hintsPut().at(-1)).toEqual([SHOWN, welcomeStepHint("bring"), CLOUD_SETUP_MOVE_SKIPPED]);
   });
 
+  it("in Simple mode, starting fresh starts with the assistant: no team to choose, one Continue", async () => {
+    render();
+    await vi.waitFor(() => expect(text()).toContain("142 chats"));
+    flushSync(() => (host.querySelector('[data-bring-choice="fresh"]') as HTMLButtonElement).click());
+    expect(text()).toContain("Start with your assistant. It brings in specialists when a job needs them.");
+    expect(text()).not.toContain("ready-made team");
+    expect(button("Choose a team")).toBeUndefined();
+    click("Continue");
+    expect(host.querySelector("[data-team-library]")).toBeNull();
+    expect(bridge.dismiss).toHaveBeenCalledOnce();
+    expect(hintsPut().at(-1)).toEqual([SHOWN, welcomeStepHint("bring"), CLOUD_SETUP_MOVE_SKIPPED]);
+  });
+
   it("in a desktop app connected to another server as its client, offers no copy from here either", () => {
     window.ogb = { ...window.ogb!, remoteClient: { active: true } } as unknown as typeof window.ogb;
     fixture.state.bots = [fixture.state.bots[0]];
@@ -234,32 +251,79 @@ describe("CloudWelcome", () => {
     expect(text()).toContain("Welcome to My Cloud");
     expect(text()).toContain("Open the desktop app to bring your bots from your computer.");
     expect(host.querySelector('[role="radiogroup"]')).toBeNull();
-    expect(button("Choose a team")).toBeDefined();
+    expect(button("Choose a team")).toBeUndefined();
+    expect(button("Continue")).toBeDefined();
     expect([...host.querySelectorAll("button")].some((node) => node.textContent?.startsWith("Copy to"))).toBe(false);
   });
 
-  it("resumes where it was left, and offers the trial's credit for now", async () => {
+  it("resumes where it was left, and with the trial's credit goes straight past the AI step", async () => {
     fixture.state.config.onboarding = { ...EMPTY_ONBOARDING, hintsSeen: [welcomeStepHint("bring")] };
     fixture.state.instances = [claude, codex, credit];
     fixture.plan = { status: "paid", credit: { grantedUsd: 5, remainingUsd: 5, state: "active" } };
     render();
-    expect(host.querySelector('[data-welcome-step="engine"]')).not.toBeNull();
+    await vi.waitFor(() => expect(host.querySelector('[data-welcome-step="files"]')).not.toBeNull());
     expect(host.querySelector('[data-welcome-rail="bring"]')!.hasAttribute("data-finished")).toBe(true);
-    expect(text()).toContain("You have $5 of Claude credit, so your bots can start right now.");
-    for (const tile of ["claude", "codex"]) expect(host.querySelector(`[data-cloud-choice="${tile}"]`)).not.toBeNull();
-    click("Use my credit for now");
-    expect(hintsPut().at(-1)).toEqual([welcomeStepHint("bring"), SHOWN, welcomeStepHint("engine")]);
+    expect(hintsPut().at(-1)).toEqual(expect.arrayContaining([welcomeStepHint("bring"), SHOWN, welcomeStepHint("engine")]));
+    expect(host.querySelector("[data-cloud-choice]")).toBeNull();
+  });
+
+  it("uses an AI already signed in here as it is: the AI step finishes itself", async () => {
+    fixture.state.config.onboarding = { ...EMPTY_ONBOARDING, hintsSeen: [welcomeStepHint("bring")] };
+    fixture.state.instances = [{ ...claude, snapshot: { state: "available", authenticated: true } }, codex];
+    render();
+    await vi.waitFor(() => expect(host.querySelector('[data-welcome-step="files"]')).not.toBeNull());
+    expect(hintsPut().at(-1)).toEqual(expect.arrayContaining([welcomeStepHint("engine")]));
+  });
+
+  it("with no AI working, leads with the Claude sign-in and folds the other ways under it", () => {
+    fixture.state.config.onboarding = { ...EMPTY_ONBOARDING, hintsSeen: [welcomeStepHint("bring")] };
+    render();
+    expect(host.querySelector('[data-welcome-step="engine"]')).not.toBeNull();
+    expect(host.querySelector('[data-welcome-recommended="claude"] [data-engine-setup="claude"]')?.getAttribute("data-description"), "one plain line, not the setup's own")
+      .toBe("Use the Claude account you already have. You sign in on their own website, so your password stays with them.");
+    expect(host.querySelector("[data-cloud-choice]")).toBeNull();
+    fixture.state.instances = [{ ...claude, authentication: undefined }, codex];
+    render();
+    expect(host.querySelector('[data-welcome-recommended="claude"] [data-engine-setup="claude"]')?.hasAttribute("data-description"), "a sign-in finished in Terminal keeps its own instructions")
+      .toBe(false);
+    click("Other ways");
+    expect(host.querySelector('[data-cloud-choice="codex"]')).not.toBeNull();
+    expect(host.querySelector('[data-cloud-choice="claude"]'), "the recommended way is not offered twice").toBeNull();
+    expect(host.querySelector('[data-cloud-choice="api-key"]')).not.toBeNull();
+    click("Skip for now");
     expect(host.querySelector('[data-welcome-step="files"]')).not.toBeNull();
   });
 
-  it("says Connected on an AI signed in here, and leaves the credit out once it is", () => {
+  it("right after an AI is connected here, checks it with one tiny real message and says it works, or what to fix", async () => {
     fixture.state.config.onboarding = { ...EMPTY_ONBOARDING, hintsSeen: [welcomeStepHint("bring")] };
-    fixture.state.instances = [{ ...claude, snapshot: { state: "available", authenticated: true } }, codex, credit];
+    fixture.state.instances = [claude, codex];
+    const checks: string[] = [];
+    let answer: Record<string, unknown> = { ok: true };
+    const config = fixture.api.getMockImplementation()!;
+    fixture.api.mockImplementation(async (path: string, init?: RequestInit) => {
+      const check = /^\/api\/instances\/([\w.-]+)\/check$/.exec(path);
+      if (!check) return config(path, init);
+      checks.push(check[1]!);
+      return answer;
+    });
     render();
-    expect(host.querySelector('[data-cloud-choice="claude"]')!.hasAttribute("data-connected")).toBe(true);
-    expect(text()).not.toContain("Claude credit");
-    click("Continue");
-    expect(host.querySelector('[data-welcome-step="files"]')).not.toBeNull();
+    click("Other ways");
+    // Already connected or not, nothing is checked until one is connected here.
+    expect(checks).toEqual([]);
+    fixture.state = { ...fixture.state, instances: [{ ...claude, snapshot: { state: "available", authenticated: true } }, codex] };
+    render();
+    await vi.waitFor(() => expect(text()).toContain("Claude is working"));
+    expect(checks).toEqual(["claude"]);
+    expect(host.querySelector('[data-engine-check="working"]')).not.toBeNull();
+    answer = { ok: false, error: "ChatGPT isn't signed in on this computer anymore. Sign in again, then check again." };
+    fixture.state = { ...fixture.state, instances: [{ ...claude, snapshot: { state: "available", authenticated: true } }, { ...codex, snapshot: { state: "available", authenticated: true } }] };
+    render();
+    await vi.waitFor(() => expect(host.querySelector('[data-engine-check="failed"]')).not.toBeNull());
+    expect(text()).toContain("ChatGPT is connected but didn't answer a test message. ChatGPT isn't signed in on this computer anymore. Sign in again, then check again.");
+    answer = { ok: true };
+    click("Test again");
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-engine-check="working"]')).toHaveLength(2));
+    expect(checks).toEqual(["claude", "codex", "codex"]);
   });
 
   it("files and apps open this computer's Files and Connected apps, then it is ready and says hi to the Chief of Staff", async () => {
@@ -289,5 +353,124 @@ describe("CloudWelcome", () => {
     click("Skip setup");
     expect(hintsPut().at(-1)).toEqual([SHOWN, CLOUD_WELCOME_DONE]);
     expect(welcome.current!.ended).toBe(true);
+  });
+  describe("when this computer's things come over (the move, or Send everything)", () => {
+    const counts = { bots: 4, updatedBots: 0, skills: 2, logins: 2, onePassword: true, settings: 1, chats: { conversations: 3, messages: 10 } };
+    const sentLast = (extra: Record<string, unknown> = {}) => ({ at: 1, reason: "move", failed: 0, seen: false, sent: counts, ...extra }) as NonNullable<CloudSendNotice["last"]>;
+    const notice = (extra: Partial<CloudSendNotice> = {}): CloudSendNotice => ({
+      ready: true, bots: [], updatedBots: [], skills: 0, logins: 0, onePassword: false, settings: 0, signature: "", dismissed: false,
+      running: false, last: null, whole: null, ...extra,
+    });
+    let pushNotice: (value: CloudSendNotice) => void = () => {};
+    const withSend = (value: CloudSendNotice | null) => {
+      const page = { notice: vi.fn().mockResolvedValue(value), send: vi.fn(), dismiss: vi.fn(),
+        onNotice: vi.fn((listener: (next: CloudSendNotice) => void) => { pushNotice = listener; return () => {}; }) };
+      window.ogb = { ...window.ogb!, cloudSendPage: page } as unknown as typeof window.ogb;
+      return page;
+    };
+    const rail = () => host.querySelector('[data-welcome-rail="bring"]')!;
+
+    it("says what came over only after a whole send went through, and keeps the choice while nothing is coming", () => {
+      const state = (value: CloudSendNotice | null) => sentHere(value)?.state ?? null;
+      expect(state(null)).toBeNull();
+      expect(state({ ...notice(), whole: undefined } as unknown as CloudSendNotice), "a desktop too old to say keeps its choice").toBeNull();
+      expect(state(notice()), "nothing sent and nothing on its way").toBeNull();
+      expect(state(notice({ running: true, runningReason: "move" }))).toBe("sending");
+      expect(state(notice({ running: true, runningReason: "button" }))).toBe("sending");
+      expect(state(notice({ last: sentLast() }))).toBe("sent");
+      expect(state(notice({ last: sentLast({ reason: "button" }) }))).toBe("sent");
+      expect(state(notice({ last: sentLast({ error: "This app could not sign in to My Cloud. Try again." }) })), "a send that failed as a whole").toBeNull();
+      expect(state(notice({ last: sentLast({ reason: "logins" }) })), "one login sent by hand").toBeNull();
+      expect(state(notice({ running: true, runningReason: "logins" }))).toBeNull();
+      // An older desktop that sends by itself: its first send, its later ones, and nothing gone yet while its switch is on.
+      for (const older of ["first", "auto"]) expect(state(notice({ last: sentLast({ reason: older }) })), older).toBe("sent");
+      expect(state(notice({ running: true, runningReason: "first" }))).toBe("sending");
+      expect(state({ ...notice(), auto: true }), "its switch on, nothing gone yet: on its way").toBe("sending");
+      expect(state({ ...notice({ last: sentLast({ reason: "logins" }) }), auto: true })).toBe("sending");
+    });
+
+    it("moves straight on to the AI while they come over, ticking Bring your stuff only once they arrived, never taking focus", async () => {
+      withSend(notice({ running: true, runningReason: "move" }));
+      render();
+      await vi.waitFor(() => expect(host.querySelector('[data-welcome-step="engine"]')).not.toBeNull());
+      expect(rail().hasAttribute("data-finished")).toBe(false);
+      expect(rail().hasAttribute("data-bringing")).toBe(true);
+      expect(hintsPut()).toEqual([[SHOWN]]);
+      expect(text()).not.toContain("What should Studio Cloud start with?");
+      expect(button("Copy to Studio Cloud")).toBeUndefined();
+      expect(bridge.start).not.toHaveBeenCalled();
+      expect(document.activeElement?.id, "moving on by itself takes no focus").not.toBe("cloud-welcome-step");
+      flushSync(() => pushNotice(notice({ last: sentLast() })));
+      await vi.waitFor(() => expect(hintsPut().at(-1)).toEqual([SHOWN, welcomeStepHint("bring")]));
+      expect(rail().hasAttribute("data-finished")).toBe(true);
+      expect(host.querySelector('[data-welcome-step="engine"]'), "the person stays where they are").not.toBeNull();
+    });
+
+    it("back on its step it says in one line what is happening, and in Simple mode offers nothing more to choose", async () => {
+      withSend(notice({ last: sentLast() }));
+      fixture.state.config.onboarding = { ...EMPTY_ONBOARDING, hintsSeen: [SHOWN, welcomeStepHint("bring")] };
+      render();
+      flushSync(() => (rail() as HTMLButtonElement).click());
+      await vi.waitFor(() => expect(text()).toContain("came over from This computer."));
+      expect(text()).not.toContain("by themselves");
+      for (const label of ["More", "Choose a team", "Continue"]) expect(button(label)).toBeUndefined();
+    });
+
+    it("back on its step it says in one line what is happening, with a fresh start only behind More in Advanced mode", async () => {
+      localStorage.setItem(ADVANCED_MODE_KEY, "1");
+      withSend(notice({ running: true, runningReason: "move" }));
+      render();
+      await vi.waitFor(() => expect(host.querySelector('[data-welcome-step="engine"]')).not.toBeNull());
+      flushSync(() => (rail() as HTMLButtonElement).click());
+      expect(text()).toContain("Your bots are already here");
+      expect(text()).toContain("Bringing this computer's bots, chats and logins here…");
+      expect(host.querySelector("[data-bring-choice]")).toBeNull();
+      for (const label of ["Copy to Studio Cloud", "Continue", "Choose a team", "Skip for now"]) expect(button(label)).toBeUndefined();
+      flushSync(() => pushNotice(notice({ last: sentLast() })));
+      await vi.waitFor(() => expect(text()).toContain("4 bots, 2 skills, 2 logins, 1Password, your settings, and 3 chats came over from This computer."));
+      expect(text()).not.toContain("by themselves");
+      expect(host.querySelector('[data-welcome-step="bring"]'), "never moved off a step the person opened").not.toBeNull();
+      click("More");
+      expect(text()).toContain("Start fresh");
+      click("Choose a team");
+      expect(host.querySelector("[data-team-library]")).not.toBeNull();
+    });
+
+    it("a whole send says what arrived and nothing about more coming", async () => {
+      withSend(notice({ last: sentLast({ reason: "button", sent: { ...counts, skills: 0, logins: 0, onePassword: false, settings: 0, chats: null } }) }));
+      fixture.state.config.onboarding = { ...EMPTY_ONBOARDING, hintsSeen: [SHOWN, welcomeStepHint("bring")] };
+      render();
+      flushSync(() => (rail() as HTMLButtonElement).click());
+      await vi.waitFor(() => expect(text()).toContain("4 bots came over from This computer."));
+      expect(text()).toContain("Your bots are already here");
+      expect(text()).not.toContain("by themselves");
+    });
+
+    it("a whole send that failed, a single login sent by hand, or an older desktop keep the choice to copy or start fresh", async () => {
+      for (const value of [notice({ last: sentLast({ error: "This app could not sign in to My Cloud. Try again." }) }), notice({ last: sentLast({ reason: "logins" }) }),
+        { ...notice({ last: sentLast() }), whole: undefined } as unknown as CloudSendNotice]) {
+        flushSync(() => root.unmount());
+        root = createRoot(host);
+        resetCloudWelcome();
+        fixture.api.mockClear();
+        withSend(value);
+        render();
+        await vi.waitFor(() => expect(text()).toContain("142 chats"));
+        expect(button("Copy to Studio Cloud")).toBeDefined();
+        expect(hintsPut()).toEqual([[SHOWN]]);
+      }
+    });
+
+    it("shows no choice while main has not answered yet, and the choice if it never does", async () => {
+      vi.useFakeTimers();
+      try {
+        const page = withSend(null);
+        page.notice.mockReturnValue(new Promise(() => {}));
+        render();
+        expect(host.querySelector('[data-welcome-step="bring"]')).toBeNull();
+        await vi.advanceTimersByTimeAsync(1600);
+        expect(host.querySelector('[data-welcome-step="bring"]')).not.toBeNull();
+      } finally { vi.useRealTimers(); }
+    });
   });
 });

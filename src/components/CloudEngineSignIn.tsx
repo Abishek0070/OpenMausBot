@@ -3,6 +3,7 @@ import { ArrowUpRight, Check, Info, KeyRound, RefreshCw } from "lucide-react";
 import { MausAvatar } from "@/components/Avatar";
 import { startCloudSetup } from "@/components/CloudIntent";
 import { engineReady } from "@/components/EngineLibrary";
+import { EngineCheckLine, useEngineLiveCheck } from "@/components/EngineLiveCheck";
 import { EngineSetup } from "@/components/EngineSetup";
 import { ProviderMark } from "@/components/ProviderIcons";
 import { staggerIndex } from "@/components/onboarding/beats/shared";
@@ -40,20 +41,23 @@ export function useCloudEngineChoices() {
       ? [{ id: "grok" as const, driverKind: "grokAgent" as const, label: t("cloudSignIn.grok"), hint: t("cloudSignIn.grokHint") }]
       : []),
   ];
-  return { instances: state.instances, dispatch, open, setOpen, checking, recheck, choices };
+  const live = useEngineLiveCheck(choices.flatMap((choice) => cloudEngine(state.instances, choice.driverKind) ?? []));
+  return { instances: state.instances, dispatch, open, setOpen, checking, recheck, choices, live };
 }
 
 export type CloudEngineChoices = ReturnType<typeof useCloudEngineChoices>;
 
 /** The provider tiles, the picked one's own sign-in, an API key, and what limits apply: the engine sign-in and the Cloud's welcome both show these. */
 export function cloudEngineChoices(engines: CloudEngineChoices, { handing = false, columns }: { handing?: boolean; columns?: string } = {}): ReactNode {
-  const { instances, dispatch, open, setOpen, checking, recheck, choices } = engines;
+  const { instances, dispatch, open, setOpen, checking, recheck, choices, live } = engines;
   return <>
     <div role="group" aria-label={t("cloudSignIn.title")} inert={handing} className={cn("mt-8 grid gap-3 transition-opacity duration-300 ease-out", columns ?? (choices.length === 3 ? "grid-cols-3" : "grid-cols-2"), handing && "opacity-40")}>
       {choices.map((choice, i) => {
         const picked = open === choice.id;
         const instance = cloudEngine(instances, choice.driverKind);
         const connected = Boolean(instance && engineReady(instance));
+        // Connected through an API key, not a plan: say so rather than "Use your Claude subscription".
+        const hint = connected && instance?.snapshot.account?.method === "api-key" ? t("cloudSignIn.keyHint") : choice.hint;
         return (
           <button
             key={choice.id}
@@ -82,11 +86,17 @@ export function cloudEngineChoices(engines: CloudEngineChoices, { handing = fals
                   </span>}
             </span>
             <span className="mt-5 block text-[15px] font-semibold leading-snug text-ink">{choice.label}</span>
-            <span className="mt-1 block text-[12.5px] leading-snug text-ink-secondary">{choice.hint}</span>
+            <span className="mt-1 block text-[12.5px] leading-snug text-ink-secondary">{hint}</span>
           </button>
         );
       })}
     </div>
+
+    {choices.map((choice) => {
+      const instance = cloudEngine(instances, choice.driverKind);
+      const check = instance && live.checks[instance.instanceId];
+      return check ? <EngineCheckLine key={choice.id} name={choice.label} check={check} onRetry={() => void live.run(instance.instanceId)} /> : null;
+    })}
 
     {open && !handing && (() => {
       const index = choices.findIndex((candidate) => candidate.id === open);

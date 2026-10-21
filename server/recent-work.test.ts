@@ -28,6 +28,11 @@ const store: RecentWorkStore = {
 const me = { id: "me", threadId: "main", tasks: [task("t-inv", "Invoice reconciliation"), task("t-inv", "duplicate id")] };
 
 describe("botThreads", () => {
+  it("leaves out an automation run's own conversation: its result already sits in the chat it reported to", () => {
+    const withRun = { ...me, tasks: [...me.tasks, { ...task("run-1", "Inbox brief · Oct 21"), routineRunId: "run-1" }] };
+    expect(botThreads(store, withRun, "Milind").map((thread) => thread.threadId)).not.toContain("run-1");
+  });
+
   it("lists the main chat, tasks, and the rooms the bot belongs to, each named for the bot", () => {
     expect(botThreads(store, me, "Milind")).toEqual([
       { threadId: "main", where: "1:1 with Milind", title: "Getting started", private: true },
@@ -40,7 +45,7 @@ describe("botThreads", () => {
 });
 
 describe("botThreads for MausBot", () => {
-  it("leaves out its hidden job threads, whose words carry invite and email text, and keeps its chat and every other thread", () => {
+  it("leaves out its hidden job threads, whose words carry invite and email text, and keeps its chat and its other conversations", () => {
     const mausbot = {
       id: "mausbot", threadId: "mausbot-main",
       tasks: [
@@ -50,7 +55,7 @@ describe("botThreads for MausBot", () => {
         { ...task("routine-1", "Morning digest"), routineRunId: "7d5c1f0e-routine-run" },
       ],
     };
-    expect(botThreads({ groups: [], taskByThread: () => undefined }, mausbot, "Milind").map((thread) => thread.threadId)).toEqual(["mausbot-main", "chat-2", "routine-1"]);
+    expect(botThreads({ groups: [], taskByThread: () => undefined }, mausbot, "Milind").map((thread) => thread.threadId)).toEqual(["mausbot-main", "chat-2"]);
   });
 });
 

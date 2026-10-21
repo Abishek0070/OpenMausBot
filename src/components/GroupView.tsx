@@ -24,13 +24,16 @@ import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { CompactionChip, DigestChip } from "./DigestChip";
 import { roomActivityVisible } from "@/lib/room-activity";
 import { StatusActivityRow } from "@/components/StatusActivityRow";
-import { MAUS_COLOR_NAMES, normalizeState, type MausColor } from "@/lib/mascot";
+import { normalizeState } from "@/lib/mascot";
 import { botTextShowsSpeaker, laterTextOwns, runShowsSpeaker } from "@/lib/room-speaker";
 import { defaultResponderName, effectiveDefaultResponder, groupResponseHint, jevRoomRoutingOn } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
-import { CopyButton, FailedTurnRow, MessageBoundary, ReplyAction } from "./ChatView";
-import { MESSAGE_ROW, MessageActions, messageActionClass } from "./MessageActions";
-import { useBotMessageMenu, userMessageMenu, type PinAction } from "./message-menu";
+import { FailedTurnRow, MessageBoundary, SIMPLE_BUBBLE } from "./ChatView";
+import { useAdvancedMode } from "@/lib/interface-mode";
+import { CopyButton, MESSAGE_ROW, MessageActions, messageActionClass, ReplyAction } from "./MessageActions";
+import { ReactAction, ReactionChips, useCanReact } from "./Reactions";
+import { ClusterLabel } from "./RoomClusterLabel";
+import { roomPin, useBotMessageMenu, userMessageMenu } from "./message-menu";
 import { RawMarkdownView, RawToggleAction } from "./RawMarkdownToggle";
 import { SpeakButton } from "./SpeakButton";
 import { useSpeech } from "@/lib/tts/useSpeech";
@@ -59,7 +62,7 @@ import { GoalRunCard } from "./GoalRunCard";
 import { AttachmentGallery, MessageAttachmentGallery, replyAttachmentGroup } from "./AttachmentGallery";
 import { VoiceNoteBubble, type VoiceNoteAttachment } from "./VoiceNoteBubble";
 import { OptionCard } from "./OptionCard";
-import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
+import { GroupCallOverlay, RoomHeaderCallButton } from "./GroupCallView";
 
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
@@ -141,41 +144,6 @@ export function RoomToolChip({ message, roomId }: { message: Message; roomId?: s
   );
 }
 
-function isPaletteColor(color: string): color is MausColor {
-  return (MAUS_COLOR_NAMES as readonly string[]).includes(color);
-}
-
-function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: string }) {
-  const known = isPaletteColor(color);
-  return (
-    <div className="mt-1 flex items-center gap-1.5 pl-0.5">
-      <BotAvatar
-        bot={bot ?? { name, color: color as Bot["color"] }}
-        state={normalizeState(bot?.mascotExpression) ?? "happy"}
-        size={16}
-        motion="none"
-        motionKey={0}
-        animated={false}
-        readable={known}
-      />
-      <span
-        className={cn("text-[11px] font-medium", known ? "bot-identity" : "text-ink-secondary")}
-        data-bot-color={known ? color : undefined}
-      >{name}</span>
-    </div>
-  );
-}
-
-function roomPin(group: Group, message: Message, dispatch: ReturnType<typeof useStore>["dispatch"]): PinAction | undefined {
-  if (window.ogb?.remoteClient?.active) return undefined;
-  const pinned = group.pinnedMessageId === message.id;
-  return {
-    pinned,
-    hint: t("room.pinHint"),
-    onToggle: () => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: pinned ? "" : message.id } }),
-  };
-}
-
 const USER_COLLAPSE_CHARS = 600;
 const USER_COLLAPSE_LINES = 8;
 
@@ -187,6 +155,7 @@ function RoomTextMessage({
   emerging,
   eager,
   onReply,
+  canReact,
 }: {
   group: Group;
   message: Message;
@@ -195,6 +164,7 @@ function RoomTextMessage({
   emerging: boolean;
   eager: boolean;
   onReply: (message: Message) => void;
+  canReact: boolean;
 }) {
   const { state, dispatch } = useStore();
   const user = m.role === "user";
@@ -209,9 +179,8 @@ function RoomTextMessage({
   const focus = state.focusMessage;
   const focusedSearch = focus?.messageId === m.id && Boolean(focus.matchText) && focus.threadId === group.threadId;
   const collapsible = user && !expanded && (display.length > USER_COLLAPSE_CHARS || display.split("\n").length > USER_COLLAPSE_LINES);
-  useEffect(() => {
-    if (focusedSearch && collapsible) setExpanded(true);
-  }, [focusedSearch, collapsible, focus?.nonce]);
+  useEffect(() => { if (focusedSearch && collapsible) setExpanded(true); }, [focusedSearch, collapsible, focus?.nonce]);
+  const simple = !useAdvancedMode();
   const speakerBot = members.find((member) => member.id === m.from?.botId);
   const botText = rawText;
   const pin = roomPin(group, m, dispatch);
@@ -244,7 +213,7 @@ function RoomTextMessage({
             !user && emerging && "turn-answer",
             !user && !m.text?.trim() && !m.replyToId && m.attachments?.length
               ? "text-ink"
-              : user ? "chat-text whitespace-pre-wrap bg-bubble-user px-4 py-2.5 text-ink" : "bg-card px-4 py-2.5 text-ink",
+              : cn(user ? "chat-text whitespace-pre-wrap bg-bubble-user px-4 py-2.5 text-ink" : "bg-card px-4 py-2.5 text-ink", simple && SIMPLE_BUBBLE),
           )}
           title={new Date(m.at).toLocaleString()}
         >
@@ -319,6 +288,7 @@ function RoomTextMessage({
         {!user && (
           <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={botMenu}>
             <ReplyAction onReply={() => onReply(m)} />
+            {canReact && m.from && <ReactAction threadId={group.threadId} message={m} />}
             {botText && <CopyButton text={botText} className={messageActionClass} />}
             {botText && viewRaw && <RawToggleAction active onToggle={() => setViewRaw(false)} className={messageActionClass} />}
             {botText && speaking && (
@@ -330,6 +300,7 @@ function RoomTextMessage({
           {formatTime(m.at)}
         </span>
       </div>
+      <ReactionChips threadId={group.threadId} message={m} bots={members} align={user ? "end" : "start"} canReact={canReact} />
       {!user && m.routedBy && <RoutedByLine routedBy={m.routedBy} />}
     </div>
   );
@@ -359,6 +330,7 @@ export const Transcript = memo(function Transcript({
   const { state, dispatch } = useStore();
   const showThreads = useShowThreads();
   const showToolCalls = showToolCallsEnabled(state.config);
+  const canReact = useCanReact(group.threadId);
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   const folds = useMemo(() => roomTurnFolds(messages), [messages, locale]);
   const items = useMemo(() => groupActivityRuns(messages.filter(message =>
@@ -502,6 +474,7 @@ export const Transcript = memo(function Transcript({
                 emerging={m.id === emergingId}
                 eager={m.id === newestMessageId || m.id === newestUserMessageId}
                 onReply={onReply}
+                canReact={canReact}
               />
             )
           ) : null;
@@ -536,6 +509,7 @@ export const Transcript = memo(function Transcript({
                       emerging={false}
                       eager={false}
                       onReply={onReply}
+                      canReact={canReact}
                     />
                   </div>
                 ))}
@@ -1354,7 +1328,7 @@ export function GroupView({ group }: { group: Group }) {
             isGroup
           />
           {!setupPending && <ConversationTurnLimit group={group} />}
-          <GroupCallButton group={group} members={members} />
+          <RoomHeaderCallButton group={group} members={members} />
           <GroupUsageChip usage={group.usage} />
           {!remoteClient && !setupPending && !group.dm && <RoomWorkingFolderChip group={group} onToggle={() => setFolderOpen((open) => !open)} />}
           {!remoteClient && !setupPending && !group.dm && <DefaultResponderSelect group={group} members={members} />}

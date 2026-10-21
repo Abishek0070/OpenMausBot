@@ -1,6 +1,7 @@
+// A routine run as its source conversation shows it: the card, and the plain text clients without cards read.
+import type { Message } from "./store.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { RoutineRun } from "./routines.ts";
-import type { Message } from "./store.ts";
 
 export function routineRunCard(run: RoutineRun): NonNullable<Message["routineRun"]> {
   const visibleSummary = run.status === "waiting" ? run.attention : run.output;

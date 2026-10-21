@@ -23,19 +23,19 @@ import type { RoutineManager } from "../routines.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "../send-idempotency.ts";
 import type { SkillReview } from "../skill-review.ts";
 import { assertWithinBudget } from "../spend.ts";
-import type { BotRecord, GroupRecord, Message, Store } from "../store.ts";
+import type { BotRecord, GroupRecord, GroupTaskPatch, Message, Store } from "../store.ts";
 import type { ThreadStarters } from "../thread-starters.ts";
 import { extractSteerImages } from "../turn-images.ts";
 import type { UsageTrigger } from "../usage-ledger.ts";
 import { bulkDeleteThreadIds, type BulkDeleteRefusal } from "./bulk-delete.ts";
 import { PASS, type RouteHandler } from "./table.ts";
+import { sawThread } from "../thread-presence.ts";
 
 export type MessagePage = { messages: Array<Message | Record<string, unknown>>; hasMore?: boolean; activeLeafId: string | null };
 
 export interface ChannelRouteDeps {
   store: Pick<Store,
-    | "group" | "groupTaskByThread" | "bot" | "switchGroupTask" | "setGroupTaskTurnTimeout" | "setGroupTaskPinned"
-    | "renameGroupTask" | "patchGroup" | "messagesFor" | "groupTasks" | "deleteGroupTasks" | "deleteGroup"
+    | "group" | "groupTaskByThread" | "bot" | "switchGroupTask" | "patchGroupTask" | "patchGroup" | "messagesFor" | "groupTasks" | "deleteGroupTasks" | "deleteGroup"
     | "createGroupTask" | "appendMessage">;
   cfg: Pick<AppConfig, "profile" | "budgets">;
   /** The desktop app owns this server, so a loopback caller is its owner. */
@@ -210,22 +210,13 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
       if (titleChange && groupThreadIsWorking(group.id, m[2])) {
         return json(res, 409, { error: "this task is running — stop it first" });
       }
-      let task = existing;
-      if (limiting && parsedLimit?.ok) {
-        const limited = store.setGroupTaskTurnTimeout(group.id, m[2], parsedLimit.minutes);
-        if (!limited) return json(res, 404, { error: "no such channel task" });
-        task = limited;
-      }
-      if (pinning) {
-        const pinned = store.setGroupTaskPinned(group.id, m[2], body.pinned === true);
-        if (!pinned) return json(res, 404, { error: "no such channel task" });
-        task = pinned;
-      }
-      if (titleChange) {
-        const renamed = store.renameGroupTask(group.id, m[2], body.title);
-        if (!renamed) return json(res, 404, { error: "no such channel task" });
-        task = renamed;
-      }
+      const patch: GroupTaskPatch = {
+        ...(parsedLimit?.ok ? { turnTimeoutMinutes: parsedLimit.minutes } : {}),
+        ...(pinning ? { pinned: body.pinned === true } : {}),
+        ...(titleChange ? { title: body.title } : {}),
+      };
+      const task = Object.keys(patch).length ? store.patchGroupTask(group.id, m[2], patch) : existing;
+      if (!task) return json(res, 404, { error: "no such channel task" });
       return json(res, 200, { task });
     }
     if (m && method === "DELETE") {
@@ -259,6 +250,7 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
     if (m && method === "POST") {
       const room = store.group(m[1]);
       if (!room) return json(res, 404, { error: "no such room" });
+      sawThread(room.threadId);
       const group = store.patchGroup(room.id, { unread: false, ...readCursor(room.threadId) })!;
       broadcast({ kind: "group", group: publicGroupState(group) });
       return json(res, 200, { group: publicGroupState(group) });

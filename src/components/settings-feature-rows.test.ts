@@ -2,7 +2,7 @@ import { Children, createElement, isValidElement, type ReactElement, type ReactN
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigStatus } from "@/state/store";
-import { AssistantActsRow, RoutinesInConversationRow } from "./settings-feature-rows";
+import { AssistantActsRow } from "./settings-feature-rows";
 import { Switch } from "./SettingsPrimitives";
 
 const fixture = vi.hoisted(() => ({
@@ -76,15 +76,5 @@ describe("AssistantActsRow", () => {
     expect(after.html).toContain("Disk is full");
     expect(after.toggle.props.checked).toBe(true);
     expect(fixture.dispatch).not.toHaveBeenCalled();
-  });
-});
-
-describe("RoutinesInConversationRow", () => {
-  it("stays off until turned on, and saves its own setting", async () => {
-    expect(render(RoutinesInConversationRow).toggle.props.checked).toBe(false);
-    fixture.api.mockResolvedValue({});
-    click(render(RoutinesInConversationRow).toggle);
-    await flush();
-    expect(fixture.api).toHaveBeenCalledWith("/api/config", { method: "PATCH", body: JSON.stringify({ features: { routinesInConversation: true } }) });
   });
 });

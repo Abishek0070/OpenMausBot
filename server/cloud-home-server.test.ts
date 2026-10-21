@@ -122,11 +122,10 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   ownerToken = await ownerPairing();
-  // A fresh Cloud home's starter is the Chief, and every failed turn here would wake it on the same fixture engine.
-  const { bots: seeded } = (await api("GET", "/api/bots?messages=0")).body as { bots: Array<{ id: string; chiefOfStaff?: boolean }> };
-  for (const chief of seeded.filter((bot) => bot.chiefOfStaff)) {
-    expect((await api("PATCH", `/api/bots/${chief.id}`, { body: { chiefOfStaff: false } })).status).toBe(200);
-  }
+  // Chief first makes the seeded bot its team's Chief, which answers a teammate's failed run with a Team incidents turn
+  // of its own on the same Claude: a second failed turn in the health read. Stepped down, each test's turns are its own.
+  const seeded = ((await api("GET", "/api/bots?messages=0")).body.bots as any[]).find((bot) => bot.chiefOfStaff);
+  expect((await api("PATCH", `/api/bots/${seeded.id}`, { body: { chiefOfStaff: false } })).status).toBe(200);
 }, 30_000);
 
 async function ownerPairing(): Promise<string> {

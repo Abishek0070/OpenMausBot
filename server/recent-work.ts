@@ -32,7 +32,7 @@ export function botThreads(store: RecentWorkStore, bot: Pick<BotRecord, "id" | "
   const direct = `1:1 with ${userName}`;
   const main = store.taskByThread(bot.id, bot.threadId);
   if (!isAssistantJobThread(main?.routineRunId)) add({ threadId: bot.threadId, where: direct, title: main?.title ?? null, private: true });
-  for (const task of bot.tasks ?? []) if (!isAssistantJobThread(task.routineRunId)) add({ threadId: task.threadId, where: direct, title: task.title, private: true });
+  for (const task of bot.tasks ?? []) if (!task.routineRunId) add({ threadId: task.threadId, where: direct, title: task.title, private: true });
   for (const group of store.groups) {
     if (!group.memberIds.includes(bot.id)) continue;
     const where = `room ${JSON.stringify(group.name)}`;

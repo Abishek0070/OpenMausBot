@@ -321,7 +321,7 @@ it("does not offer a Chief again after Not now", async () => {
   expect(await offers()).toHaveLength(1);
 }, 120_000);
 
-it("seeds no MausBot or Chief on a hosted team workspace", async () => {
+it("seeds no MausBot on a hosted team workspace, which starts with its Chief of Staff alone", async () => {
   const home = mkdtempSync(join(tmpdir(), "omb-mb-"));
   cleanups.push(() => removeTempDir(home));
   const dataDir = join(home, ".openmausbot");
@@ -329,7 +329,7 @@ it("seeds no MausBot or Chief on a hosted team workspace", async () => {
   const s = await start({ home, hosted: true });
   const [starter, ...rest] = await s.bots();
   expect(rest).toEqual([]);
-  expect([starter.builtIn, Boolean(starter.chiefOfStaff)]).toEqual([undefined, false]);
+  expect([starter.builtIn, Boolean(starter.chiefOfStaff)]).toEqual([undefined, true]);
   expect(await s.api("POST", "/api/presence/active", { source: "desktop" })).toEqual({ status: 200, body: { ok: true, returned: false } });
   expect((await s.lines(starter.threadId)).some((line) => line.card?.title === "Set up a Chief of Staff?")).toBe(false);
   expect(existsSync(join(dataDir, BRIEF_STATE_FILE))).toBe(false);

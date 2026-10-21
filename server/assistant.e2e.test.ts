@@ -688,7 +688,7 @@ it("does nothing on a hosted team workspace or with MausBot switched off, while 
   const hosted = await start(hostedApps, { hosted: true });
   const bots = await hosted.bots();
   expect(bots.some((bot) => bot.builtIn)).toBe(false);
-  expect(bots.some((bot) => bot.chiefOfStaff)).toBe(false);
+  expect(bots.filter((bot) => bot.chiefOfStaff), "a hosted workspace starts with its Chief of Staff alone, as every fresh one does").toHaveLength(1);
   expect((await hosted.api("POST", "/api/presence/active", { source: "desktop" })).body).toEqual({ ok: true, returned: false });
 
   const off = await start(offApps, { features: { assistantActs: false } });

@@ -21,6 +21,7 @@ describe("seedBots", () => {
     const store = new Store(selection);
     expect(seedBots(store, { hosted: false })).toBe("fresh");
     expect(store.bots.map((bot) => [bot.name, Boolean(bot.chiefOfStaff), bot.builtIn])).toEqual([[CHIEF_OF_STAFF_NAME, true, undefined], ["MausBot", false, "mausbot"]]);
+    expect(store.bots[0], "an untouched starter still reads as unused when sending to the Cloud").toMatchObject({ title: "", description: "", soul: "" });
     const mausbot = findMausBot(store.bots)!;
     expect(mausbot).toMatchObject({ color: "silver", mascotBody: "cursor", visibility: "admins", peers: [] });
     expect(store.messagesFor(mausbot.threadId)).toEqual([]);
@@ -73,14 +74,32 @@ describe("seedBots", () => {
     }
   });
 
-  it("keeps a hosted team workspace to one random starter and no MausBot", () => {
+  it("starts a hosted team workspace with its Chief of Staff alone, and no MausBot", () => {
     const store = new Store(selection);
     expect(seedBots(store, { hosted: true })).toBeNull();
     expect(store.bots).toHaveLength(1);
-    expect(store.bots[0]!.chiefOfStaff).toBeFalsy();
+    expect(store.bots[0], "the first bot a new person meets is their Chief of Staff").toMatchObject({ chiefOfStaff: true, hidden: false });
+    expect(store.bots[0], "the role is the flag, so an untouched starter still reads as unused when sending to the Cloud")
+      .toMatchObject({ title: "", description: "", soul: "" });
+    const reloaded = new Store(selection);
+    expect(seedBots(reloaded, { hosted: true })).toBeNull();
+    expect(reloaded.bots).toHaveLength(1);
+    expect(reloaded.bots[0]?.chiefOfStaff).toBe(true);
     expect(findMausBot(store.bots)).toBeNull();
     expect(seedBots(store, { hosted: true })).toBeNull();
     expect(store.bots).toHaveLength(1);
+  });
+});
+
+describe("seedBots on an existing workspace", () => {
+  beforeEach(() => { rmSync(DATA_DIR, { recursive: true, force: true }); });
+
+  it("leaves a hosted workspace without a Chief as it is", () => {
+    const store = new Store(selection);
+    const existing = store.createBot();
+    expect(seedBots(store, { hosted: true })).toBeNull();
+    expect(store.bots.map((bot) => bot.id)).toEqual([existing.id]);
+    expect(new Store(selection).bot(existing.id)?.chiefOfStaff).toBeFalsy();
   });
 });
 

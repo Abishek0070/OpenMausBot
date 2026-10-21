@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, CircleUser, Coins, FlaskConical, KeyRound, LockKeyhole, Monitor, Palette, ScrollText, Search, Sparkles, TabletSmartphone, Terminal, User, Users, X, Building2, Zap, BookOpen } from "lucide-react";
+import { Archive, CircleUser, Cloud, Coins, Download, FlaskConical, KeyRound, LockKeyhole, Monitor, Palette, ScrollText, Search, Sparkles, TabletSmartphone, Terminal, User, Users, X, Building2, Zap, BookOpen } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
 import { builtInBrowserEnabled, showToolCallsEnabled, skillAuthoringEnabled, skillsLibraryEnabled } from "@/lib/feature-flags";
 import { localeChoices, type LocaleKey } from "@/locales";
@@ -8,6 +8,7 @@ import { withTourReset } from "@/lib/guided-tour";
 import { completionPatch } from "@/lib/onboarding";
 import { AnthropicEveryClaudeBot, ApiKeyRow, OpenCodeProviderKeys, VpsConnection } from "./ApiKeys";
 import { AnalyticsRow } from "./AnalyticsRow";
+import { DiagnosticsRow } from "./DiagnosticsRow";
 import { OtherOpenAiCompatServers } from "./OpenAiCompatServers";
 import { DecisionModelSettings } from "./DecisionModelSettings";
 import { useUpdaterState } from "@/lib/updater";
@@ -30,7 +31,7 @@ import { OrganizationSettings } from "./OrganizationSettings";
 import { CloudAccountSettings } from "./CloudAccountSettings";
 import { ProSettingsCard } from "./ProIntroduction";
 import { Card, SettingRow, Switch } from "./SettingsPrimitives";
-import { AssistantActsRow, RoutinesInConversationRow } from "./settings-feature-rows";
+import { AssistantActsRow } from "./settings-feature-rows";
 import { LearnedSkillsSettings } from "./ShareLearnedSkillsSettings";
 import { effortLabel } from "./ModelPicker";
 import { EFFORT_LEVELS, isEffortLevel } from "../../shared/wire";
@@ -44,13 +45,14 @@ import { ChatWidthRow, FontRow, SidebarToolsLayoutRow } from "./AppearanceSelect
 import { setColorUserBubbles, useColorUserBubbles } from "@/lib/user-bubble-preference";
 import { RoomTurnTimeoutSettings } from "./RoomTurnTimeoutSettings";
 import { McpCallTimeoutSettings } from "./McpCallTimeoutSettings";
-import { AboutMeSettings } from "./AboutMeSettings";
+import { ProfileFields } from "./ProfileSettings";
 import { ThreadConcurrencySettings } from "./ThreadConcurrencySettings";
 import { AutomaticRecoverySettings } from "./AutomaticRecoverySettings";
 import { ThreadCleanupSettings } from "./ThreadCleanupSettings";
 import { DefaultBotSettings } from "./NewBotDialog";
 import { WorkspaceBackupSettings } from "./WorkspaceBackupSettings";
 import { CompanyBackupSettings } from "./CompanyBackupSettings";
+import { ImportSettings } from "./ImportSettings";
 import { cn } from "@/lib/cn";
 import { glassPopupFrameStyle } from "@/lib/glass-popup";
 import { NotificationRows } from "./NotificationSettingsRows";
@@ -90,10 +92,11 @@ export const SECTIONS: Array<{
   { id: "desktopWorkspaces", group: "computers", labelKey: "settings.section.desktopWorkspaces", icon: Building2, keywords: ["workspace", "cloud", "hosted", "vps", "server", "servers", "connect", "pair", "switch", "local"] },
   { id: "computer", group: "computers", labelKey: "settings.section.computer", icon: Monitor, keywords: ["vm", "virtual", "desktop", "browser", "built-in browser", "profiles", "browser profiles"] },
   { id: "logins", group: "computers", labelKey: "settings.section.logins", icon: LockKeyhole, keywords: ["logins", "login", "passwords", "password", "sign in", "2fa", "one-time code", "totp", "fill_login", "1password", "vault"] },
-  { id: "cloudAccount", group: "account", labelKey: "settings.section.cloudAccount", icon: User, keywords: ["cloud", "account", "personal", "sign in", "pro", "subscription", "billing"] },
+  { id: "cloudAccount", group: "account", labelKey: "settings.section.cloudAccount", icon: Cloud, keywords: ["cloud", "my cloud", "account", "personal", "sign in", "pro", "subscription", "billing", "sync", "send", "this computer", "bots", "logins", "1password", "lend"] },
   { id: "organization", group: "account", labelKey: "settings.section.organization", icon: Building2, keywords: ["company", "organization", "organisation", "sign in", "enroll", "managed", "models", "disconnect"] },
   { id: "usage", group: "account", labelKey: "settings.section.usage", icon: Coins, keywords: ["tokens", "cost", "billing", "plan", "quota", "remaining", "weekly", "5-hour", "model", "used"] },
   { id: "backups", group: "account", labelKey: "settings.section.backups", icon: Archive, keywords: ["export", "import", "restore", "full backup", "password", "recovery"] },
+  { id: "import", group: "account", labelKey: "settings.section.import", icon: Download, keywords: ["import", "grok", "grok bot", "x.ai", "cursor", "claude code", "codex", "gemini", "skills", "mcp", "tools", "bring"] },
   { id: "people", group: "account", labelKey: "settings.section.people", icon: Users, keywords: ["people", "users", "invite", "sign in", "members", "admins", "access"] },
   { id: "activity", group: "account", labelKey: "settings.section.activity", icon: ScrollText, keywords: ["activity", "audit", "log", "history", "who changed", "approvals", "decisions", "admin"] },
   { id: "workspaces", group: "account", labelKey: "settings.section.workspaces", icon: Building2, keywords: ["clients", "tenants", "fleet", "workspaces", "installation", "installations"] },
@@ -112,7 +115,8 @@ export const SIMPLE_PAGES: SimpleSettingsPage[] = [
   { id: "appearance", labelKey: "settings.section.appearance", icon: Palette, sections: ["appearance"] },
   { id: "ai", labelKey: "settings.group.ai", icon: Sparkles, sections: ["engines", "connections", "decisionModel"] },
   { id: "computers", labelKey: "settings.group.computers", icon: Monitor, sections: ["companion", "desktopWorkspaces", "computer", "logins"] },
-  { id: "account", labelKey: "settings.group.account", icon: CircleUser, sections: ["cloudAccount", "organization", "people", "activity"] },
+  { id: "cloud", labelKey: "settings.section.cloudAccount", icon: Cloud, sections: ["cloudAccount"] },
+  { id: "account", labelKey: "settings.group.account", icon: CircleUser, sections: ["organization", "import", "people", "activity"] },
 ];
 
 export const SIMPLE_HIDDEN_SECTIONS: readonly AppSettingsSection[] = ["usage", "backups", "experimental", "workspaces", "skills"];
@@ -135,10 +139,7 @@ export function revealSettingsBlock(
   section: AppSettingsSection,
   indexInPage: number,
 ): void {
-  if (indexInPage <= 0) {
-    scroller.scrollTop = 0;
-    return;
-  }
+  if (indexInPage <= 0) { scroller.scrollTop = 0; return; }
   scroller.querySelector(`[data-settings-block="${section}"]`)?.scrollIntoView?.({ block: "start" });
 }
 
@@ -154,47 +155,6 @@ function simplePageMatches(page: SimpleSettingsPage, query: string): boolean {
 export function sectionMatches(section: (typeof SECTIONS)[number], query: string): boolean {
   if (!query) return true;
   return [t(section.labelKey), ...section.keywords].some((part) => part.toLowerCase().includes(query));
-}
-
-function ProfileFields() {
-  const { state, dispatch } = useStore();
-  const [name, setName] = useState(state.config?.profile?.name ?? "");
-  const [email, setEmail] = useState(state.config?.profile?.email ?? "");
-  useEffect(() => {
-    setName(state.config?.profile?.name ?? "");
-    setEmail(state.config?.profile?.email ?? "");
-  }, [state.config?.profile?.name, state.config?.profile?.email]);
-
-  const save = () => {
-    void fetch("/api/config", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ profile: { name: name.trim(), email: email.trim().toLowerCase() } }),
-    })
-      .then((r) => { if (!r.ok) throw new Error("Profile save failed"); return r.json(); })
-      .then((config: ConfigStatus) => {
-        if (config.profile) dispatch({ type: "profileSaved", profile: { name: config.profile.name, email: config.profile.email } });
-      })
-      .catch(() => {});
-  };
-
-  const inputClass =
-    "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none";
-  return (
-    <div className="flex flex-col gap-3">
-      <input aria-label={t("settings.profile.name")} value={name} onChange={(e) => setName(e.target.value)} onBlur={save} placeholder={t("settings.profile.name")} className={inputClass} />
-      <input
-        type="email"
-        aria-label={t("phone.signIn.email")}
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        onBlur={save}
-        placeholder="you@example.com"
-        className={inputClass}
-      />
-      <AboutMeSettings />
-    </div>
-  );
 }
 
 export function UpdatesRow() {
@@ -594,47 +554,6 @@ function BrowserProfilesRow() {
   );
 }
 
-/** Security: the report never holds credential values; the desktop shell does not read secret fields. */
-function DiagnosticsRow() {
-  const [exporting, setExporting] = useState(false);
-  const [result, setResult] = useState<{ kind: "success" | "error"; message: string } | null>(null);
-
-  const exportDiagnostics = async () => {
-    if (!window.ogb?.exportDiagnostics || exporting) return;
-    setExporting(true);
-    setResult(null);
-    try {
-      const path = await window.ogb.exportDiagnostics();
-      if (path) setResult({ kind: "success", message: t("settings.diagnostics.saved", { path }) });
-    } catch (e) {
-      setResult({ kind: "error", message: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  return (
-    <SettingRow
-      title={t("settings.diagnostics.title")}
-      subtitle={t("settings.diagnostics.subtitle")}
-      message={result ? (
-        <p role={result.kind === "error" ? "alert" : "status"} className={cn("break-all", result.kind === "error" ? "text-danger" : "text-success")}>
-          {result.message}
-        </p>
-      ) : null}
-    >
-      <button
-        onClick={() => void exportDiagnostics()}
-        disabled={exporting}
-        aria-label={t("settings.diagnostics.aria")}
-        className="ui-button"
-      >
-        {exporting ? t("settings.diagnostics.exporting") : t("settings.diagnostics.export")}
-      </button>
-    </SettingRow>
-  );
-}
-
 export function SettingsModal() {
   const { state, dispatch } = useStore();
   const advanced = useAdvancedMode();
@@ -652,7 +571,7 @@ export function SettingsModal() {
   const ownerOrAdmin = useOwnerOrAdmin();
   const baseSections = SECTIONS.filter((entry) => !remoteActive || entry.id === "companion" || entry.id === "appearance" || entry.id === "desktopWorkspaces")
     .filter((entry) => entry.id !== "desktopWorkspaces" || Boolean(window.ogb?.environments))
-    .filter((entry) => entry.id !== "organization" || Boolean(window.ogb?.organization))
+    .filter((entry) => entry.id !== "organization" || Boolean(window.ogb?.organization)).filter((entry) => entry.id !== "import" || Boolean(window.ogb))
     .filter((entry) => entry.id !== "cloudAccount" || Boolean(window.ogb?.cloudAccount || (window.ogb?.cloudPlan && state.config?.cloudHome === true)))
     .filter((entry) => entry.id !== "workspaces" || workspacesAvailable(state.config))
     .filter((entry) => entry.id !== "people" || (!window.ogb && state.config?.cloudHome !== true))
@@ -767,7 +686,6 @@ export function SettingsModal() {
             </Card>
             <ThreadConcurrencySettings />
 
-            {!remoteActive && <RoutinesInConversationRow />}
             {!remoteActive && <AssistantActsRow />}
 
             <AutomaticRecoverySettings />
@@ -826,7 +744,7 @@ export function SettingsModal() {
               <ApiKeyRow section="meta" testProvider="meta" />
               <OtherOpenAiCompatServers />
               <div className="pt-2 text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">{t("keys.integrations.title")}</div>
-              <ApiKeyRow section="box" />
+              <ApiKeyRow section="treg" testProvider="treg" /><ApiKeyRow section="box" />
               <VpsConnection />
               <ApiKeyRow section="opencodeGo" />
               {state.config?.cloudHome !== true && (
@@ -845,12 +763,10 @@ export function SettingsModal() {
             </div>
           </Card>
         );
-      case "decisionModel":
-        return <DecisionModelSettings />;
-      case "engines":
-        return <EnginesSettings />;
-      case "backups":
-        return <><WorkspaceBackupSettings /><CompanyBackupSettings /></>;
+      case "decisionModel": return <DecisionModelSettings />;
+      case "engines": return <EnginesSettings />;
+      case "backups": return <><WorkspaceBackupSettings /><CompanyBackupSettings /></>;
+      case "import": return <ImportSettings />;
       case "companion": {
         const phoneFocus = state.appSettingsPhonePairing;
         const computerPairs = currentPhonePairingTarget(state.config?.cloudHome === true) === "computer";

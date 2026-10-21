@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
-import { assistantActsEnabled, routinesInConversationEnabled } from "@/lib/feature-flags";
+import { assistantActsEnabled } from "@/lib/feature-flags";
 import { t } from "@/lib/i18n";
 import { SettingRow, Switch } from "./SettingsPrimitives";
 
 function FeatureToggleRow({ feature, enabled, title, subtitle, ariaLabel, fallbackError }: {
-  feature: "routinesInConversation" | "assistantActs";
+  feature: "assistantActs";
   enabled: boolean;
   title: string;
   subtitle: string;
@@ -47,20 +47,6 @@ function FeatureToggleRow({ feature, enabled, title, subtitle, ariaLabel, fallba
         className="disabled:cursor-wait disabled:opacity-50"
       />
     </SettingRow>
-  );
-}
-
-export function RoutinesInConversationRow() {
-  const { state } = useStore();
-  return (
-    <FeatureToggleRow
-      feature="routinesInConversation"
-      enabled={routinesInConversationEnabled(state.config)}
-      title={t("settings.routinesInConversation.title")}
-      subtitle={t("settings.routinesInConversation.subtitle")}
-      ariaLabel={t("settings.routinesInConversation.aria")}
-      fallbackError={t("settings.routinesInConversation.error")}
-    />
   );
 }
 

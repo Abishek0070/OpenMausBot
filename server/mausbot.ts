@@ -67,7 +67,7 @@ function addMausBot(store: Pick<Store, "createBot">): BotRecord {
 export function seedBots(store: Pick<Store, "needsSeed" | "bots" | "createBot" | "setChiefOfStaff">, options: { hosted: boolean }): "fresh" | "added" | null {
   if (store.needsSeed()) {
     if (options.hosted) {
-      store.createBot();
+      store.setChiefOfStaff(store.createBot().id);
       return null;
     }
     const chief = store.createBot({ name: CHIEF_OF_STAFF_NAME });

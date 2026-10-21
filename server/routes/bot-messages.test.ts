@@ -56,7 +56,8 @@ async function fixture(options: { mausbot?: boolean } = {}) {
     serverPress: ReturnType<BotMessageRouteDeps["serverPress"]>;
     serverAsked: Array<Parameters<BotMessageRouteDeps["serverPress"]>>;
     capped: boolean;
-  } = { accepted: [], hold: null, refuse: null, busy: false, prompts: [], started: [], records: null, asked: [], serverPress: null, serverAsked: [], capped: false };
+    relayed: Array<Parameters<BotMessageRouteDeps["relayedReaction"]>>;
+  } = { accepted: [], hold: null, refuse: null, busy: false, prompts: [], started: [], records: null, asked: [], serverPress: null, serverAsked: [], capped: false, relayed: [] };
   const startTurn: BotMessageRouteDeps["startTurn"] = async (botId, text, opts = {}) => {
     state.started.push({ text, opts });
     state.prompts.push(promptWithReply(text, opts.replyTo));
@@ -123,6 +124,7 @@ async function fixture(options: { mausbot?: boolean } = {}) {
     policyModelRefusal: () => undefined,
     pressRecords: (...args: Parameters<BotMessageRouteDeps["pressRecords"]>) => { state.asked.push(args); return state.records; },
     serverPress: (...args: Parameters<BotMessageRouteDeps["serverPress"]>) => { state.serverAsked.push(args); return state.serverPress; },
+    relayedReaction: (...args: Parameters<BotMessageRouteDeps["relayedReaction"]>) => { state.relayed.push(args); },
   } as unknown as BotMessageRouteDeps;
   const routes = [createBotMessageRoutes(deps)];
   const server = createServer(async (req, res) => {
@@ -497,5 +499,57 @@ describe("/setup aimed at MausBot", () => {
     expect((await mausbot.post({ threadId: mausbot.threadId, text: "What is on my calendar today?" })).status).toBe(202);
     const scout = await fixture();
     expect((await scout.post({ threadId: scout.threadId, text: "/setup Every morning at 8, summarize Hacker News" })).status).toBe(202);
+  });
+});
+
+describe("POST /api/bots/:id/messages/guarded with a reaction another app relayed", () => {
+  const relay = (threadId: string, replyToId: string | undefined, leaf: string | null, patch: Record<string, unknown> = {}) => ({
+    threadId, sendId: SEND, reaction: "+1", replyToId, expectedActiveLeafId: leaf, expectedApprovalMode: "ask",
+    onBehalfOf: { email: "sam@example.test", name: "Sam" }, ...patch,
+  });
+
+  it("sends a Slack 👍 as that person's reply to the bot's message, and shows it on the message as theirs", async () => {
+    const { store, bot, threadId, state, post } = await fixture();
+    store.patchBot(bot.id, { approvalMode: "ask", autoApprove: false });
+    const asked = store.appendMessage(threadId, { role: "bot", kind: "text", text: "I drafted the email to Sam. Shall I send it?" });
+    const sent = await post(relay(threadId, asked.id, store.activeLeaf(threadId)), "/guarded");
+    expect(sent.status, JSON.stringify(sent.body)).toBe(202);
+    expect(state.started).toHaveLength(1);
+    expect(state.started[0]).toMatchObject({ text: "👍", opts: { relayed: true, sendId: SEND, replyTo: { id: asked.id, reactedWith: "👍" } } });
+    expect(state.prompts.at(-1)).toContain("The current message is the person's reaction: they reacted 👍 to your earlier message instead of typing a reply.");
+    expect(state.relayed).toEqual([[threadId, asked.id, { email: "sam@example.test", name: "Sam" }, "👍"]]);
+  });
+
+  it("retries a reaction as that reaction, and an edited one as typed words", async () => {
+    const { store, threadId, state, edit } = await fixture();
+    const asked = store.appendMessage(threadId, { role: "bot", kind: "text", text: "Shall I send it?" });
+    const line = store.appendMessage(threadId, { role: "user", kind: "text", text: "👍", replyToId: asked.id, reaction: "👍" });
+    expect((await edit(line.id, { threadId, text: "👍" })).status).toBe(202);
+    expect(state.started.at(-1)!.opts.replyTo).toMatchObject({ id: asked.id, reactedWith: "👍" });
+    expect(state.prompts.at(-1)).toContain("they reacted 👍 to your earlier message");
+    expect((await edit(line.id, { threadId, text: "Yes, but tomorrow" })).status).toBe(202);
+    expect(state.started.at(-1)!.opts.replyTo).toMatchObject({ id: asked.id });
+    expect(state.started.at(-1)!.opts.replyTo).not.toHaveProperty("reactedWith");
+  });
+
+  it("refuses a relayed reaction that is no yes or no, names no message or person, or answers a person's line", async () => {
+    const { store, bot, threadId, state, post } = await fixture();
+    store.patchBot(bot.id, { approvalMode: "ask", autoApprove: false });
+    const typed = store.appendMessage(threadId, { role: "user", kind: "text", text: "Draft it" });
+    const asked = store.appendMessage(threadId, { role: "bot", kind: "text", text: "Shall I send it?" });
+    const leaf = store.activeLeaf(threadId);
+    const refused = "a relayed reaction is a 👍 or 👎 on the message in replyToId, made by the person in onBehalfOf";
+    for (const body of [
+      relay(threadId, asked.id, leaf, { reaction: "heart" }),
+      relay(threadId, asked.id, leaf, { reaction: "white_check_mark" }),
+      relay(threadId, undefined, leaf),
+      relay(threadId, asked.id, leaf, { onBehalfOf: undefined }),
+    ]) {
+      expect(await post(body, "/guarded"), JSON.stringify(body)).toEqual({ status: 400, body: { error: refused } });
+    }
+    expect(await post(relay(threadId, typed.id, leaf), "/guarded")).toEqual({ status: 400, body: { error: "a relayed reaction answers a bot's message" } });
+    expect((await post(relay(threadId, asked.id, leaf, { text: "👍" }), "/guarded")).status).toBe(400);
+    expect(state.started).toEqual([]);
+    expect(state.relayed).toEqual([]);
   });
 });

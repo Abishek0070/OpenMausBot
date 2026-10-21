@@ -716,7 +716,16 @@ describe("server-authoritative bot deletion", () => {
     await Promise.all([first, second]);
 
     expect(onConfirmed).toHaveBeenCalledTimes(1);
-    expect(onConfirmed).toHaveBeenCalledWith(bot.id);
+    expect(onConfirmed).toHaveBeenCalledWith(bot.id, undefined);
+  });
+
+  it("hands the server's answer on, so a deletion that left something behind can say so", async () => {
+    const onConfirmed = vi.fn();
+    const answer = { ok: true, notice: "Deleted. gone-vps could not be reached." };
+
+    await requestConfirmedBotDeletion(bot.id, async () => answer, onConfirmed);
+
+    expect(onConfirmed).toHaveBeenCalledWith(bot.id, answer);
   });
 
   it("keeps a visible pending marker until deletion settles or fails", () => {
@@ -1533,6 +1542,24 @@ describe("computer destination announcements", () => {
   });
 });
 
+describe("VPS alias announcements", () => {
+  it.each(["botPatched", "taskSwitched", "botPatchedSwitch"] as const)("clears the bot's own server when the frame omits it via %s", (kind) => {
+    const bot: Bot = {
+      id: "vps-bot", threadId: "vps-thread", name: "Ziggy", title: "", description: "",
+      notifications: true, color: "green", unread: false,
+      modelSelection: { instanceId: "codex", model: "default" }, vpsAlias: "alpha-vps",
+      messages: [{ id: "message", role: "user", kind: "text", at: 1, text: "Keep this conversation" }],
+    };
+    const { vpsAlias: _oldAlias, ...announcement } = bot;
+    const next = reducer({ ...initialState, bots: [bot] }, {
+      type: kind === "taskSwitched" ? "taskSwitched" : "botPatched",
+      bot: { ...announcement, threadId: kind === "botPatchedSwitch" ? "replacement-thread" : bot.threadId },
+    });
+    expect(next.bots[0]?.vpsAlias).toBeUndefined();
+    expect(next.bots[0]?.messages).toEqual(bot.messages);
+  });
+});
+
 describe("tool selection announcements", () => {
   it.each(["botPatched", "taskSwitched", "botPatchedSwitch"] as const)("clears the saved restriction when the server returns to all tools via %s", kind => {
     const bot: Bot = { id: "scoped", threadId: "old", name: "Scope fixture", title: "", description: "",
@@ -1544,6 +1571,21 @@ describe("tool selection announcements", () => {
       bot: { ...announcement, threadId: kind === "botPatchedSwitch" ? "new" : bot.threadId },
     });
     expect(next.bots[0]?.toolScope).toBeUndefined();
+  });
+});
+
+describe("team access announcements", () => {
+  it.each(["botPatched", "taskSwitched", "botPatchedSwitch"] as const)("clears additional teams after a demote via %s", kind => {
+    const bot: Bot = { id: "chief", threadId: "old", name: "Chief fixture", title: "", description: "",
+      notifications: false, color: "green", unread: false, modelSelection: { instanceId: "pi", model: "local" },
+      chiefOfStaff: true, managedSections: ["Research", ""], messages: [] };
+    const { managedSections: _sections, ...demoted } = { ...bot, chiefOfStaff: false };
+    const next = reducer({ ...initialState, bots: [bot] }, {
+      type: kind === "taskSwitched" ? "taskSwitched" : "botPatched",
+      bot: { ...demoted, threadId: kind === "botPatchedSwitch" ? "new" : bot.threadId },
+    });
+    expect(next.bots[0]?.chiefOfStaff).toBe(false);
+    expect(next.bots[0]?.managedSections).toBeUndefined();
   });
 });
 
@@ -3026,5 +3068,19 @@ describe("notifications feed", () => {
     ]) {
       expect(reducer(open, action).notificationsOpen).toBe(false);
     }
+  });
+});
+
+describe("a routine's answer and its broadcast", () => {
+  it("applies whichever arrives first and never steps back to an older edit", () => {
+    const routine = { id: "r1", name: "Daily", prompt: "Summarize", target: "bot", botId: "b1", runOn: "maus", enabled: true,
+      schedule: { type: "daily", time: "09:00", weekdays: [1] }, durationMinutes: 30, nextRunAt: 5, createdAt: 1, updatedAt: 10 } as AppState["routines"][number];
+    const paused = { ...routine, enabled: false, nextRunAt: null, updatedAt: 11 };
+    const resumed = { ...routine, updatedAt: 12 };
+    let state = reducer({ ...initialState, routines: [routine] }, { type: "routinePatched", routine: paused });
+    state = reducer(state, { type: "routinePatched", routine: resumed });
+    state = reducer(state, { type: "routinePatched", routine: paused });
+    expect(state.routines).toEqual([resumed]);
+    expect(reducer(state, { type: "routinePatched", routine: { ...resumed, failureStreak: 1 } }).routines[0]).toMatchObject({ failureStreak: 1 });
   });
 });
