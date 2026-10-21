@@ -66,6 +66,10 @@ it("posts one recap card in the Chief's chat when the person comes back after a 
     expect(savedRun.finishedAt).toBeGreaterThan(awaySince);
     Object.assign(savedRun, { scheduledFor: awaySince - HOUR, createdAt: awaySince - HOUR, startedAt: awaySince - HOUR });
     writeFileSync(routinesFile, JSON.stringify(routines));
+    // With MausBot switched off the recap keeps routine runs, and the Chief's card is the one to open.
+    const configFile = join(dataDir, "config.json");
+    const config = JSON.parse(readFileSync(configFile, "utf8"));
+    writeFileSync(configFile, JSON.stringify({ ...config, features: { ...config.features, assistantActs: false } }));
     const log = openSync(logPath, "a", 0o600);
     restarted = spawn(process.execPath, ["--experimental-strip-types", fileURLToPath(new URL("./index.ts", import.meta.url))], {
       cwd: fileURLToPath(new URL("..", import.meta.url)),

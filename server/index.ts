@@ -9489,8 +9489,8 @@ async function stopBotForEmergencyApprovalDowngrade(botId: string): Promise<void
 }
 
 const chiefBrief = createChiefBrief({ store, dataDir: DATA_DIR, threadOwner, hosted: HOSTED_WORKSPACE, threadBusy, settings: () => ({ recap: briefRecapEnabled(cfg.features), awayMs: briefAwayMs(cfg.features) }),
-  routineRuns: (since) => (routines?.listRuns() ?? []).filter((run) => run.finishedAt === undefined ? run.status === "running" || run.status === "waiting" : run.finishedAt >= since), mausbot: () => findMausBot(store.bots.filter((bot) => !bot.hidden)), beforePresence: () => mausbotHost.introduce(), onPresence: (event) => mausbotHost.onPresence(event) });
-const mausbotHost = createMausBotHost({ store, cfg, composio, registry, brief: chiefBrief, dataDir: DATA_DIR, hosted: HOSTED_WORKSPACE, cloudHome: Boolean(CLOUD_HOME), maxBots: MAX_WORKSPACE_BOTS, notify, threadBusy, newId, startTurn, interruptDirectThread, cloudOwnerOnlyThread });
+  routineRuns: (since) => (routines?.listRuns() ?? []).filter((run) => run.finishedAt === undefined ? run.status === "running" || run.status === "waiting" : run.finishedAt >= since), mausbot: () => findMausBot(store.bots.filter((bot) => !bot.hidden)), beforePresence: () => mausbotHost.introduce(), onPresence: (event) => mausbotHost.onPresence(event), routinesToMausBot: (poster) => mausbotHost.takesRoutines(poster) });
+const mausbotHost = createMausBotHost({ store, cfg, composio, registry, brief: chiefBrief, dataDir: DATA_DIR, hosted: HOSTED_WORKSPACE, cloudHome: Boolean(CLOUD_HOME), maxBots: MAX_WORKSPACE_BOTS, notify, threadBusy, newId, startTurn, interruptDirectThread, cloudOwnerOnlyThread, othersMaySee: () => Boolean(cfg.signIn?.members?.length) || sessions.list().some((session) => !session.scopes.includes("admin")) });
 bus.subscribe((event: RuntimeEvent) => { if (!shouldIgnoreProviderEvent(event)) mausbotHost.onEvent(event); });
 routines = new RoutineManager({
   emit: broadcast,
@@ -13542,7 +13542,7 @@ ROUTES.push(createBotMessageRoutes({
   turnSelection, policyModelRefusal, clearUnattended, drainQueuedSends, answeringCardAs, resolveAndSendTrust, resolveAndSendTeamSetup,
   resolveAndSendRoutine, resolveAndSendProfile, resolveAndSendModel, resolveSkillRequest, sendSkillResolution, answerRequest,
   deliverLateQuestionAnswer, interruptDirectThread, cancelDirectTurnDispatch, revokeInternalCapabilitiesForThread,
-  cancelGroupTurnOperations, closeOpenApprovals, harnessCardOutcome, pressRecords: mausbotHost.pressRecords,
+  cancelGroupTurnOperations, closeOpenApprovals, harnessCardOutcome, pressRecords: mausbotHost.pressRecords, serverPress: mausbotHost.serverPress,
 }));
 // `let` slots are read per request.
 ROUTES.push(createThreadRoutes({

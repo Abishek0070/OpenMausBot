@@ -110,6 +110,8 @@ export interface BotMessageRouteDeps {
   harnessCardOutcome(threadId: string, requestId: string, behavior: Behavior, message: unknown, auth: RequestAuth): Promise<string | undefined>;
   /** What a press on one of the bot's own server-built cards is about, from the server's records; null leaves the press the person's plain answer. */
   pressRecords(bot: BotRecord, action: WidgetAction): string | null;
+  /** A press the server answers itself, with no turn: handled, refused (not the owner or an admin), or null for an ordinary press. */
+  serverPress(bot: BotRecord, threadId: string, messageId: string, action: WidgetAction, auth: RequestAuth): "handled" | "refused" | null;
 }
 
 /** External interfaces (the Slack worker) opt in. `onBehalfOf`, advertised by /api/health as
@@ -137,7 +139,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
     turnSelection, policyModelRefusal, clearUnattended, drainQueuedSends, answeringCardAs, resolveAndSendTrust, resolveAndSendTeamSetup,
     resolveAndSendRoutine, resolveAndSendProfile, resolveAndSendModel, resolveSkillRequest, sendSkillResolution, answerRequest,
     deliverLateQuestionAnswer, interruptDirectThread, cancelDirectTurnDispatch, revokeInternalCapabilitiesForThread,
-    cancelGroupTurnOperations, closeOpenApprovals, harnessCardOutcome, pressRecords,
+    cancelGroupTurnOperations, closeOpenApprovals, harnessCardOutcome, pressRecords, serverPress,
   } = deps;
   const pinnedClientThread = pinnedClientThreadGuard(store);
   /** widget -> sendId of a press on its way in: a second tap before acceptance must not send a second answer. */
@@ -178,12 +180,15 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
       const trigger: UsageTrigger = onBehalfOf
         ? { kind: "user", ...(onBehalfOf.email ? { email: onBehalfOf.email } : {}), ...(onBehalfOf.name ? { label: onBehalfOf.name } : {}) }
         : usageTriggerFor(auth);
-      // acceptDirectSend checks these again; nothing awaits between.
-      const refused = directSendRefusal(bot.id, threadId);
-      if (refused) return json(res, refused.status, refused.body);
       const sendId = parseSendId(body.sendId);
       const press = pressed ? prepareWidgetPress(store, threadId, body.widgetAction, sendId) : null;
       if (press && !press.ok) return json(res, press.status, { error: press.error });
+      const answered = press ? serverPress(bot, threadId, press.messageId, press.action, auth) : null;
+      if (answered === "handled") return json(res, 202, { ok: true, threadId, handled: true });
+      if (answered === "refused") return json(res, 403, { error: "Only the owner or an admin can do that." });
+      // acceptDirectSend checks these again; nothing awaits between.
+      const refused = directSendRefusal(bot.id, threadId);
+      if (refused) return json(res, refused.status, refused.body);
       const text = press ? press.text : typed;
       if (bot.builtIn !== undefined && parseSetupCommand(text)) return json(res, 409, { error: MAUSBOT_SETUP });
       const target = resolveReplyTarget(threadId, press ? press.messageId : body.replyToId);

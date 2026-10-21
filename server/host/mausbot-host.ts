@@ -1,11 +1,13 @@
 import type { RuntimeEvent } from "../../shared/runtime-events.ts";
 import type { WidgetAction } from "../../shared/widget.ts";
 import { createComposioSources } from "../assistant-sources.ts";
+import { audienceWithin } from "../bot-visibility.ts";
 import { assistantActsEnabled } from "../brief-settings.ts";
 import type * as Composio from "../composio.ts";
 import type { AppConfig } from "../config.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
 import { findMausBot, isMausBot } from "../mausbot.ts";
+import type { RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
 import { hostTimeZone } from "../turn-clock.ts";
 import type { UsageTrigger } from "../usage-ledger.ts";
@@ -48,6 +50,8 @@ export interface MausBotHostDeps {
   interruptDirectThread(botId: string, threadId: string, cause: string): Promise<void>;
   /** Asked only on a Cloud home: true when no guest started or drove the conversation. */
   cloudOwnerOnlyThread(threadId: string): boolean;
+  /** True when someone other than an admin can sign in or holds a session. */
+  othersMaySee(): boolean;
   checkMs?: number;
 }
 
@@ -63,13 +67,15 @@ export function createMausBotHost(deps: MausBotHostDeps) {
     interrupt: (botId, threadId) => deps.interruptDirectThread(botId, threadId, TOO_LONG),
     replyOf: (threadId, turnId) => jobReply(store.messagesFor(threadId), turnId),
   });
+  const enabled = (): boolean => assistantActsEnabled(cfg.features) && brief.state.get().mausbotIntro !== undefined;
+  const visibleMausBot = (): BotRecord | null => findMausBot(store.bots.filter((bot) => !bot.hidden));
   const watch = createAssistantWatch({
     store, dataDir: deps.dataDir, hosted: deps.hosted, notify: deps.notify, threadBusy: deps.threadBusy, newId: deps.newId,
     checkMs: deps.checkMs ?? assistantCheckMs(process.env.OMB_ASSISTANT_CHECK_MS),
-    enabled: () => assistantActsEnabled(cfg.features) && brief.state.get().mausbotIntro !== undefined,
-    mausbot: () => findMausBot(store.bots.filter((bot) => !bot.hidden)),
+    enabled,
+    mausbot: visibleMausBot,
     routines: (since) => {
-      const bot = findMausBot(store.bots.filter((one) => !one.hidden));
+      const bot = visibleMausBot();
       return bot ? brief.routineRows(bot, since) : [];
     },
     mainThread: (bot) => brief.chiefThread(bot),
@@ -97,6 +103,16 @@ export function createMausBotHost(deps: MausBotHostDeps) {
     return isMausBot(bot) ? watch.pressRecords(action) : null;
   }
 
+  function serverPress(bot: Pick<BotRecord, "builtIn">, threadId: string, messageId: string, action: WidgetAction, auth: RequestAuth): "handled" | "refused" | null {
+    return isMausBot(bot) ? watch.serverPress(threadId, messageId, action, auth) : null;
+  }
+
+  /** True when MausBot's brief reports routine runs in place of `poster`'s recap: everyone who reads that recap can see MausBot. */
+  function takesRoutines(poster: Pick<BotRecord, "visibility">): boolean {
+    const mausbot = visibleMausBot();
+    return !deps.hosted && enabled() && mausbot !== null && (audienceWithin(poster.visibility, mausbot.visibility) || !deps.othersMaySee());
+  }
+
   function introduce(): void {
     void intro.introduce();
   }
@@ -110,5 +126,5 @@ export function createMausBotHost(deps: MausBotHostDeps) {
   }
 
   const harnessCards: HarnessCard[] = [intro.answerCard, watch.answerCard];
-  return { start: watch.start, stop: watch.stop, introduce, onPresence, onEvent, pressRecords, harnessCards };
+  return { start: watch.start, stop: watch.stop, introduce, onPresence, onEvent, pressRecords, serverPress, takesRoutines, harnessCards };
 }

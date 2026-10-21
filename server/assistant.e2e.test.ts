@@ -1,6 +1,6 @@
-// A real server, the fake Claude CLI answering MausBot's jobs by marker, and a loopback connected-apps service serving a
-// calendar and an inbox: what MausBot posts, what its job turns may do, what it never sends, and that a hosted workspace
-// has none of it.
+// A real server, the fake Claude CLI answering MausBot's jobs by marker, and a loopback connected-apps service serving
+// calendars and inboxes, one account or several: what MausBot posts, what its job turns may do, what it never sends, and
+// that a hosted workspace or MausBot switched off has none of it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
@@ -9,7 +9,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
+import { ACCOUNT_PARAM } from "./assistant-sources.ts";
 import { JOB_DECLINE } from "./host/assistant-job-requests.ts";
+import { PRESENCE_FILE } from "./host/presence.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { startFakeConnectedApps, type FakeConnectedApps } from "./testing/fake-connected-apps.ts";
 import { freePortBlock } from "./testing/ports.ts";
@@ -19,6 +21,7 @@ const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE = pathToFileURL(join(SERVER_DIR, "testing", "fake-claude-cli.ts")).href;
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 const CAPABILITY_KEY = "assistant-e2e-capability-key-0123456789";
 const BOOT_MS = 30_000;
 const STEP_MS = 20_000;
@@ -59,11 +62,12 @@ const BROWSER_PRELUDE = `data:text/javascript,${encodeURIComponent(`
   syncBuiltinESMExports();
 `)}`;
 
-/** The fake Claude CLI, saving each conversation's latest launch to dumps/<thread>.json and playing the mode modes.json
- * names for that thread or its bot. */
+/** The fake Claude CLI, saving each conversation's latest launch to dumps/<thread>.json, playing the mode modes.json
+ * names for that thread or its bot, and making the tool calls tools.json names for that thread. */
 function writeEngine(home: string): string {
   const cli = join(home, "claude.mjs");
   const modes = JSON.stringify(join(home, "modes.json"));
+  const tools = JSON.stringify(join(home, "tools.json"));
   writeFileSync(cli, [
     "#!/usr/bin/env node",
     'import { existsSync, readFileSync } from "node:fs";',
@@ -75,12 +79,14 @@ function writeEngine(home: string): string {
     `const modes = existsSync(${modes}) ? JSON.parse(readFileSync(${modes}, "utf8")) : {};`,
     "const mode = modes[env.OMB_THREAD_ID] ?? modes[env.OMB_BOT_ID];",
     "if (mode) process.env.FAKE_CLAUDE_MODE = mode;",
+    `const calls = existsSync(${tools}) ? JSON.parse(readFileSync(${tools}, "utf8"))[env.OMB_THREAD_ID] : undefined;`,
+    "if (calls) process.env.FAKE_CLAUDE_TOOL_CALLS = JSON.stringify(calls);",
     `await import(${JSON.stringify(FAKE_CLAUDE)});`,
   ].join("\n"), { mode: 0o755 });
   return cli;
 }
 
-async function start(fake: FakeConnectedApps, options: { home?: string; hosted?: boolean } = {}) {
+async function start(fake: FakeConnectedApps, options: { home?: string; hosted?: boolean; features?: Record<string, unknown> } = {}) {
   // Kept short: the engine's permission socket goes under this folder, and macOS refuses a socket path over 103 bytes.
   const home = options.home ?? mkdtempSync(join(tmpdir(), "omb-as-"));
   const dataDir = join(home, ".openmausbot");
@@ -90,6 +96,7 @@ async function start(fake: FakeConnectedApps, options: { home?: string; hosted?:
     writeFileSync(join(home, "fake-agent-browser"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     writeFileSync(join(home, "turn-routes.json"), JSON.stringify({ "[MausBot prep": prepReply(), "[MausBot email check]": EMAIL_REPLY }));
     writeFileSync(join(dataDir, "config.json"), JSON.stringify({
+      ...(options.features ? { features: options.features } : {}),
       instances: {
         ...Object.fromEntries(["codex", "cursor", "openaiCompat", "qwen", "hermes", "pi"].map((id) => [id, { driver: "not-a-real-driver" }])),
         claude: {
@@ -220,13 +227,24 @@ function outsideRecords(prompt: string, needle: string): string[] {
 const jobThreads = (bot: any) => (bot.tasks as any[]).filter((task) => String(task.routineRunId ?? "").startsWith("mausbot-"));
 const argAfter = (argv: string[], flag: string) => argv[argv.indexOf(flag) + 1];
 
-function buttonRef(node: any, label: string): string | undefined {
-  if (node?.type === "Button" && node.label === label) return node.id;
-  for (const child of node?.children ?? []) {
-    const found = buttonRef(child, label);
+function findNode(node: any, match: (node: any) => boolean): any {
+  if (!node || typeof node !== "object") return undefined;
+  if (match(node)) return node;
+  for (const child of Array.isArray(node.children) ? node.children : []) {
+    const found = findNode(child, match);
     if (found) return found;
   }
   return undefined;
+}
+
+const buttonRef = (node: any, label: string): string | undefined => findNode(node, (one) => one.type === "Button" && one.label === label)?.id;
+
+/** Gmail and Calendar each with the person's own account and their admin account, every primary calendar named by its address. */
+function connectTwoAccounts(fake: FakeConnectedApps): void {
+  fake.accounts = {
+    gmail: [{ id: "ca_gp", address: "me@example.test" }, { id: "ca_ga", alias: "admin", address: "admin@example.test" }],
+    googlecalendar: [{ id: "ca_cp", address: "me@example.test" }, { id: "ca_ca", address: "admin@example.test" }],
+  };
 }
 
 /** Presses the daily brief's "Draft a reply" on Ada's email and returns what reached MausBot's engine after the card's fence. */
@@ -410,6 +428,141 @@ it("posts nothing before the owner first comes, then its intro first; a morning 
   expect((await again.notifications()).filter((entry) => entry.kind === "assistant" && entry.threadId === mausbot.threadId)).toHaveLength(2);
 }, 180_000);
 
+it("reads two Google accounts: one prep for a meeting on both calendars, one email check for both inboxes, every call naming its account, and Draft a reply from the receiving account", async () => {
+  const fake = await startFakeConnectedApps();
+  cleanups.push(() => fake.close());
+  connectTwoAccounts(fake);
+  const meeting = { ...demo("demo-1", Date.now() + 3 * HOUR), iCalUID: "uid-demo" };
+  fake.calendarEvents = {
+    "ca_cp/me@example.test": [meeting],
+    "ca_ca/admin@example.test": [{ ...meeting, attendees: [{ email: "admin@example.test", self: true, responseStatus: "accepted" }, meeting.attendees[1]] }],
+  };
+  fake.inbox = {
+    ca_ga: [{ messageId: "important-1", threadId: "thread-important", messageTimestamp: iso(Date.now() - 10 * MINUTE), sender: "Ada <ada@example.test>", subject: "Q3 numbers due Friday", preview: { body: "Can you send the Q3 numbers by Friday?" } }],
+    ca_gp: [{ messageId: "newsletter-1", threadId: "thread-news", messageTimestamp: iso(Date.now() - 5 * MINUTE), sender: "News <news@example.test>", subject: "This week in tech", preview: { body: "Top stories" } }],
+  };
+  const s = await start(fake);
+  const mausbot = await s.mausbot();
+  expect((await s.api("POST", "/api/presence/active", { source: "desktop", timeZone: NOON_ZONE })).status).toBe(200);
+  const brief = async () => JSON.stringify((await s.cards(mausbot.threadId)).find((card) => card.title === "Daily brief"));
+  await expect.poll(brief, { timeout: JOB_MS }).toContain("Q3 numbers due Friday");
+  await expect.poll(async () => (await s.cards(mausbot.threadId)).map((card) => card.title), { timeout: JOB_MS }).toContain("Prep: Supamaus demo with Jake");
+
+  const titles = (await s.cards(mausbot.threadId)).map((card) => card.title);
+  expect(titles.filter((title) => title === "Prep: Supamaus demo with Jake")).toHaveLength(1);
+  expect(s.prompts().filter((prompt) => prompt.includes("[MausBot prep "))).toHaveLength(1);
+  expect(fake.calls.filter((call) => call.account === undefined)).toEqual([]);
+  const readsBy = (tool: string) => new Set(fake.calls.filter((call) => call.tool === tool).map((call) => call.account));
+  expect(readsBy("GOOGLECALENDAR_EVENTS_LIST")).toEqual(new Set(["ca_cp", "ca_ca"]));
+  expect(readsBy("GMAIL_FETCH_EMAILS")).toEqual(new Set(["ca_gp", "ca_ga"]));
+  const checks = s.prompts().filter((prompt) => prompt.includes("[MausBot email check]"));
+  expect(checks).toHaveLength(1);
+  expect(checks[0]).toContain("id important-1 · account admin@example.test");
+  expect(checks[0]).toContain("id newsletter-1 · account me@example.test");
+  expect(await brief()).toContain("admin@example.test · waiting on your reply");
+
+  // MausBot's engine, scripted to draft from the account the press names: the draft call reaches connected apps naming it.
+  const draft = { tool_slug: "GMAIL_CREATE_EMAIL_DRAFT", arguments: { recipient_email: "ada@example.test", subject: "Re: Q3 numbers due Friday", body: "Attached." }, [ACCOUNT_PARAM]: "ca_ga" };
+  writeFileSync(join(s.home, "tools.json"), JSON.stringify({ [mausbot.threadId]: [{ name: "COMPOSIO_MULTI_EXECUTE_TOOL", server: "composio", input: { tools: [draft] } }] }));
+  const pressed = (await pressDraftReply(s, mausbot)).split("--- end widget ---")[1]!;
+  expect(pressed).toContain("id important-1 · account admin@example.test · from Ada <ada@example.test> · subject Q3 numbers due Friday");
+  expect(pressed).toContain("Draft the reply from admin@example.test (connected account ca_ga), and name that account in the draft call.");
+  expect(fake.calls.filter((call) => call.tool === "GMAIL_CREATE_EMAIL_DRAFT")).toEqual([{ tool: "GMAIL_CREATE_EMAIL_DRAFT", account: "ca_ga", arguments: draft.arguments }]);
+}, 240_000);
+
+it("posts the daily brief at the morning presence with Needs you, Your day, routine results and the account it could not read, and a Dismiss costs no turn", async () => {
+  const fake = await startFakeConnectedApps();
+  cleanups.push(() => fake.close());
+  connectTwoAccounts(fake);
+  // Today in the person's zone, and later than MausBot preps a meeting.
+  fake.calendarEvents = { "ca_cp/me@example.test": [demo("demo-1", Date.now() + 5 * HOUR)] };
+  const s = await start(fake);
+  const mausbot = await s.mausbot();
+  const chief = (await s.bots()).find((bot) => bot.chiefOfStaff);
+  expect((await s.api("POST", "/api/presence/active", { source: "desktop", timeZone: NOON_ZONE })).status).toBe(200);
+  const stateFile = join(s.dataDir, "assistant.json");
+  const addresses = () => {
+    try { return Object.fromEntries(Object.entries(JSON.parse(readFileSync(stateFile, "utf8")).accounts ?? {}).map(([id, account]: [string, any]) => [id, account.address])); } catch { return {}; }
+  };
+  await expect.poll(addresses, { timeout: STEP_MS })
+    .toEqual({ ca_gp: "me@example.test", ca_ga: "admin@example.test", ca_cp: "me@example.test", ca_ca: "admin@example.test" });
+
+  const scout = (await s.api("POST", "/api/bots", { name: "Scout" })).body.bot;
+  expect((await s.api("POST", `/api/bots/${scout.id}/messages`, { text: "Finish the report.", threadId: scout.threadId })).status).toBe(202);
+  await expect.poll(async () => (await s.lines(scout.threadId)).some((line) => line.kind === "digest"), { timeout: STEP_MS }).toBe(true);
+  const routine = await s.api("POST", "/api/routines", {
+    name: "Overnight numbers", prompt: "Count the numbers.", botId: scout.id, enabled: false,
+    schedule: { type: "interval", everyMinutes: 60, anchorAt: Date.now() + HOUR },
+  });
+  expect(routine.status, JSON.stringify(routine.body)).toBe(201);
+  const ran = await s.api("POST", `/api/routines/${routine.body.routine.id}/run`);
+  expect(ran.status, JSON.stringify(ran.body)).toBe(201);
+  await expect.poll(async () => ((await s.api("GET", "/api/routines")).body.runs as any[]).find((run) => run.id === ran.body.run.id)?.status, { timeout: STEP_MS })
+    .toBe("completed");
+  const assistantNotes = async (server: Server) => (await server.notifications())
+    .filter((entry: any) => entry.kind === "assistant" && entry.threadId === mausbot.threadId && String(entry.body).startsWith("Daily brief"));
+  await s.stop();
+
+  // The next morning, after a night away: an email has been waiting on a reply for two days, and the admin calendar fails.
+  const saved = JSON.parse(readFileSync(stateFile, "utf8"));
+  const run = JSON.parse(readFileSync(join(s.dataDir, "routines.json"), "utf8")).runs.find((one: any) => one.id === ran.body.run.id);
+  delete saved.lastBriefDate;
+  saved.lastBriefAt = run.startedAt - HOUR;
+  saved.pendingEmails = [{ account: "ca_ga", messageId: "waiting-1", threadId: "t-w", judgedAt: Date.now() - 2 * DAY, needsReply: true }];
+  writeFileSync(stateFile, JSON.stringify(saved));
+  const presenceFile = join(s.dataDir, PRESENCE_FILE);
+  const presence = JSON.parse(readFileSync(presenceFile, "utf8"));
+  writeFileSync(presenceFile, JSON.stringify({ ...presence, lastActiveAt: presence.lastActiveAt - 9 * HOUR }));
+  fake.messages["ca_ga/waiting-1"] = {
+    messageId: "waiting-1", threadId: "t-w", messageTimestamp: iso(Date.now() - 2 * DAY), sender: "Ben Ortiz <ben@partner.example>",
+    subject: "Contract redlines", preview: { body: "Can you look at the redlines before Thursday?" },
+  };
+  fake.accounts.googlecalendar![1]!.failing = true;
+
+  const again = await start(fake, { home: s.home });
+  const notedBefore = (await assistantNotes(again)).length;
+  const opened = await again.api("POST", "/api/presence/active", { source: "desktop", timeZone: NOON_ZONE });
+  expect(opened.body).toMatchObject({ ok: true, returned: true, open: { botId: mausbot.id, threadId: mausbot.threadId } });
+  const briefs = async () => (await again.lines(mausbot.threadId)).filter((line) => line.kind === "widget" && line.widget.root.title === "Daily brief");
+  const posted = (await briefs()).at(-1);
+  expect(await briefs()).toHaveLength(2);
+  const shown = async () => JSON.stringify((await briefs()).find((line) => line.id === posted.id)?.widget.root);
+  await expect.poll(shown, { timeout: JOB_MS }).toContain("Contract redlines");
+  await expect.poll(shown, { timeout: STEP_MS }).toContain("I couldn't read the calendar of admin@example.test.");
+  const card = await shown();
+  const at = (text: string) => card.indexOf(text);
+  expect(at('"Needs you"')).toBeLessThan(at("Ben Ortiz: Contract redlines"));
+  expect(at("Ben Ortiz: Contract redlines")).toBeLessThan(at('"Your day"'));
+  expect(at('"Your day"')).toBeLessThan(at("Supamaus demo with Jake"));
+  expect(at('"Routines"')).toBeGreaterThan(0);
+  expect(at('"Routines"')).toBeLessThan(at("Overnight numbers"));
+  expect((await briefs()).map((line) => line.id)).toEqual([expect.any(String), posted.id]);
+  expect((await assistantNotes(again)).length).toBe(notedBefore + 1);
+  // The routine run went to MausBot's brief, so the Chief's recap of the night lists Scout's work and not the routine.
+  const recap = (await again.lines(chief.threadId)).filter((line) => line.kind === "widget");
+  expect(recap).toHaveLength(1);
+  expect(recap[0].text).toContain("Since you last looked");
+  expect(recap[0].text).toContain("Scout");
+  expect(JSON.stringify(recap[0])).not.toContain("Overnight numbers");
+
+  const promptsBefore = again.prompts().length;
+  let dismissed: Awaited<ReturnType<Server["api"]>> | undefined;
+  // The card may still be filled in place by the check it is waiting on; a press names the revision it saw.
+  await expect.poll(async () => {
+    const line = (await briefs()).find((one) => one.id === posted.id);
+    const dismiss = findNode(line.widget.root, (node) => node.type === "Button" && node.onClickAction?.type === "dismiss_email" && node.onClickAction.payload?.messageId === "waiting-1");
+    dismissed = await again.api("POST", `/api/bots/${mausbot.id}/messages`, { threadId: mausbot.threadId, widgetAction: { messageId: posted.id, ref: dismiss.id, rev: line.widget.rev } });
+    return dismissed.status;
+  }, { timeout: STEP_MS }).not.toBe(409);
+  expect(dismissed).toEqual({ status: 202, body: { ok: true, threadId: mausbot.threadId, handled: true } });
+  await expect.poll(shown, { timeout: STEP_MS }).not.toContain("Contract redlines");
+  const chat = await again.lines(mausbot.threadId);
+  expect(chat.filter((line) => line.role === "user" || line.replyToId === posted.id)).toEqual([]);
+  expect(again.prompts().slice(promptsBefore).filter((prompt) => prompt.includes("dismiss_email") || prompt.includes("Contract redlines"))).toEqual([]);
+  expect(existsSync(join(s.home, "dumps", `${mausbot.threadId}.json`))).toBe(false);
+  expect(JSON.parse(readFileSync(stateFile, "utf8")).pendingEmails ?? []).toEqual([]);
+}, 240_000);
+
 it("runs a job at Ask without exec, browser or phone and answers its requests itself, and never sends, with Full stored on MausBot", async () => {
   const fake = await startFakeConnectedApps();
   cleanups.push(() => fake.close());
@@ -510,17 +663,21 @@ it("files no incident for a failed job turn, while an ordinary failed turn reach
   expect(reports.filter((row) => row.role === "user" && row.peerAsk?.incident).map((row) => row.peerAsk.incident.threadId)).toEqual([ordinary.threadId]);
 }, 180_000);
 
-it("does nothing on a hosted team workspace, while the same server unhosted reads on its own clock once MausBot is introduced", async () => {
+it("does nothing on a hosted team workspace or with MausBot switched off, while the same server unhosted and on reads on its own clock", async () => {
   const hostedApps = await startFakeConnectedApps();
   const plainApps = await startFakeConnectedApps();
-  cleanups.push(() => hostedApps.close(), () => plainApps.close());
-  for (const apps of [hostedApps, plainApps]) apps.events = [demo("demo-1", Date.now() + 2 * HOUR)];
+  const offApps = await startFakeConnectedApps();
+  cleanups.push(() => hostedApps.close(), () => plainApps.close(), () => offApps.close());
+  for (const apps of [hostedApps, plainApps, offApps]) apps.events = [demo("demo-1", Date.now() + 2 * HOUR)];
   const hosted = await start(hostedApps, { hosted: true });
   const bots = await hosted.bots();
   expect(bots.some((bot) => bot.builtIn)).toBe(false);
   expect(bots.some((bot) => bot.chiefOfStaff)).toBe(false);
   expect((await hosted.api("POST", "/api/presence/active", { source: "desktop" })).body).toEqual({ ok: true, returned: false });
 
+  const off = await start(offApps, { features: { assistantActs: false } });
+  const offMausbot = await off.mausbot();
+  expect((await off.api("POST", "/api/presence/active", { source: "desktop" })).status).toBe(200);
   const plain = await start(plainApps);
   await plain.mausbot();
   expect((await plain.api("POST", "/api/presence/active", { source: "desktop" })).status).toBe(200);
@@ -529,4 +686,6 @@ it("does nothing on a hosted team workspace, while the same server unhosted read
   expect(reads("GMAIL_FETCH_EMAILS")).toBeGreaterThanOrEqual(1);
   expect(hostedApps.calls).toEqual([]);
   for (const bot of await hosted.bots()) expect(await hosted.cards(bot.threadId)).toEqual([]);
+  expect(offApps.calls).toEqual([]);
+  expect((await off.cards(offMausbot.threadId)).map((card) => card.title)).not.toContain("Daily brief");
 }, 120_000);

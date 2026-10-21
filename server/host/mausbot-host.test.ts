@@ -8,6 +8,7 @@ import { CALENDARS_TOOL } from "../assistant-sources.ts";
 import { DATA_DIR, type AppConfig } from "../config.ts";
 import type { ModelSelection } from "../contracts.ts";
 import { findMausBot, seedBots } from "../mausbot.ts";
+import type { RequestAuth } from "../request-auth.ts";
 import { Store, type Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { DEFAULT_CHECK_MS } from "./assistant-plan.ts";
@@ -16,6 +17,8 @@ import { assistantCheckMs, createMausBotHost, jobReply, type MausBotHostDeps } f
 
 const sonnet: ModelSelection = { instanceId: "claude", model: "claude-sonnet-5" };
 const HOUR = 60 * 60_000;
+const owner: RequestAuth = { kind: "loopback", scopes: ["admin", "client"] };
+const member = { kind: "session", scopes: ["client"], via: "bearer", session: { id: "s1" } } as unknown as RequestAuth;
 const dirs: string[] = [];
 const hosts: Array<{ stop(): void }> = [];
 beforeEach(() => rmSync(DATA_DIR, { recursive: true, force: true }));
@@ -72,7 +75,7 @@ function connectedApps(): MausBotHostDeps["composio"] {
   };
 }
 
-function setup(options: { cloudHome?: boolean; ownerOnly?: (threadId: string) => boolean; introduced?: boolean } = {}) {
+function setup(options: { cloudHome?: boolean; ownerOnly?: (threadId: string) => boolean; introduced?: boolean; hosted?: boolean } = {}) {
   const store = new Store(() => sonnet);
   seedBots(store, { hosted: false });
   const mausbot = findMausBot(store.bots)!;
@@ -86,14 +89,17 @@ function setup(options: { cloudHome?: boolean; ownerOnly?: (threadId: string) =>
   const started: Array<{ botId: string; text: string; opts: { threadId: string; unattended: true; trigger: unknown } }> = [];
   const createTask = vi.spyOn(store, "createTask");
   const patchTask = vi.spyOn(store, "patchTask");
+  const cfg = { features: {} } as AppConfig;
+  let othersMaySee = false;
   const host = createMausBotHost({
-    store, cfg: { features: {} } as AppConfig, composio, dataDir, hosted: false, cloudHome: options.cloudHome ?? false, maxBots: 50,
+    store, cfg, composio, dataDir, hosted: options.hosted ?? false, cloudHome: options.cloudHome ?? false, maxBots: 50,
     registry: { get: () => ({ adapter: { capabilities: { agentsMcp: true, composioMcp: true } } }) } as unknown as MausBotHostDeps["registry"],
     brief: { state: briefState, chiefThread: (bot) => bot.threadId, turnsByBot: () => new Map(), noteAssistantCard: vi.fn(), routineRows: () => [] },
     notify: vi.fn(), threadBusy: () => false, newId: () => `id-${Math.random().toString(36).slice(2)}`,
     startTurn: async (botId, text, opts) => { started.push({ botId, text, opts }); },
     interruptDirectThread: vi.fn(async () => {}),
     cloudOwnerOnlyThread: options.ownerOnly ?? (() => true),
+    othersMaySee: () => othersMaySee,
     checkMs: HOUR,
   });
   hosts.push(host);
@@ -106,7 +112,9 @@ function setup(options: { cloudHome?: boolean; ownerOnly?: (threadId: string) =>
     store.appendMessage(threadId, { role: "bot", kind: "text", text: reply, turnId: "turn-1" });
     host.onEvent({ type: "turn.completed", threadId, turnId: "turn-1", ok: true } as RuntimeEvent);
   };
-  return { store, mausbot, scout, host, started, createTask, patchTask, cards, finish, connectedServices, briefState };
+  const membersSignIn = () => { othersMaySee = true; };
+  const switchOff = () => { cfg.features = { ...cfg.features, assistantActs: false }; };
+  return { store, mausbot, scout, host, started, createTask, patchTask, cards, finish, connectedServices, briefState, membersSignIn, switchOff };
 }
 
 describe("createMausBotHost", () => {
@@ -170,5 +178,38 @@ describe("createMausBotHost", () => {
     expect(w.host.pressRecords(w.mausbot, action)).toContain("Records from Google Calendar");
     expect(w.host.pressRecords(w.scout, action)).toBeNull();
     expect(w.host.pressRecords(w.mausbot, { type: "prep_notes", payload: { eventId: "not-on-the-calendar" } })).toBeNull();
+  });
+
+  it("answers a Dismiss on MausBot's brief itself for the owner or an admin, refuses a member, and leaves every other press alone", () => {
+    const w = setup();
+    const dismiss = { type: "dismiss_email", payload: { messageId: "m1", account: "g1" } };
+    expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, "brief-1", dismiss, owner)).toBe("handled");
+    expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, "brief-1", dismiss, member)).toBe("refused");
+    expect(w.host.serverPress(w.scout, w.scout.threadId, "card-1", dismiss, owner)).toBeNull();
+    expect(w.host.serverPress(w.mausbot, w.mausbot.threadId, "brief-1", { type: "draft_reply", payload: { messageId: "m1", account: "g1" } }, owner)).toBeNull();
+    expect(w.store.messagesFor(w.mausbot.threadId)).toEqual([]);
+    expect(w.started).toEqual([]);
+  });
+
+  it("moves routine runs to MausBot's brief on a single-person install with no sign-in, whoever can see the recap's poster", () => {
+    const w = setup();
+    expect(w.host.takesRoutines({ visibility: "admins" })).toBe(true);
+    expect(w.host.takesRoutines({ visibility: "everyone" })).toBe(true);
+  });
+
+  it("keeps routine runs in the recap on a self-hosted server where members can see the Chief", () => {
+    const w = setup();
+    w.membersSignIn();
+    expect(w.host.takesRoutines({ visibility: "everyone" })).toBe(false);
+    expect(w.host.takesRoutines({ visibility: { people: ["bob@example.test"] } })).toBe(false);
+    expect(w.host.takesRoutines({ visibility: "admins" })).toBe(true);
+  });
+
+  it("keeps routine runs in the recap with MausBot's switch off, before its intro, and on a hosted workspace", () => {
+    const off = setup();
+    off.switchOff();
+    expect(off.host.takesRoutines({ visibility: "admins" })).toBe(false);
+    expect(setup({ introduced: false }).host.takesRoutines({ visibility: "admins" })).toBe(false);
+    expect(setup({ hosted: true }).host.takesRoutines({ visibility: "admins" })).toBe(false);
   });
 });

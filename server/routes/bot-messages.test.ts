@@ -53,7 +53,10 @@ async function fixture(options: { mausbot?: boolean } = {}) {
     started: Array<{ text: string; opts: StartOpts }>;
     records: string | null;
     asked: Array<Parameters<BotMessageRouteDeps["pressRecords"]>>;
-  } = { accepted: [], hold: null, refuse: null, busy: false, prompts: [], started: [], records: null, asked: [] };
+    serverPress: ReturnType<BotMessageRouteDeps["serverPress"]>;
+    serverAsked: Array<Parameters<BotMessageRouteDeps["serverPress"]>>;
+    capped: boolean;
+  } = { accepted: [], hold: null, refuse: null, busy: false, prompts: [], started: [], records: null, asked: [], serverPress: null, serverAsked: [], capped: false };
   const startTurn: BotMessageRouteDeps["startTurn"] = async (botId, text, opts = {}) => {
     state.started.push({ text, opts });
     state.prompts.push(promptWithReply(text, opts.replyTo));
@@ -99,7 +102,10 @@ async function fixture(options: { mausbot?: boolean } = {}) {
     cloudHome: false,
     DirectSendRefused,
     acceptDirectSend: accept,
-    directSendRefusal: (botId: string, thread: string) => (store.taskByThread(botId, thread) ? null : { status: 409, body: { error: "the bot switched tasks before it could receive the message" } }),
+    directSendRefusal: (botId: string, thread: string) => {
+      if (state.capped) return { status: 409, body: { error: "This workspace is at its spend limit.", code: "spend_cap" } };
+      return store.taskByThread(botId, thread) ? null : { status: 409, body: { error: "the bot switched tasks before it could receive the message" } };
+    },
     usageTriggerFor: () => ({ kind: "user" }),
     messageSender: () => undefined,
     cloudGuestSendRefusal: () => null,
@@ -116,6 +122,7 @@ async function fixture(options: { mausbot?: boolean } = {}) {
     registry: { get: () => ({ instanceId: "claude", driverKind: "claudeAgent" }) },
     policyModelRefusal: () => undefined,
     pressRecords: (...args: Parameters<BotMessageRouteDeps["pressRecords"]>) => { state.asked.push(args); return state.records; },
+    serverPress: (...args: Parameters<BotMessageRouteDeps["serverPress"]>) => { state.serverAsked.push(args); return state.serverPress; },
   } as unknown as BotMessageRouteDeps;
   const routes = [createBotMessageRoutes(deps)];
   const server = createServer(async (req, res) => {
@@ -284,6 +291,41 @@ describe("POST /api/bots/:id/messages with widgetAction", () => {
     expect(state.asked).toHaveLength(2);
   });
 
+  it("answers a press the server handles itself with no turn, and refuses one it refuses, even while the thread is busy or at the spend limit", async () => {
+    const { store, bot, threadId, state, post, row, sent } = await fixture();
+    const dismiss = { type: "dismiss_email", payload: { messageId: "m1", account: "g1" } };
+    const created = createAgentCard({ store, bot, threadId, serverCard: true, input: { tool: "show_widget", widget: {
+      type: "Card", title: "Daily brief", children: [{ type: "Button", label: "Dismiss Ada's email", onClickAction: dismiss }],
+    } } });
+    if (!created.ok) throw new Error(created.error);
+    const widgetId = created.messageId;
+    const ref = (row(widgetId).widget!.root as unknown as { children: Array<{ id: string }> }).children[0]!.id;
+    const press = () => post({ threadId, sendId: SEND, widgetAction: { messageId: widgetId, ref } });
+    state.busy = true;
+    state.capped = true;
+
+    state.serverPress = "handled";
+    expect(await press()).toEqual({ status: 202, body: { ok: true, threadId, handled: true } });
+    expect(state.serverAsked).toEqual([[expect.objectContaining({ id: bot.id }), threadId, widgetId, dismiss, expect.objectContaining({ kind: "loopback" })]]);
+    state.serverPress = "refused";
+    expect(await press()).toEqual({ status: 403, body: { error: "Only the owner or an admin can do that." } });
+    expect(state.accepted).toEqual([]);
+    expect(state.started).toEqual([]);
+    expect(state.asked).toEqual([]);
+    expect(sent()).toEqual([]);
+    expect(_queuedCount(threadId)).toBe(0);
+    expect(row(widgetId).widget!.settled).toBeUndefined();
+
+    state.serverPress = null;
+    expect(await press()).toEqual({ status: 409, body: { error: "This workspace is at its spend limit.", code: "spend_cap" } });
+    state.capped = false;
+    expect((await press()).body).toMatchObject({ ok: true, queued: true, threadId });
+    expect(state.accepted).toHaveLength(1);
+    expect(state.serverAsked).toHaveLength(4);
+    expect((await post({ threadId, sendId: OTHER_SEND, text: "Thanks" })).status).toBe(202);
+    expect(state.serverAsked).toHaveLength(4);
+  });
+
   it("answers a press it cannot take with the widget's own sentence, and sends nothing", async () => {
     const { store, bot, threadId, state, post, show } = await fixture();
     const widgetId = show("routineForm");
@@ -300,7 +342,12 @@ describe("POST /api/bots/:id/messages with widgetAction", () => {
       expect((await press(malformed)).status, JSON.stringify(malformed)).toBe(400);
     }
     expect((await press({ messageId: widgetId, ref: "confirm" }, { sendId: "short" })).status).toBe(400);
-    expect((await press({ messageId: widgetId, ref: "confirm" }, { threadId: "thread-of-nobody" })).status).toBe(409);
+    expect(await press({ messageId: widgetId, ref: "confirm" }, { threadId: "thread-of-nobody" })).toEqual({ status: 404, body: { error: "That widget is not in this conversation." } });
+    const stranger = store.createBot({ name: "Stranger" });
+    const theirs = createAgentCard({ store, bot: stranger, threadId: stranger.threadId, input: { tool: "show_widget", widget: WIDGET_SAMPLES.pullRequests } });
+    if (!theirs.ok) throw new Error(theirs.error);
+    expect(await press({ messageId: theirs.messageId, ref: "confirm" }, { threadId: stranger.threadId }))
+      .toEqual({ status: 409, body: { error: "the bot switched tasks before it could receive the message" } });
     expect(await post({ threadId, sendId: SEND, text: "Hi", expectedActiveLeafId: null, widgetAction: { messageId: widgetId, ref: "confirm" } }, "/guarded"))
       .toEqual({ status: 400, body: { error: "guarded sends cannot answer a widget" } });
     expect(state.accepted).toHaveLength(0);
