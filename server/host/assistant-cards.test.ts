@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { parseWidgetInput, WIDGET_LIMITS, widgetActions } from "../../shared/widget.ts";
 import type { CalendarEvent } from "../assistant-sources.ts";
-import { attendeeNames, BRIEF_MAX, clockTime, cancelledCard, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, todayCard, updateCard, type BuiltCard } from "./assistant-cards.ts";
+import {
+  attendeeNames, BRIEF_MAX, BRIEF_ROWS, briefCard, briefFallbackCard, clockTime, cancelledCard, DISMISS_ACTION, emailCard, gmailUrl, meetingWhen, prepCard, reminderCard, todayCard, updateCard,
+  type BriefEmail, type BriefFacts, type BriefMeeting, type BuiltCard,
+} from "./assistant-cards.ts";
 import { clip } from "./text-clip.ts";
 
 const MINUTE = 60_000;
@@ -261,5 +264,192 @@ describe("account naming on cards", () => {
       reminderCard({ event: demo, timeZone: ZONE, now: demo.start - 10 * MINUTE, accounts: "admin@example.test" }), updateCard({ event: demo, text: "t", timeZone: ZONE, now: NOW, accounts: "admin@example.test" })]) {
       expect(valid(built).root.caption).toContain("admin@example.test");
     }
+  });
+});
+
+describe("the daily brief", () => {
+  const reply: BriefEmail = { accountId: "ca_g2", account: "admin@example.test", address: "admin@example.test", messageId: "m1", threadId: "t1", from: "Ada <ada@example.test>", subject: "Q3 numbers due Friday" };
+  const meeting: BriefMeeting = { title: "Supamaus demo with Jake", start: demo.start, end: demo.end, accounts: "me@example.test, admin@example.test", status: "Prep ready", joinUrl: demo.joinUrl };
+  const empty: BriefFacts = { now: NOW, timeZone: ZONE, missing: [], replies: [], repliesChecking: false, failedRoutines: [], clashes: [], meetings: [], important: [], routines: [] };
+  const full: BriefFacts = {
+    ...empty,
+    replies: [{ ...reply, accountId: "ca_g1", account: "me@example.test", address: "me@example.test", messageId: "m0", threadId: "t0", from: "Jake Price <jake@pin.example>", subject: "Pricing for Pin" }],
+    failedRoutines: [{ name: "Weekly report", status: "failed", line: "The sheet was not shared.", open: { botId: "scout", threadId: "run-1" } }],
+    clashes: [{ first: { title: "Standup", start: Date.UTC(2026, 9, 17, 12, 0), accounts: "me@example.test" }, second: { title: "Design review", start: Date.UTC(2026, 9, 17, 12, 15), accounts: "admin@example.test" } }],
+    meetings: [{ title: "Focus", start: Date.UTC(2026, 9, 17, 13, 0), end: Date.UTC(2026, 9, 17, 14, 0), accounts: "me@example.test", status: "Just you" }, meeting],
+    important: [{ ...reply, messageId: "i1", why: "Deadline Friday." }],
+    routines: [{ name: "Morning news", status: "completed", line: "Three stories on AI chips.", open: { botId: "scout", threadId: "run-2" } }],
+  };
+  const sent = (built: BuiltCard) => valid(built).actions.filter((entry) => !entry.client).map((entry) => entry.label);
+  const nodeTypes = (node: any): string[] => [node.type, ...(node.children ?? []).flatMap(nodeTypes)];
+
+  it("lays out the daily brief in the order Needs you, Your day, Important emails, Routines", () => {
+    const { root } = valid(briefCard(full));
+    expect(root.title).toBe("Daily brief");
+    expect(root.caption).toBe("Saturday, October 17");
+    expect(root.children.filter((node: any) => node.type === "Title").map((node: any) => node.value)).toEqual(["Needs you", "Your day", "Important emails", "Routines"]);
+    const text = JSON.stringify(root);
+    const order = ["Jake Price: Pricing for Pin", "Weekly report failed", "Standup and Design review overlap", "6:30 PM · Focus", "10:30 PM · Supamaus demo with Jake", "Ada: Q3 numbers due Friday", "Morning news"];
+    expect(order.map((shown) => text.indexOf(shown))).toEqual(order.map((shown) => text.indexOf(shown)).sort((a, b) => a - b));
+    expect(text).toContain("5:30 PM on me@example.test and 5:45 PM on admin@example.test");
+    expect(text).toContain("Three stories on AI chips.");
+  });
+
+  it("names every account an item came from, and each account it could not read, at the top", () => {
+    const text = JSON.stringify(valid(briefCard({ ...full, missing: [{ account: "admin@example.test", what: "calendar" }, { account: "me@example.test", what: "email" }] })).root);
+    expect(text.indexOf("I couldn't read the calendar of admin@example.test.")).toBeLessThan(text.indexOf("Needs you"));
+    expect(text.indexOf("I couldn't read the email of me@example.test.")).toBeLessThan(text.indexOf("Needs you"));
+    for (const label of ["me@example.test · waiting on your reply", "Prep ready · me@example.test, admin@example.test", "admin@example.test · Deadline Friday."]) expect(text).toContain(label);
+  });
+
+  it("offers Draft a reply, Open in Gmail and Dismiss on a reply that waits, all on that email's own account", () => {
+    const { actions } = valid(briefCard({ ...empty, replies: [reply] }));
+    expect(actions.map((entry) => [entry.label, entry.action.type, entry.action.payload])).toEqual([
+      ["Draft a reply to Ada", "draft_reply", { messageId: "m1", account: "ca_g2" }],
+      ["Open in Gmail", "open_url", { url: "https://mail.google.com/mail/u/admin%40example.test/#all/t1" }],
+      ["Dismiss Ada's email", DISMISS_ACTION, { messageId: "m1", account: "ca_g2" }]]);
+    expect(DISMISS_ACTION).toBe("dismiss_email");
+  });
+
+  it("offers Open in Gmail and Dismiss on an important email, and opens Gmail without an account when no address is known", () => {
+    const { root, actions } = valid(briefCard({ ...empty, important: [{ ...reply, address: undefined, why: undefined }] }));
+    expect(actions.map((entry) => [entry.label, entry.action.type, entry.action.payload])).toEqual([
+      ["Open in Gmail", "open_url", { url: "https://mail.google.com/mail/#all/t1" }],
+      ["Dismiss Ada's email", DISMISS_ACTION, { messageId: "m1", account: "ca_g2" }]]);
+    expect(root.children.find((node: any) => node.type === "Col")?.children[1]).toMatchObject({ type: "Caption", value: "admin@example.test" });
+  });
+
+  it("encodes the account's address and the thread id in the Gmail link", () => {
+    const { actions } = valid(briefCard({ ...empty, replies: [{ ...reply, address: "a+b/c?@example.test", threadId: "t/1#x" }] }));
+    const url = actions.find((entry) => entry.label === "Open in Gmail")!.action.payload as { url: string };
+    expect(url).toEqual({ url: "https://mail.google.com/mail/u/a%2Bb%2Fc%3F%40example.test/#all/t%2F1%23x" });
+    expect(new URL(url.url).pathname).toBe("/mail/u/a%2Bb%2Fc%3F%40example.test/");
+  });
+
+  it("gives every Draft a reply and Dismiss its own label: the sender, then the account, then an ordinal", () => {
+    const thirty = <T,>(make: (n: number) => T) => Array.from({ length: 30 }, (_, n) => make(n));
+    const across = { ...empty, replies: thirty((n) => ({ ...reply, messageId: `r${n}`, ...(n % 2 ? { accountId: "ca_g1", account: "me@example.test" } : {}) })),
+      important: thirty((n) => ({ ...reply, messageId: `i${n}`, ...(n % 3 ? {} : { accountId: "ca_g3", account: "Work" }) })) };
+    for (const facts of [across, { ...across, replies: thirty((n) => ({ ...reply, messageId: `r${n}` })), important: thirty((n) => ({ ...reply, messageId: `i${n}` })) }]) {
+      const labels = sent(briefCard(facts));
+      expect(labels).toHaveLength(BRIEF_ROWS * 3);
+      expect(new Set(labels).size).toBe(labels.length);
+      for (const label of labels) expect(label.length).toBeLessThanOrEqual(WIDGET_LIMITS.label);
+    }
+    const labels = sent(briefCard(across));
+    expect(labels.slice(0, 4)).toEqual(["Draft a reply to Ada (admin)", "Dismiss Ada's email (admin)", "Draft a reply to Ada (me)", "Dismiss Ada's email (me)"]);
+    expect(labels).toContain("Draft a reply to Ada (admin) (2)");
+    expect(labels).toContain("Dismiss Ada's email (Work)");
+    const same = sent(briefCard({ ...empty, replies: thirty((n) => ({ ...reply, messageId: `r${n}` })) }));
+    expect(same.slice(0, 4)).toEqual(["Draft a reply to Ada", "Dismiss Ada's email", "Draft a reply to Ada (2)", "Dismiss Ada's email (2)"]);
+  });
+
+  it("keeps labels distinct when a long sender name is clipped to the same words", () => {
+    const long = "Ada Lovelace of the Analytical Engine Society";
+    const labels = sent(briefCard({ ...empty, replies: [{ ...reply, from: `${long} A <a@example.test>` }, { ...reply, messageId: "m2", from: `${long} B <b@example.test>` }] }));
+    expect(new Set(labels).size).toBe(4);
+    expect(labels[0]!.startsWith("Draft a reply to Ada Lovelace")).toBe(true);
+  });
+
+  it("says it is checking while the calendar or the waiting emails are still being read, and leaves Your day out with no calendar", () => {
+    const checking = JSON.stringify(valid(briefCard({ ...empty, meetings: "checking", repliesChecking: true })).root);
+    expect(checking).toContain("Checking your calendar…");
+    expect(checking).toContain("Checking your email…");
+    expect(checking).not.toContain("Nothing needs you right now.");
+    expect(JSON.stringify(valid(briefCard({ ...empty, meetings: null })).root)).not.toContain("Your day");
+    const quiet = JSON.stringify(valid(briefCard(empty)).root);
+    expect(quiet).toContain("Nothing needs you right now.");
+    expect(quiet).toContain("No meetings today.");
+    expect(quiet).not.toContain("Important emails");
+    expect(quiet).not.toContain("Routines");
+  });
+
+  it("follows the rows of Needs you with 'Checking your email…' while the waiting emails are still being read", () => {
+    const { root } = valid(briefCard({ ...empty, failedRoutines: full.failedRoutines, repliesChecking: true, meetings: null }));
+    expect(root.children.map((node: any) => node.type === "Row" ? "row" : node.value)).toEqual(["Needs you", "row", "Checking your email…"]);
+    expect(root.children[2].type).toBe("Caption");
+  });
+
+  it("words a failed and a missed routine in Needs you, with Open only when the run has a thread", () => {
+    const built = briefCard({ ...empty, failedRoutines: [full.failedRoutines[0]!, { name: "Inbox sweep", status: "missed", line: "It did not run" }] });
+    const text = JSON.stringify(valid(built).root);
+    for (const shown of ["Weekly report failed", "The sheet was not shared.", "Inbox sweep was missed", "It did not run"]) expect(text).toContain(shown);
+    expect(valid(built).actions.map((entry) => [entry.label, entry.action.type, entry.action.payload])).toEqual([["Open", "open_thread", { botId: "scout", threadId: "run-1" }]]);
+    expect(valid(briefCard({ ...empty, routines: [{ name: "Room notes", status: "completed", line: "Done.", open: { groupId: "g1", threadId: "room-1" } }] })).actions[0]!.action.payload).toEqual({ groupId: "g1", threadId: "room-1" });
+  });
+
+  it("shows Join on a meeting only for an https link", () => {
+    for (const joinUrl of ["javascript:alert(1)", "http://meet.example.test/a", "https://user:pw@meet.example.test/a", `https://meet.example.test/${"a".repeat(2_000)}`, "not a url", ""]) {
+      expect(valid(briefCard({ ...empty, meetings: [{ ...meeting, joinUrl }] })).actions, joinUrl).toEqual([]);
+    }
+    expect(valid(briefCard({ ...empty, meetings: [meeting] })).actions.map((entry) => [entry.label, entry.action.payload])).toEqual([["Join", { url: demo.joinUrl }]]);
+  });
+
+  it("caps each section at six rows with 'and N more', and stays a valid card at the limits", () => {
+    const emoji = "\u{1F600}".repeat(300);
+    const many = <T,>(make: (n: number) => T) => Array.from({ length: 9 }, (_, n) => make(n));
+    const built = briefCard({ ...full, missing: many((n) => ({ account: `${emoji}${n}`, what: "email" as const })),
+      replies: many((n) => ({ ...reply, messageId: `m${n}`, subject: emoji, from: emoji })), meetings: many((n) => ({ ...meeting, title: emoji, start: meeting.start + n })),
+      important: many((n) => ({ ...reply, messageId: `i${n}`, why: emoji })), routines: many((n) => ({ name: emoji, status: "completed" as const, line: emoji, open: { botId: "b", threadId: `t${n}` } })) });
+    const { root } = valid(built);
+    const text = JSON.stringify(root);
+    expect(text.match(/and 3 more/g)?.length).toBeGreaterThanOrEqual(4);
+    expect(text).toContain("and 5 more");
+    strings(root).forEach(noLoneSurrogate);
+    const overflow = root.children.filter((node: any) => /^and \d+ more$/.test(node.value ?? ""));
+    expect(overflow.every((node: any) => node.type === "Caption")).toBe(true);
+    expect(BRIEF_ROWS).toBe(6);
+  });
+
+  it("stays under the widget's size with every section full of maximum-length text and links", () => {
+    const long = (n: number) => "x".repeat(n);
+    const address = `${long(240)}@example.test`;
+    const many = <T,>(make: (n: number) => T) => Array.from({ length: 30 }, (_, n) => make(n));
+    const email = (n: number): BriefEmail => ({ accountId: `ca_${long(37)}`, account: address, address, messageId: `${n}${long(31)}`, threadId: long(32), from: `${long(300)} <${address}>`, subject: long(2_000), why: long(2_000) });
+    const routine = (n: number) => ({ name: "\u{1F680}".repeat(120), status: "failed" as const, line: "\u{1F680}".repeat(70), open: { botId: long(40), threadId: `${n}${long(127)}` } });
+    const at = (n: number) => ({ title: long(2_000), start: meeting.start + n, accounts: long(1_000) });
+    const facts: BriefFacts = {
+      now: NOW, timeZone: ZONE, repliesChecking: true,
+      missing: many((n) => ({ account: `${n}${long(400)}`, what: n % 2 ? "email" as const : "calendar" as const })),
+      replies: many(email), failedRoutines: many(routine), clashes: many((n) => ({ first: at(n), second: at(n + 1) })),
+      meetings: many((n) => ({ title: long(2_000), start: meeting.start + n, end: meeting.end, accounts: long(2_000), status: long(500), joinUrl: `https://meet.example.test/${n}${long(570)}` })),
+      important: many(email), routines: many((n) => ({ ...routine(n), status: "completed" as const })),
+    };
+    for (const built of [briefCard(facts), briefCard({ ...facts, replies: [], failedRoutines: [], clashes: [] }), briefFallbackCard(facts)]) {
+      const { root } = valid(built);
+      expect(JSON.stringify(root).length, JSON.stringify(root).length.toString()).toBeLessThan(WIDGET_LIMITS.bytes - 2_000);
+      strings(root).forEach(noLoneSurrogate);
+    }
+    const { actions } = valid(briefCard({ ...facts, failedRoutines: [], clashes: [] }));
+    for (const press of ["Join", "Open in Gmail"]) expect(actions.filter((entry) => entry.label.split(":")[0] === press), press).toHaveLength(press === "Join" ? BRIEF_ROWS : BRIEF_ROWS * 2);
+  });
+
+  it("uses only Card, Title, Text, Caption, Row, Col and Button, so every phone can show it", () => {
+    const types = new Set(nodeTypes(valid(briefCard({ ...full, missing: [{ account: "a", what: "email" }], repliesChecking: true })).root));
+    expect([...types].every((type) => ["Card", "Title", "Text", "Caption", "Row", "Col", "Button"].includes(type)), [...types].join()).toBe(true);
+  });
+
+  it("falls back to the same sections as plain text with no buttons", () => {
+    const fallback = briefFallbackCard({ ...full, missing: [{ account: "admin@example.test", what: "calendar" }], repliesChecking: true });
+    const { root, actions } = valid(fallback);
+    expect(actions).toEqual([]);
+    expect(root.title).toBe("Daily brief");
+    expect(root.children.filter((node: any) => node.type === "Title").map((node: any) => node.value)).toEqual(["Needs you", "Your day", "Important emails", "Routines"]);
+    const text = JSON.stringify(root);
+    for (const shown of ["I couldn't read the calendar of admin@example.test.", "Jake Price: Pricing for Pin", "me@example.test · waiting on your reply", "Weekly report failed", "Standup and Design review overlap", "10:30 PM · Supamaus demo with Jake", "Ada: Q3 numbers due Friday", "Morning news", "Checking your email…"]) {
+      expect(text).toContain(shown);
+    }
+    expect(nodeTypes(root)).not.toContain("Button");
+    expect(fallback.summary).toBe(briefCard(full).summary);
+  });
+
+  it("summarises the brief in one short line", () => {
+    expect(briefCard(full).summary).toBe("Daily brief: 3 need you, 2 meetings, 1 important email, 1 routine result");
+    expect(briefCard({ ...empty, meetings: "checking" }).summary).toBe("Daily brief: checking your calendar…");
+    expect(briefCard({ ...empty, replies: [reply], meetings: [meeting], important: [reply, reply], routines: [...full.routines, ...full.routines] }).summary).toBe("Daily brief: 1 needs you, 1 meeting, 2 important emails, 2 routine results");
+    expect(briefCard(empty).summary).toBe("Daily brief: 0 meetings");
+    expect(briefCard({ ...empty, meetings: null }).summary).toBe("Daily brief: nothing needs you right now");
+    const counted = briefCard({ ...empty, replies: Array.from({ length: 40 }, (_, n) => ({ ...reply, messageId: `m${n}` })) }).summary;
+    expect(counted).toBe("Daily brief: 40 need you, 0 meetings");
   });
 });
