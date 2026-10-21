@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
-import type { MeetingRecord } from "./assistant-state.ts";
+import type { CalendarEvent, EmailHeader, ThreadMessage } from "../assistant-sources.ts";
+import type { MeetingRecord, PendingEmail } from "./assistant-state.ts";
 import { validZone } from "./brief-recap.ts";
 
 const MINUTE = 60_000;
@@ -13,6 +13,7 @@ export const DAILY_TURN_CAP = 12;
 export const TRIAGE_BATCH = 20;
 export const CARDS_PER_TRIAGE = 5;
 export const EMAIL_MAX_AGE_MS = 24 * HOUR;
+export const PENDING_MAX_AGE_MS = 7 * 24 * HOUR;
 export const RECONNECT_AFTER = 3;
 export const KEEP_MEETINGS_MS = 35 * 24 * HOUR;
 export const DEFAULT_CHECK_MS = 15 * MINUTE;
@@ -117,4 +118,108 @@ export function keepNewest<T>(list: readonly T[], max: number): T[] {
 export function emailSince(input: { now: number; emailCursor?: number; checkMs: number }): number {
   if (input.emailCursor === undefined) return input.now - input.checkMs;
   return Math.max(input.emailCursor, input.now - EMAIL_MAX_AGE_MS);
+}
+
+export type AccountEvent = CalendarEvent & { account: string };
+export type Meeting = CalendarEvent & { accounts: string[] };
+
+const MEETING_KEY_MAX = 256;
+
+export function isMine(event: CalendarEvent, addresses: ReadonlySet<string>): boolean {
+  if (event.ownedCalendar === true) return true;
+  if (event.organizer !== undefined && addresses.has(event.organizer.toLowerCase())) return true;
+  return event.attendees.some((attendee) => addresses.has(attendee.email.toLowerCase()));
+}
+
+export function meetingKey(event: CalendarEvent): string {
+  if (!event.iCalUID) return event.id;
+  const key = event.seriesId ? `${event.iCalUID}#${event.originalStart ?? event.id}` : event.iCalUID;
+  return key.length > MEETING_KEY_MAX ? `uid:${createHash("sha256").update(key).digest("hex").slice(0, 32)}` : key;
+}
+
+function sameMeetingSignature(event: CalendarEvent): string {
+  return JSON.stringify([event.title.toLowerCase().replace(/\s+/g, " ").trim(), event.start, event.end]);
+}
+
+function mergeGroup(group: readonly AccountEvent[], id: string, addresses: ReadonlySet<string>): Meeting {
+  const live = group.filter((copy) => copy.status !== "cancelled");
+  const pool = live.length > 0 ? live : group;
+  const lead = pool.reduce((best, copy) => (copy.attendees.length > best.attendees.length ? copy : best));
+  const { account: _account, ...details } = lead;
+  const attendees = lead.attendees.map((attendee) => ({ ...attendee, self: addresses.has(attendee.email.toLowerCase()) || (attendee.self && lead.ownedCalendar === true) }));
+  const mine = attendees.filter((attendee) => attendee.self);
+  return {
+    ...details,
+    id,
+    attendees,
+    selfDeclined: mine.length > 0 ? mine.every((attendee) => attendee.response === "declined") : lead.selfDeclined,
+    accounts: [...new Set(group.map((copy) => copy.account))],
+  };
+}
+
+export function mergeMeetings(events: readonly AccountEvent[], addresses: ReadonlySet<string>): Meeting[] {
+  const withUid = new Map<string, AccountEvent[]>();
+  const withoutUid = new Map<string, AccountEvent[]>();
+  for (const event of events.filter((one) => isMine(one, addresses))) {
+    const groups = event.iCalUID ? withUid : withoutUid;
+    const key = event.iCalUID ? meetingKey(event) : sameMeetingSignature(event);
+    groups.set(key, [...(groups.get(key) ?? []), event]);
+  }
+  const merged = [
+    ...[...withUid].map(([key, group]) => mergeGroup(group, key, addresses)),
+    ...[...withoutUid.values()].map((group) => mergeGroup(group, group.map((copy) => copy.id).reduce((a, b) => (b < a ? b : a)), addresses)),
+  ];
+  return merged.sort((a, b) => a.start - b.start);
+}
+
+export function clashes<T extends CalendarEvent>(meetings: readonly T[], input: { now: number; timeZone?: string }): Array<[T, T]> {
+  const today = localDate(input.now, input.timeZone);
+  const open = meetings
+    .filter((meeting) => qualifies(meeting) && meeting.end > input.now && localDate(meeting.start, input.timeZone) === today)
+    .sort((a, b) => a.start - b.start);
+  const pairs: Array<[T, T]> = [];
+  open.forEach((first, index) => {
+    for (const second of open.slice(index + 1)) {
+      if (second.start < first.end && first.start < second.end) pairs.push([first, second]);
+    }
+  });
+  return pairs;
+}
+
+export const emailKey = (email: Pick<EmailHeader, "account" | "id">): string => `${email.account}/${email.id}`;
+
+export function planMail(input: { now: number; emails: readonly EmailHeader[]; judged: ReadonlySet<string>; lastTriageAt?: number; spacingMs: number }):
+  { batch: EmailHeader[]; copies: EmailHeader[]; quiet: EmailHeader[]; pending: EmailHeader[] } {
+  const fresh = input.emails.filter((email) => !input.judged.has(emailKey(email)));
+  const quiet = fresh.filter((email) => input.now - email.at > EMAIL_MAX_AGE_MS);
+  const recent = fresh.filter((email) => input.now - email.at <= EMAIL_MAX_AGE_MS).sort((a, b) => b.at - a.at);
+  const firstWithHeader = new Map<string, EmailHeader>();
+  const originals: EmailHeader[] = [];
+  const copiesOf = new Map<EmailHeader, EmailHeader[]>();
+  for (const email of recent) {
+    const original = email.messageIdHeader === undefined ? undefined : firstWithHeader.get(email.messageIdHeader);
+    if (original) {
+      copiesOf.set(original, [...(copiesOf.get(original) ?? []), email]);
+      continue;
+    }
+    if (email.messageIdHeader !== undefined) firstWithHeader.set(email.messageIdHeader, email);
+    originals.push(email);
+  }
+  const due = input.lastTriageAt === undefined || input.now - input.lastTriageAt >= input.spacingMs;
+  const batch = due ? originals.slice(0, TRIAGE_BATCH) : [];
+  const rest = originals.slice(batch.length);
+  return {
+    batch,
+    copies: batch.flatMap((email) => copiesOf.get(email) ?? []),
+    quiet,
+    pending: [...rest, ...rest.flatMap((email) => copiesOf.get(email) ?? [])].sort((a, b) => b.at - a.at),
+  };
+}
+
+export function answered(email: Pick<EmailHeader, "at">, thread: readonly ThreadMessage[], addresses: ReadonlySet<string>): boolean {
+  return thread.some((message) => message.at > email.at && addresses.has(message.from.toLowerCase()));
+}
+
+export function prunePending(list: readonly PendingEmail[], input: { now: number; accounts: ReadonlySet<string> }): PendingEmail[] {
+  return list.filter((entry) => input.accounts.has(entry.account) && input.now - entry.judgedAt <= PENDING_MAX_AGE_MS);
 }
