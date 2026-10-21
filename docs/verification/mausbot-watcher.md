@@ -23,7 +23,9 @@ on top of
   brief that presence brings.
 - A workspace restore or Cloud move turns "MausBot can act on its own" off, as
   it turns routines off, and leaves the source's jobs in flight and Retry cards
-  behind. If both servers are switched on and connected to the same Google
+  behind. A restore also forgets which accounts the source saw connected and
+  the Reconnect cards it showed, so the restored server learns its connections
+  again. Send and Move to My Cloud leave MausBot out: My Cloud has its own. If both servers are switched on and connected to the same Google
   account, both watch it.
 - `assistant.json` (version 2; a version 1 file starts fresh) in the data
   folder keeps, per connected account: its address, alias, email cursor, judged
@@ -103,7 +105,8 @@ on top of
   brief posts also closes the window. A held email stays in `assistant.json`
   until a delivered card shows it.
 - **Dismiss costs no turn.** Dismiss is answered by the server only on a card
-  the server built (`serverCard`) in MausBot's main thread: the press route
+  the server built (`serverCard`), which only the server can edit (a bot's
+  `update_widget` on one is told the widget is missing), in MausBot's main thread: the press route
   answers `202 { ok: true, threadId, handled: true }`, runs no model turn and
   adds no chat message. A `dismiss_email` button on a widget a MausBot turn drew
   goes to MausBot as an ordinary press. Only the owner or an admin can dismiss;
