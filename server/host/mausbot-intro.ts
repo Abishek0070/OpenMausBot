@@ -94,7 +94,7 @@ export function createMausBotIntro(deps: MausBotIntroDeps) {
     for (const service of missing) {
       deps.store.appendMessage(threadId, {
         role: "bot", kind: "connector", text: connectorCardText(service.label),
-        connector: { slug: service.slug, label: service.label, description: service.description, status: "required", resumeKey },
+        connector: { slug: service.slug, label: service.label, description: service.description, status: "required", resumeKey, addAccount: true },
       });
     }
     remember({ connectOffer: { at: now(), threadId, shown: true } });

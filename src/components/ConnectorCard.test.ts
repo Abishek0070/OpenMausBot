@@ -43,6 +43,12 @@ describe("ConnectorCard ask card", () => {
     expect(html).toContain(t("connectors.card.continueTask"));
   });
 
+  it("offers Add another account only on MausBot's connected card", () => {
+    expect(view({ status: "connected", resumed: true, addAccount: true })).toContain(t("connectors.card.addAccount"));
+    expect(view({ status: "connected", resumed: true })).not.toContain(t("connectors.card.addAccount"));
+    expect(view({ status: "required", addAccount: true })).not.toContain(t("connectors.card.addAccount"));
+  });
+
   it("asks for a label instead of retrying the same request when the app needs one", () => {
     const html = view({ status: "failed", error: "Add an account alias so the existing connection is not replaced" });
     expect(html).toContain(`aria-label="${t("connectors.aliasAriaAnother", { service: "GitHub" })}"`);

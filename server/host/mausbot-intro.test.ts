@@ -86,7 +86,7 @@ describe("MausBot's intro", () => {
     expect(w.offer().card).toMatchObject({ options: [CREATE_CHIEF, appointOption("Tango"), NOT_NOW], fixedOptions: true, requestId: "id1" });
     expect(lines.filter((line) => line.kind === "text").map((line) => line.text)).toEqual([MAUSBOT_INTRO, CONNECT_LINE]);
     expect(lines.filter((line) => line.kind === "connector").map((line) => line.connector)).toEqual([
-      expect.objectContaining({ slug: "googlecalendar", label: "Google Calendar", status: "required", resumeKey: "mausbot-connect-id2" }),
+      expect.objectContaining({ slug: "googlecalendar", label: "Google Calendar", status: "required", resumeKey: "mausbot-connect-id2", addAccount: true }),
     ]);
     expect(w.store.patchTask).toHaveBeenCalledWith("m", "m-main", { unread: true });
     expect(w.saved()).toMatchObject({

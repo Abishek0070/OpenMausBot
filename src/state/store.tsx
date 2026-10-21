@@ -123,6 +123,7 @@ export interface ConnectorCardData {
   dismissed?: boolean;
   resumed?: boolean;
   stopped?: boolean;
+  addAccount?: boolean;
 }
 
 export interface SecretRequestCardData {

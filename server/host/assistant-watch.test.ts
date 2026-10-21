@@ -588,7 +588,7 @@ describe("every account", () => {
     }
     expect(w.texts()).toEqual([reconnectText("googlecalendar", ADMIN)]);
     expect(w.messages.filter((line) => line.kind === "connector").map((line) => line.connector)).toEqual([expect.objectContaining({
-      slug: "googlecalendar", label: "Google Calendar", description: "Reconnect Google Calendar (admin@example.test) so MausBot can keep reading it.", status: "required", alias: "work",
+      slug: "googlecalendar", label: "Google Calendar", description: "Reconnect Google Calendar (admin@example.test) so MausBot can keep reading it.", status: "required", addAccount: true, alias: "work",
     })]);
     expect(w.notify).toHaveBeenCalledWith(expect.objectContaining({ kind: "assistant", body: reconnectText("googlecalendar", ADMIN) }));
   });

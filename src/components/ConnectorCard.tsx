@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, PlugZap, RefreshCw, X } from "lucide-react";
+import { Loader2, PlugZap, Plus, RefreshCw, X } from "lucide-react";
 
 import { api, type Message } from "@/state/store";
 import { t } from "@/lib/i18n";
@@ -16,6 +16,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
   const [localError, setLocalError] = useState<string | { key: LocaleKey } | null>(null);
   const [authorization, setAuthorization] = useState<(PendingAuthorization & { target: string }) | null>(null);
   const [label, setLabel] = useState("");
+  const [adding, setAdding] = useState(false);
   const polling = useRef(false);
   const opening = useRef<ReturnType<typeof reserveConnectionPage> | null>(null);
 
@@ -31,6 +32,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
     setLocalError(null);
     setAuthorization(null);
     setLabel("");
+    setAdding(false);
     return () => {
       opening.current?.cancel();
       opening.current = null;
@@ -136,17 +138,56 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
     );
   }
 
+  const labelInput = (
+    <input
+      value={label}
+      maxLength={64}
+      onChange={(event) => setLabel(event.target.value)}
+      placeholder={t("connectors.aliasPlaceholder")}
+      aria-label={t("connectors.aliasAriaAnother", { service: connector.label })}
+      className="mt-1.5 h-8 w-full rounded-full bg-inset px-3 text-[12.5px] text-ink placeholder:text-ink-secondary focus:outline-none focus:ring-1 focus:ring-accent"
+    />
+  );
+
   if (connected) {
+    const showAdd = connector.addAccount === true && !stopped;
+    const showContinue = !connector.resumed && !stopped;
     return (
       <AskSettledLine
         ariaLabel={connector.label}
-        action={!connector.resumed && !stopped && (
-          <button type="button" onClick={() => void resume()} disabled={busy} className={cn(ASK_QUIET_BUTTON, "text-accent-text")}>
-            {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-            {t("connectors.card.continueTask")}
-          </button>
+        action={(showContinue || showAdd) && (
+          <>
+            {showContinue && (
+              <button type="button" onClick={() => void resume()} disabled={busy} className={cn(ASK_QUIET_BUTTON, "text-accent-text")}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                {t("connectors.card.continueTask")}
+              </button>
+            )}
+            {showAdd && (
+              <button type="button" onClick={() => setAdding(true)} disabled={busy || adding} className={ASK_QUIET_BUTTON}>
+                <Plus size={14} />
+                {t("connectors.card.addAccount")}
+              </button>
+            )}
+          </>
         )}
-        detail={error && <p role="alert" className="ms-[19px] mt-1 text-[12px] text-danger">{typeof error === "string" ? error : t(error.key)}</p>}
+        detail={(adding || error) && (
+          <div className="ms-[19px]">
+            {adding && (
+              <form
+                className="mt-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (label.trim()) void connect(label.trim());
+                  else setLocalError({ key: "connectors.aliasRequired" });
+                }}
+              >
+                {labelInput}
+              </form>
+            )}
+            {error && <p role="alert" className="mt-1 text-[12px] text-danger">{typeof error === "string" ? error : t(error.key)}</p>}
+          </div>
+        )}
       >
         <span className="text-ink-secondary" title={connector.resumed ? t("connectors.card.resumed") : t("connectors.card.paused")}>
           {connector.label}
@@ -199,14 +240,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
           <p role="alert" className="text-[12px] text-danger">
             {t(requiresAccountAlias(errorText) ? "connectors.aliasNeeded" : "connectors.aliasTaken")}
           </p>
-          <input
-            value={label}
-            maxLength={64}
-            onChange={(event) => setLabel(event.target.value)}
-            placeholder={t("connectors.aliasPlaceholder")}
-            aria-label={t("connectors.aliasAriaAnother", { service: connector.label })}
-            className="mt-1.5 h-8 w-full rounded-full bg-inset px-3 text-[12.5px] text-ink placeholder:text-ink-secondary focus:outline-none focus:ring-1 focus:ring-accent"
-          />
+          {labelInput}
         </form>
       ) : error && <p role="alert" className="mt-1.5 text-[12px] text-danger">{typeof error === "string" ? error : t(error.key)}</p>}
       {authorizationUrl && (

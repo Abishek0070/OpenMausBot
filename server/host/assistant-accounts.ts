@@ -43,7 +43,7 @@ export function reconnectCard(account: SourceAccount, label: string | undefined,
   return {
     text: connectorCardText(app, account.alias),
     connector: {
-      slug: account.service, label: app, description: `Reconnect ${app}${label ? ` (${label})` : ""} so MausBot can keep reading it.`, status: "required", resumeKey,
+      slug: account.service, label: app, description: `Reconnect ${app}${label ? ` (${label})` : ""} so MausBot can keep reading it.`, status: "required", resumeKey, addAccount: true,
       ...(account.alias ? { alias: account.alias } : {}),
     },
   };

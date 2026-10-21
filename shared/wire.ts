@@ -671,6 +671,8 @@ export interface ConnectorCardData {
   /** Stop ended the turn this card paused: it offers no action, and a
    * connection made afterwards is kept but continues nothing. */
   stopped?: boolean;
+  /** MausBot's Gmail and Calendar cards: once connected, the card offers to connect another account of the same app. */
+  addAccount?: boolean;
 }
 
 export interface SecretRequestCardData {
