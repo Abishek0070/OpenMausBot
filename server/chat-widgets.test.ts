@@ -80,11 +80,36 @@ describe("show_widget", () => {
     const posted = createAgentCard({ store: fake.store, bot: SCOUT, threadId: THREAD, input: { tool: "show_widget", widget: card }, serverCard: true });
     if (!posted.ok) throw new Error(posted.error);
     expect(fake.rows(THREAD)[0]).toMatchObject({ kind: "widget", serverCard: true });
-    const updated = createAgentCard({ store: fake.store, bot: SCOUT, threadId: THREAD, input: { tool: "update_widget", widget_id: posted.messageId, widget: { ...card, title: "Today" } } });
+    const updated = createAgentCard({ store: fake.store, bot: SCOUT, threadId: THREAD, input: { tool: "update_widget", widget_id: posted.messageId, widget: { ...card, title: "Today" } }, serverCard: true });
     expect(updated.ok).toBe(true);
     expect(fake.rows(THREAD)[0]).toMatchObject({ serverCard: true, text: expect.stringContaining("**Today**") });
     expect(show(fake, card).ok).toBe(true);
     expect(fake.rows(THREAD)[1]).not.toHaveProperty("serverCard");
+  });
+
+  it("answers a bot's update of a server-built card as if the widget were missing, and leaves the card as it was", () => {
+    const fake = fakeStore();
+    const card = { type: "Card", title: "Today", children: [{ type: "Text", value: "Nothing needs you right now." }] };
+    const posted = createAgentCard({ store: fake.store, bot: SCOUT, threadId: THREAD, input: { tool: "show_widget", widget: card }, serverCard: true });
+    if (!posted.ok) throw new Error(posted.error);
+    const before = structuredClone(fake.rows(THREAD)[0]);
+    const authored = vi.fn();
+    const forged = { type: "Card", title: "Today", children: [{ type: "Button", label: "Dismiss", onClickAction: { type: "dismiss" } }] };
+    const missing = { ok: false, status: 404, error: "No widget with that id in this conversation." };
+    expect(createAgentCard({ store: fake.store, bot: SCOUT, threadId: THREAD, input: { tool: "update_widget", widget_id: posted.messageId, widget: forged }, authored })).toEqual(missing);
+    expect(createAgentCard({ store: fake.store, bot: SCOUT, threadId: THREAD, input: { tool: "update_widget", widget_id: posted.messageId, widget: forged, serverCard: true }, authored })).toEqual(missing);
+    expect(fake.patchMessage).not.toHaveBeenCalled();
+    expect(authored).not.toHaveBeenCalled();
+    expect(fake.rows(THREAD)[0]).toEqual(before);
+  });
+
+  it("still lets a bot update a card it showed itself", () => {
+    const fake = fakeStore();
+    const row = shown(fake, "buildStatus");
+    const result = createAgentCard({ store: fake.store, bot: SCOUT, threadId: THREAD, input: { tool: "update_widget", widget_id: row.id, widget: WIDGET_SAMPLES.spendTable } });
+    expect(result).toEqual({ ok: true, messageId: row.id });
+    expect(fake.rows(THREAD)[0]).not.toHaveProperty("serverCard");
+    expect(payloadOf(fake, row.id)).toMatchObject({ rev: 1, root: { type: "Card", title: "Spend by bot" } });
   });
 
   it("tells the caller which row it wrote, on a show and on an update, and never on a refusal", () => {

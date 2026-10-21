@@ -121,7 +121,10 @@ export function createAgentCard(args: {
   }
 
   const existing = store.messagesFor(threadId).find((message) => message.id === input.widget_id);
-  if (!existing || existing.kind !== "widget" || !existing.widget || (existing.from && existing.from.botId !== bot.id)) {
+  // A server-built card keeps `serverCard` through an edit, and that mark is what replay and presses trust; only the server
+  // may edit it, and a bot is told nothing more than that the id is missing.
+  if (!existing || existing.kind !== "widget" || !existing.widget || (existing.from && existing.from.botId !== bot.id) ||
+      (existing.serverCard && !args.serverCard)) {
     return { ok: false, status: 404, error: NO_SUCH_WIDGET };
   }
   if (existing.widget.settled) return { ok: false, status: 409, error: "The person already answered that widget. Show a new one." };

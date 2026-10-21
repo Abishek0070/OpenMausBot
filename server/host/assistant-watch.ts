@@ -167,7 +167,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     },
     edit: (card, built) => {
       const here = context();
-      return here !== null && createAgentCard({ store: deps.store, bot: here.bot, threadId: card.threadId, input: { tool: "update_widget", widget_id: card.messageId, widget: built.card } }).ok;
+      return here !== null && createAgentCard({ store: deps.store, bot: here.bot, threadId: card.threadId, input: { tool: "update_widget", widget_id: card.messageId, widget: built.card }, serverCard: true }).ok;
     },
     stored: (card) => deps.store.messagesFor(card.threadId).find((row) => row.id === card.messageId && row.kind === "widget")?.widget?.root,
   });
