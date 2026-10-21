@@ -95,6 +95,7 @@ describe("what the app may do", () => {
     ["POST", "/api/live/call/end"],
     ["GET", "/api/live/call"],
     ["PATCH", "/api/live/settings"],
+    ["POST", "/api/presence/active"],
     ["GET", "/api/routines"],
     ["POST", "/api/routines"],
     ["PATCH", "/api/routines/routine_1"],
@@ -170,6 +171,13 @@ describe("what it may not", () => {
     }
     expect(ask("GET", "/api/routines")).toBeNull();
     expect(ask("POST", "/api/routines/routine_1/run")).toBeNull();
+  });
+
+  it("takes the phone's presence ping on its one exact route", () => {
+    expect(ask("POST", "/api/presence/active", false)?.status).toBe(401);
+    expect(allowed("GET", "/api/presence/active")).toBe(false);
+    expect(allowed("POST", "/api/presence/active/extra")).toBe(false);
+    expect(allowed("POST", "/api/presence")).toBe(false);
   });
 
   it("keeps the unpaired-phone notice for the companion alone", () => {
