@@ -70,6 +70,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
   let brief: PostedBrief | undefined;
   let waitingForListing = false;
   let unreachable = false;
+  let mailCheckedOnce = false;
   let postFailedAt: number | undefined;
   let rereading: Promise<void> | undefined;
   const rereadFailed = new Set<string>();
@@ -178,7 +179,7 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
           .map((id) => ({ account: accounts.label(id), what: "email" as const })),
       ],
       replies: replies.map(briefEmail),
-      repliesChecking: !unreachable && !posted.pendingChecked && [...waiting, ...posted.important].some((ref) => gmail.has(ref.account)),
+      repliesChecking: !unreachable && gmail.size > 0 && (!mailCheckedOnce || (!posted.pendingChecked && [...waiting, ...posted.important].some((ref) => gmail.has(ref.account)))),
       repliesUnreadable: unshownCounts(unreadWaiting, new Set(replies.map((row) => row.group))),
       failedRoutines: posted.routines.filter((row) => row.status !== "completed"),
       clashes: clashes(meetings, { now: at, timeZone: deps.timeZone() }).map(([first, second]) => ({ first: side(first), second: side(second) })),
@@ -375,8 +376,12 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     post,
     waiting: (): boolean => waitingForListing,
     judged,
-    mailChecked(): void {
-      if (brief) brief.mailOpen = false;
+    /** An email check finished with nothing left to judge; only one that read every account closes the mail window. */
+    mailChecked(everyAccountRead: boolean): void {
+      const first = !mailCheckedOnce;
+      mailCheckedOnce = true;
+      if (brief && everyAccountRead) brief.mailOpen = false;
+      if (first) refresh(true);
     },
     /** False when the account listing failed: the brief says so in place of what it is still checking. */
     appsReached(reached: boolean): void {

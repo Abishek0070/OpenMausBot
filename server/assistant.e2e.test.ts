@@ -361,11 +361,15 @@ it("preps a meeting three hours out once, puts the first important email in the 
   const kept = jobThreads(await again.mausbotNow()).map((task) => task.threadId as string);
   expect(kept).not.toContain("mausbot-left-behind");
   expect(kept).toEqual(expect.arrayContaining(jobs.map((task) => task.threadId as string)));
-  // After a restart MausBot no longer holds that email, so the press reaches it as the person's answer to the card, unadorned.
+  // After a restart MausBot no longer holds that email: the press names it by id and the receiving account from the
+  // server's account table, never from the card's text.
   const secondPress = await pressDraftReply(again, mausbot);
-  const unadorned = secondPress.split("--- end widget ---")[1]!;
-  expect(unadorned).toContain("Current message:");
-  expect(unadorned).not.toContain("Records from");
+  const afterRestart = secondPress.split("--- end widget ---")[1]!;
+  expect(afterRestart).toContain("Current message:");
+  expect(afterRestart).toContain("What the pressed card is about, from your own records:\\n[Records from Gmail.");
+  expect(afterRestart).toContain("id important-1 · account me@example.test\\n[end of records]");
+  expect(afterRestart).toContain("Draft the reply from me@example.test, and name that account in the draft call.");
+  expect(afterRestart.split("Current message:")[0]).not.toContain("Q3 numbers due Friday");
   // That turn resumes MausBot's session and is handed the cards posted since its last turn: each as labelled records,
   // the hostile subject only inside one, its forged closing marker defused, never as MausBot's own words.
   const replayed = promptText(secondPress);
@@ -418,11 +422,13 @@ it("posts nothing before the owner first comes, then its intro first; a morning 
   expect(presence.body.open).toEqual({ botId: mausbot.id, threadId: mausbot.threadId });
   const waiting = (await todays(again)).at(-1);
   expect(JSON.stringify(waiting.widget.root)).toContain("Checking your calendar…");
+  expect(JSON.stringify(waiting.widget.root)).toContain("Checking your email…");
   answer();
-  await expect.poll(async () => (await todays(again)).at(-1).widget.rev, { timeout: STEP_MS }).toBe(1);
+  await expect.poll(async () => (await todays(again)).at(-1).widget.rev, { timeout: STEP_MS }).toBe(2);
   const filled = (await todays(again)).at(-1);
   expect(filled.id).toBe(waiting.id);
   expect(JSON.stringify(filled.widget.root)).not.toContain("Checking your calendar");
+  expect(JSON.stringify(filled.widget.root)).not.toContain("Checking your email");
   expect(JSON.stringify(filled.widget.root)).toMatch(/Supamaus demo with Jake|No meetings today\./);
   expect((await todays(again)).map((line) => line.id)).toEqual([rows.find((line) => line.kind === "widget").id, waiting.id]);
   expect((await again.notifications()).filter((entry) => entry.kind === "assistant" && entry.threadId === mausbot.threadId)).toHaveLength(2);

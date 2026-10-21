@@ -217,6 +217,7 @@ describe("MausBot's daily brief", () => {
 
   it("replaces 'Checking your calendar…' with the account it could not read, and never says there are no meetings for it", () => {
     const w = briefWorld();
+    w.brief.mailChecked(true);
     w.meetings = null; w.brief.post();
     w.readState.set("ca_c1", "failed"); w.readState.set("ca_c2", "failed"); w.meetings = [];
     w.brief.refresh();
@@ -238,6 +239,8 @@ describe("MausBot's daily brief", () => {
     expect(reloaded.lastSummary()).toContain("checking your email…");
     expect(reloaded.lastSummary()).not.toContain("nothing needs you");
     await reloaded.brief.checkPending(true);
+    expect(reloaded.lastCard()).toContain("Checking your email…");
+    reloaded.brief.mailChecked(true);
     const card = reloaded.lastCard();
     expect(card).toContain("Subject m1"); expect(card).toContain("Subject m2");
     expect(card.indexOf("Subject m1")).toBeLessThan(card.indexOf("Your day"));
@@ -254,14 +257,30 @@ describe("MausBot's daily brief", () => {
     expect(w.brief.judged([pick("m2", false)])).toEqual([]);
     expect(w.edits).toHaveLength(2);
     expect(w.lastCard()).toContain("Subject m2");
-    w.brief.mailChecked();
+    w.brief.mailChecked(true);
     expect(w.brief.judged([pick("m3", false)]).map((one) => one.email.id)).toEqual(["m3"]);
     expect(w.edits).toHaveLength(2);
   });
 
+  it("says it is still checking email, never that nothing needs you, until the first email check of a cold start has finished", () => {
+    const w = briefWorld();
+    w.brief.post();
+    expect(w.lastCard()).toContain("Checking your email…");
+    expect(w.lastCard()).not.toContain("Nothing needs you right now.");
+    expect(w.lastSummary()).toContain("checking your email…");
+    w.brief.mailChecked(false);
+    expect(w.edits).toHaveLength(1);
+    expect(w.lastCard()).toContain("Nothing needs you right now.");
+    expect(w.brief.judged([pick("m1", false)])).toEqual([]);
+    const warm = w.restart();
+    warm.brief.mailChecked(true);
+    warm.tick(DAY); warm.brief.post();
+    expect(warm.lastCard()).not.toContain("Checking your email…");
+  });
+
   it("closes the mail window when an email check after the brief finds nothing to judge", () => {
     const w = briefWorld();
-    w.brief.post(); w.brief.mailChecked();
+    w.brief.post(); w.brief.mailChecked(true);
     expect(w.brief.judged([pick("m1", false)])).toHaveLength(1);
   });
 
@@ -489,6 +508,7 @@ describe("MausBot's daily brief", () => {
 
   it("after a restart, says nothing needs you once the last row of Needs you is dismissed, and drops an emptied Important emails", async () => {
     const w = briefWorld();
+    w.brief.mailChecked(true);
     w.brief.judged([pick("m1", true)]); w.brief.post(); await w.brief.checkPending(true);
     const again = w.restart();
     again.brief.dismiss("ca_g1", "m1", w.briefRef());

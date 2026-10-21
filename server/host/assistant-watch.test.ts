@@ -806,6 +806,8 @@ describe("the daily brief", () => {
     day.watch.onPresence({ source: "desktop", returned: true });
     await day.watch.check();
     expect(JSON.stringify(day.briefs()[0]!.widget)).not.toContain("Subject important-1");
+    expect(JSON.stringify(day.briefs()[0]!.widget)).toContain("Checking your email…");
+    expect(JSON.stringify(day.briefs()[0]!.widget)).not.toContain("Nothing needs you right now.");
     hold.open();
     await day.watch.idle();
     expect(JSON.stringify(day.briefs()[0]!.widget)).toContain("Subject important-1");
@@ -1036,6 +1038,7 @@ describe("the daily brief", () => {
     expect(day.briefs()).toHaveLength(1);
     const placeholder = day.briefs()[0]!;
     expect(JSON.stringify(placeholder.widget)).toContain("Checking your calendar…");
+    expect(JSON.stringify(placeholder.widget)).toContain("Checking your email…");
     expect(day.notify).toHaveBeenCalledTimes(1);
     expect(day.noteCard).toHaveBeenCalledWith({ botId: "m", threadId: "m-main" });
     connected.open();
@@ -1043,9 +1046,10 @@ describe("the daily brief", () => {
     await restarted.idle();
     expect(day.briefs()).toHaveLength(1);
     expect(day.briefs()[0]!.id).toBe(placeholder.id);
-    expect(day.briefs()[0]!.widget).toMatchObject({ rev: 1 });
+    expect(day.briefs()[0]!.widget).toMatchObject({ rev: 2 });
     expect(JSON.stringify(day.briefs()[0]!.widget)).toContain("Meeting b");
     expect(JSON.stringify(day.briefs()[0]!.widget)).not.toContain("Checking your calendar");
+    expect(JSON.stringify(day.briefs()[0]!.widget)).not.toContain("Checking your email");
     expect(day.notify).toHaveBeenCalledTimes(1);
     expect(day.noteCard).toHaveBeenCalledTimes(1);
     expect(readFileSync(join(day.dataDir, "assistant.json"), "utf8")).not.toContain("Meeting b");
