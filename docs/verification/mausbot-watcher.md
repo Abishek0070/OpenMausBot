@@ -209,8 +209,7 @@ disposable data with a fake Claude engine and a loopback connected-apps service
 
 The tool slugs, the account parameter and the answer shapes in the fake service
 are not yet checked against the live Composio service. These stay unconfirmed
-until the real-service check (Task 15 of the daily-brief plan, done with the
-person):
+until a run against real accounts, done with the person, confirms them:
 
 - `ACCOUNT_PARAM` ("account") on each tool item, and that Composio honours it
   per call;
@@ -221,7 +220,9 @@ person):
 - that `payload.headers` carries the `Message-ID` header (read only when two or
   more Gmail accounts are connected);
 - that the `mail.google.com/mail/u/<address>/` link opens the right account;
-- that two profile reads for two accounts return different addresses.
+- that two profile reads for two accounts return different addresses;
+- that older phone clients accept the Dismiss answer,
+  `202 { ok: true, threadId, handled: true }`, which carries no `message`.
 
 `GOOGLECALENDAR_EVENTS_LIST` and `GMAIL_FETCH_EMAILS` are in the same position.
 The harness also cannot prove a real engine's prep or the person's real day.
