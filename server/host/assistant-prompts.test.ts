@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { BRIEF_MAX } from "./assistant-cards.ts";
-import type { CalendarEvent } from "../assistant-sources.ts";
+import type { CalendarEvent, EmailHeader } from "../assistant-sources.ts";
 import { clean, RECORDS_END, recordsBlock } from "../records-block.ts";
-import { jobMarker, lineReply, prepPrompt, prepReply, repeatPrompt, triagePrompt, triageReply, updatePrompt } from "./assistant-prompts.ts";
+import { emailRecords, jobMarker, lineReply, prepPrompt, prepReply, repeatPrompt, replyRecords, triagePrompt, triageReply, updatePrompt } from "./assistant-prompts.ts";
 
 const NOW = Date.UTC(2026, 9, 17, 11, 0, 0);
 const event: CalendarEvent = {
@@ -153,7 +153,7 @@ describe("hostile text", () => {
   it("reads a duplicate id once, and JSON it cannot parse as unreadable", () => {
     const ids = new Set(["a", "b"]);
     expect(triageReply(JSON.stringify({ important: [{ id: "a", why: "first", action: "x" }, { id: "a", why: "second", action: "y" }, { id: "b", why: "w", action: "z" }] }), ids)).toEqual([
-      { id: "a", why: "first", action: "x" }, { id: "b", why: "w", action: "z" },
+      { id: "a", why: "first", action: "x", needsReply: false }, { id: "b", why: "w", action: "z", needsReply: false },
     ]);
     expect(prepReply('```json\n{"brief": "cut off')).toBeNull();
     expect(prepReply('{"brief": "x",}')).toBeNull();
@@ -167,5 +167,35 @@ describe("hostile text", () => {
     expect(none).toContain("work only from the meeting and any previous notes in the records");
     expect(none).not.toContain("session_search");
     expect(repeatPrompt({ event, previousStart: event.start - 86_400_000, now: NOW, searchTools: true, mailTools: false })).toContain(", from earlier conversations");
+  });
+});
+
+const mail = (id: string, account: string): EmailHeader => ({ id, account, threadId: `t-${id}`, at: NOW, from: "Ada <ada@example.test>", subject: "Q3", preview: "numbers" });
+const base = { event, short: false, now: NOW, ...tools };
+
+describe("account naming", () => {
+  it("labels each email with its account inside the records block", () => {
+    const block = emailRecords([mail("m1", "ca_g2")], (id) => (id === "ca_g2" ? "admin@example.test" : "?"));
+    expect(block).toMatch(/^\[Records from Gmail\./);
+    expect(block).toContain("id m1 · account admin@example.test · from");
+  });
+
+  it("asks whether each important email needs a reply, and reads needsReply only when it is true", () => {
+    expect(triagePrompt({ emails: [mail("m1", "g1")], meetingToday: [], label: () => "me@example.test" })).toContain('"needsReply"');
+    expect(triageReply('{"important":[{"id":"m1","why":"w","action":"a","needsReply":true},{"id":"m2","why":"w","action":"a","needsReply":"yes"}]}', new Set(["m1", "m2"])))
+      .toEqual([{ id: "m1", why: "w", action: "a", needsReply: true }, { id: "m2", why: "w", action: "a", needsReply: false }]);
+  });
+
+  it("lists the person's accounts in the prep prompt only when there are two or more", () => {
+    expect(prepPrompt({ ...base, accounts: ["me@example.test", "admin@example.test"] })).toContain("The person's Google accounts: me@example.test, admin@example.test.");
+    expect(prepPrompt({ ...base, accounts: ["me@example.test"] })).not.toContain("Google accounts");
+  });
+
+  it("asks for a reply draft from the account that received the email", () => {
+    expect(replyRecords(mail("m1", "ca_g2"), "admin@example.test", "ca_g2")).toContain("Draft the reply from admin@example.test (connected account ca_g2), and name that account in the draft call.");
+  });
+
+  it("keeps the Message-ID header out of the records", () => {
+    expect(emailRecords([{ ...mail("m1", "g1"), messageIdHeader: "<secret@id>" }], () => "me@example.test")).not.toContain("secret@id");
   });
 });

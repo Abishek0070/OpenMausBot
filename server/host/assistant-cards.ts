@@ -69,7 +69,9 @@ export function attendeeNames(event: CalendarEvent): string {
   return `${name(others[0]!)} and ${others.length - 1} other${others.length === 2 ? "" : "s"}`;
 }
 
-export const gmailUrl = (threadId: string): string => `https://mail.google.com/mail/#all/${encodeURIComponent(threadId)}`;
+/** With the account's address the link opens that account's mailbox; without one, whichever is signed in first. */
+export const gmailUrl = (threadId: string, address?: string): string =>
+  `https://mail.google.com/mail/${address ? `u/${encodeURIComponent(address)}/` : ""}#all/${encodeURIComponent(threadId)}`;
 
 const button = (label: string, onClickAction: Node, primary = false): Node => ({ type: "Button", label, style: primary ? "primary" : "secondary", onClickAction });
 // A link the widget layer would refuse (too long) fails the whole card, so it is left out instead.
@@ -87,6 +89,7 @@ function httpsLink(url: string | undefined): string | undefined {
     return undefined;
   }
 }
+const withAccounts = (caption: string, accounts: string | undefined): string => (accounts ? `${caption} · ${accounts}` : caption);
 const buttons = (items: Node[]): Node[] => (items.length ? [{ type: "Row", gap: 2, children: items }] : []);
 const text = (value: string, max: number = WIDGET_LIMITS.text): Node => ({ type: "Text", value: clip(value, max) });
 
@@ -107,12 +110,12 @@ const join = (event: Pick<CalendarEvent, "joinUrl">, primary = true): Node[] => 
   return action ? [button("Join", action, primary)] : [];
 };
 
-export function prepCard(input: { event: CalendarEvent; brief: string; related?: Target; timeZone?: string; now: number }): BuiltCard {
+export function prepCard(input: { event: CalendarEvent; brief: string; related?: Target; timeZone?: string; now: number; accounts?: string }): BuiltCard {
   const { event } = input;
   const when = meetingWhen(event.start, event.end, input.timeZone, input.now, event.allDay);
   const where = event.location && event.location !== event.joinUrl ? ` · ${event.location}` : "";
   return {
-    card: root(`Prep: ${event.title}`, `${when}${where}`, [
+    card: root(`Prep: ${event.title}`, withAccounts(`${when}${where}`, input.accounts), [
       ...briefLines(input.brief),
       ...buttons([
         ...join(event),
@@ -124,12 +127,12 @@ export function prepCard(input: { event: CalendarEvent; brief: string; related?:
   };
 }
 
-export function reminderCard(input: { event: CalendarEvent; line?: string; timeZone?: string; now: number }): BuiltCard {
+export function reminderCard(input: { event: CalendarEvent; line?: string; timeZone?: string; now: number; accounts?: string }): BuiltCard {
   const { event } = input;
   const minutes = Math.max(1, Math.round((event.start - input.now) / 60_000));
   const title = `Call with ${attendeeNames(event)} in ${minutes} minute${minutes === 1 ? "" : "s"}`;
   return {
-    card: root(title, meetingWhen(event.start, event.end, input.timeZone, input.now, event.allDay), [
+    card: root(title, withAccounts(meetingWhen(event.start, event.end, input.timeZone, input.now, event.allDay), input.accounts), [
       text(event.title),
       ...(input.line ? [text(`Since last time: ${input.line}`)] : []),
       ...buttons([...join(event), button("Prep notes", { type: "prep_notes", payload: { eventId: event.id } })]),
@@ -147,26 +150,26 @@ function senderName(rawFrom: string): string {
   return match ? match[1]!.trim() || match[2]!.trim() : from.trim();
 }
 
-export function emailCard(input: { email: EmailHeader; why: string; action: string }): BuiltCard {
+export function emailCard(input: { email: EmailHeader; why: string; action: string; account?: string; address?: string }): BuiltCard {
   const subject = input.email.subject || "(no subject)";
-  const gmail = openUrl(gmailUrl(input.email.threadId));
+  const gmail = openUrl(gmailUrl(input.email.threadId, input.address));
   return {
-    card: root(subject, `From ${input.email.from}`, [
+    card: root(subject, `From ${input.email.from}${input.account ? ` · to ${input.account}` : ""}`, [
       text(input.why),
       text(`Suggested: ${input.action}`),
       ...buttons([
         ...(gmail ? [button("Open in Gmail", gmail, true)] : []),
-        button("Draft a reply", { type: "draft_reply", payload: { messageId: input.email.id } }),
+        button("Draft a reply", { type: "draft_reply", payload: { messageId: input.email.id, account: input.email.account } }),
       ]),
     ]),
     summary: summary(`Important email from ${senderName(input.email.from)}: ${subject}`),
   };
 }
 
-export function updateCard(input: { event: CalendarEvent; text: string; timeZone?: string; now: number }): BuiltCard {
+export function updateCard(input: { event: CalendarEvent; text: string; timeZone?: string; now: number; accounts?: string }): BuiltCard {
   const title = `Changed: ${input.event.title}`;
   return {
-    card: root(title, meetingWhen(input.event.start, input.event.end, input.timeZone, input.now, input.event.allDay), [text(input.text), ...buttons(join(input.event))]),
+    card: root(title, withAccounts(meetingWhen(input.event.start, input.event.end, input.timeZone, input.now, input.event.allDay), input.accounts), [text(input.text), ...buttons(join(input.event))]),
     summary: summary(`${title}. ${input.text}`),
   };
 }

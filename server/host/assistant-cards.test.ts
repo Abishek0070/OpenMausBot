@@ -240,3 +240,25 @@ describe("clipping and plain text", () => {
     }
   });
 });
+
+describe("account naming on cards", () => {
+  const email = { id: "m", account: "g1", threadId: "t", at: NOW, from: "Ada <ada@example.test>", subject: "Hi", preview: "" };
+
+  it("flags an email with the account it reached, opens Gmail in that account, and drafts from it", () => {
+    const { root, actions } = valid(emailCard({ email: { ...email, account: "ca_g2" }, why: "w", action: "a", account: "admin@example.test", address: "admin@example.test" }));
+    expect(root.caption).toBe("From Ada <ada@example.test> · to admin@example.test");
+    expect(actions.find((entry) => entry.label === "Open in Gmail")?.action.payload).toEqual({ url: "https://mail.google.com/mail/u/admin%40example.test/#all/t" });
+    expect(actions.find((entry) => entry.label === "Draft a reply")?.action.payload).toEqual({ messageId: "m", account: "ca_g2" });
+  });
+
+  it("keeps today's link when no address is known", () => {
+    expect(gmailUrl("t")).toBe("https://mail.google.com/mail/#all/t");
+  });
+
+  it("names the accounts a meeting is on in the prep, reminder and update captions", () => {
+    for (const built of [prepCard({ event: demo, brief: "b", timeZone: ZONE, now: NOW, accounts: "me@example.test, admin@example.test" }),
+      reminderCard({ event: demo, timeZone: ZONE, now: demo.start - 10 * MINUTE, accounts: "admin@example.test" }), updateCard({ event: demo, text: "t", timeZone: ZONE, now: NOW, accounts: "admin@example.test" })]) {
+      expect(valid(built).root.caption).toContain("admin@example.test");
+    }
+  });
+});

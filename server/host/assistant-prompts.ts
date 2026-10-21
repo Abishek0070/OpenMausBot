@@ -38,12 +38,16 @@ function historyLine(tools: TurnTools): string {
   return sources.length ? `- the person's history with them: ${sources.join("; ")};` : "- the person's history with them, from what the records above say;";
 }
 
-export function prepPrompt(input: { event: CalendarEvent; short: boolean; timeZone?: string; now: number } & TurnTools): string {
+export function prepPrompt(input: { event: CalendarEvent; short: boolean; timeZone?: string; now: number; accounts?: string[] } & TurnTools): string {
   const words = input.short ? 150 : 350;
+  const accounts = input.accounts && input.accounts.length >= 2
+    ? [`The person's Google accounts: ${input.accounts.map((label) => clean(label, 120)).join(", ")}. Name the account in every Gmail or Calendar call.`]
+    : [];
   return [
     jobMarker("prep", input.event.id),
     input.short ? "Prepare the person for this meeting. It starts soon, so keep it short: who, why, one next step." : "Prepare the person for this meeting.",
     calendarRecords(input.event, input.timeZone, input.now),
+    ...accounts,
     "Find out:",
     "- who the attendees are: role, company, and anything recent about them on the web;",
     "- why the meeting exists, from the invite text;",
@@ -80,15 +84,23 @@ export function updatePrompt(input: { event: CalendarEvent; previous: MeetingRec
   ].join("\n");
 }
 
-export function emailRecords(emails: readonly EmailHeader[]): string {
-  return recordsBlock("Gmail", emails.map((email) => `id ${clean(email.id, 120)} · from ${clean(email.from, 120)} · subject ${clean(email.subject, 200)} · preview ${clean(email.preview, 300)}`));
+export function emailRecords(emails: readonly EmailHeader[], label?: (accountId: string) => string): string {
+  return recordsBlock("Gmail", emails.map((email) => `id ${clean(email.id, 120)}${label ? ` · account ${clean(label(email.account), 120)}` : ""} · from ${clean(email.from, 120)} · subject ${clean(email.subject, 200)} · preview ${clean(email.preview, 300)}`));
 }
 
-export function triagePrompt(input: { emails: EmailHeader[]; meetingToday: string[] }): string {
+/** The records, plus where the draft must come from: the account that received the email. */
+export function replyRecords(email: EmailHeader, label: string, accountId?: string): string {
+  return [
+    emailRecords([email], () => label),
+    `Draft the reply from ${clean(label, 120)}${accountId ? ` (connected account ${clean(accountId, 120)})` : ""}, and name that account in the draft call.`,
+  ].join("\n");
+}
+
+export function triagePrompt(input: { emails: EmailHeader[]; meetingToday: string[]; label?: (accountId: string) => string }): string {
   return [
     jobMarker("email check"),
     "Decide which of these new emails the person must not miss: one that needs a reply from them, one from someone they meet today, or one that carries a deadline. Everything else is not important. Judge from the sender, the subject and the preview only.",
-    emailRecords(input.emails),
+    emailRecords(input.emails, input.label),
     ...(input.meetingToday.length
       ? [
         "The people the person meets today, from their calendar:",
@@ -97,7 +109,7 @@ export function triagePrompt(input: { emails: EmailHeader[]; meetingToday: strin
       ]
       : ["The person meets nobody today."]),
     "Do not open, send, label, archive or change any email.",
-    `Answer with one JSON object and nothing else: {"important": [{"id": "<an id from the records>", "why": "<one sentence>", "action": "<one suggested action>"}]} — at most ${CARDS_PER_TRIAGE}, and an empty list when nothing matters.`,
+    `Answer with one JSON object and nothing else: {"important": [{"id": "<an id from the records>", "why": "<one sentence>", "action": "<one suggested action>", "needsReply": <true when the person must reply>}]} — at most ${CARDS_PER_TRIAGE}, and an empty list when nothing matters.`,
   ].join("\n");
 }
 
@@ -125,7 +137,7 @@ export function prepReply(text: string): { brief: string; relatedThreadId?: stri
   return plain ? { brief: plain, noWebSearch: false } : null;
 }
 
-export function triageReply(text: string, ids: ReadonlySet<string>): Array<{ id: string; why: string; action: string }> | null {
+export function triageReply(text: string, ids: ReadonlySet<string>): Array<{ id: string; why: string; action: string; needsReply: boolean }> | null {
   const json = jsonReply(text);
   if (!json || !Array.isArray(json.important)) return null;
   const seen = new Set<string>();
@@ -133,7 +145,7 @@ export function triageReply(text: string, ids: ReadonlySet<string>): Array<{ id:
     const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
     if (typeof item.id !== "string" || seen.has(item.id) || !ids.has(item.id) || typeof item.why !== "string" || typeof item.action !== "string") return [];
     seen.add(item.id);
-    return [{ id: item.id, why: clean(item.why, 240), action: clean(item.action, 240) }];
+    return [{ id: item.id, why: clean(item.why, 240), action: clean(item.action, 240), needsReply: item.needsReply === true }];
   }).slice(0, CARDS_PER_TRIAGE);
 }
 
