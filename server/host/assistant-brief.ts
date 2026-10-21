@@ -393,6 +393,6 @@ export function createAssistantBrief(deps: AssistantBriefDeps) {
     },
     forget,
     dismiss,
-    email: (accountId: string, messageId: string): EmailHeader | undefined => headers.get(emailKey({ account: accountId, id: messageId }))?.email,
+    emailsWithId: (messageId: string): EmailHeader[] => [...headers.values()].flatMap(({ email }) => (email.id === messageId ? [email] : [])),
   };
 }

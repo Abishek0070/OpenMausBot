@@ -291,7 +291,7 @@ describe("MausBot's daily brief", () => {
     w.state.patch({ pendingEmails: [entry("m1"), entry("m2")] });
     w.inbox.set("ca_g1/m2", null);
     const again = w.restart(); again.brief.post(); await again.brief.checkPending(true);
-    expect(again.brief.email("ca_g1", "m1")?.subject).toBe("Subject m1");
+    expect(again.brief.emailsWithId("m1").map((one) => [one.account, one.subject])).toEqual([["ca_g1", "Subject m1"]]);
     expect(again.pending().map((one) => one.messageId)).toEqual(["m1"]);
     const draft = actions(again.lastCard()).find((one) => one.action.type === "draft_reply");
     expect(draft?.action.payload).toEqual({ messageId: "m1", account: "ca_g1" });
@@ -328,8 +328,8 @@ describe("MausBot's daily brief", () => {
   it("finds a waiting email under the account that received it, so its reply is drafted from that account", () => {
     const w = briefWorld();
     w.brief.judged([{ ...pick("m1", true), copies: [copy("m1b", "ca_g2", "m1")] }]); w.brief.post();
-    expect(w.brief.email("ca_g2", "m1b")?.account).toBe("ca_g2");
-    expect(w.brief.email("ca_g2", "m1")).toBeUndefined();
+    expect(w.brief.emailsWithId("m1b").map((one) => one.account)).toEqual(["ca_g2"]);
+    expect(w.brief.emailsWithId("m1").map((one) => one.account)).toEqual(["ca_g1"]);
     expect(actions(w.lastCard()).filter((one) => one.action.type === "draft_reply").map((one) => one.action.payload)).toEqual([{ messageId: "m1", account: "ca_g1" }]);
   });
 

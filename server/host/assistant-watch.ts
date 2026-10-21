@@ -707,10 +707,11 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     }
     if (action.type === "draft_reply" && typeof payload.messageId === "string") {
       const id = payload.messageId;
-      const email = typeof payload.account === "string"
-        ? brief.email(payload.account, id) ?? cardEmails.get(emailKey({ account: payload.account, id }))
-        : [...cardEmails.values()].findLast((one) => one.id === id);
-      return email ? replyRecords(email, accounts.label(email.account), current().accounts?.[email.account]?.implied ? undefined : email.account) : null;
+      const named = typeof payload.account === "string" ? payload.account : undefined;
+      const known = [...cardEmails.values(), ...brief.emailsWithId(id)].filter((one) => one.id === id);
+      const email = named === undefined ? known.at(-1) : known.find((one) => one.account === named);
+      const from = email?.account ?? (named !== undefined && !known.length && current().accounts?.[named]?.service === "gmail" ? named : undefined);
+      return from === undefined ? null : replyRecords(email ?? { id }, accounts.label(from), current().accounts?.[from]?.implied ? undefined : from);
     }
     return null;
   }

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { widgetActions } from "../../shared/widget.ts";
 import { SourceError, type CalendarEvent, type EmailHeader, type SourceAccount, type ThreadMessage } from "../assistant-sources.ts";
 import type { BotVisibility } from "../bot-visibility.ts";
 import type { RequestAuth } from "../request-auth.ts";
@@ -354,6 +355,11 @@ describe("every account", () => {
   /** One message in g1 and in g2: Gmail gives each inbox its own id, and both carry the same Message-ID header. */
   const IN_G1 = { ...mail("important-1", NOW - MINUTE), messageIdHeader: "<q3@pin.example>" };
   const IN_G2 = { ...mail("important-1-copy", NOW - 2 * MINUTE), messageIdHeader: "<q3@pin.example>" };
+  /** The email check marks every important email as waiting on the person's reply. */
+  const waitsOnMe = (title: string, prompt: string): JobResult => {
+    const answer = defaultReply(title, prompt);
+    return answer.ok && title === "Email check" ? { ...answer, reply: answer.reply.replaceAll('"action":', '"needsReply": true, "action":') } : answer;
+  };
 
   it("reads every calendar account, and preps a meeting on two of them once, naming both accounts", async () => {
     const w = onTwoCalendars(meeting("a", NOW + 2 * HOUR, { iCalUID: "uid-1" }));
@@ -399,6 +405,22 @@ describe("every account", () => {
     expect(w.watch.pressRecords({ type: "draft_reply", payload: { messageId: "important-1", account: "g1" } }))
       .toContain("Draft the reply from me@example.test (connected account g1)");
     expect(w.watch.pressRecords({ type: "draft_reply", payload: { messageId: "important-2", account: "g1" } })).toBeNull();
+  });
+
+  it("after a restart, answers a Draft a reply press from the account table: the receiving account by address and id, the message by id", async () => {
+    const w = twoInboxes({ emails: [mail("important-1", NOW - MINUTE)], reply: waitsOnMe });
+    w.live.inboxes.g2 = [mail("important-2", NOW - 2 * MINUTE)];
+    await w.settle();
+    w.watch.onPresence({ source: "desktop", returned: false }); await w.settle();
+    const draft = widgetActions(w.briefs()[0]!.widget!.root).find((one) => one.action.type === "draft_reply" && JSON.stringify(one.action.payload).includes('"g2"'));
+    expect(draft?.action.payload).toEqual({ messageId: "important-2", account: "g2" });
+    const restarted = w.make();
+    const records = restarted.pressRecords(draft!.action);
+    expect(records).toContain("Draft the reply from admin@example.test (connected account g2)");
+    expect(records).toMatch(/\[Records from Gmail\. [^\n]*\nid important-2 · account admin@example\.test\n\[end of records\]/);
+    expect(restarted.pressRecords({ type: "draft_reply", payload: { messageId: "important-2", account: "ca_unknown" } })).toBeNull();
+    expect(restarted.pressRecords({ type: "draft_reply", payload: { messageId: "important-2", account: "c1" } })).toBeNull();
+    expect(restarted.pressRecords({ type: "draft_reply", payload: { messageId: "important-2" } })).toBeNull();
   });
 
   it("counts one prep against the daily cap for a meeting on several accounts", async () => {
@@ -541,10 +563,6 @@ describe("every account", () => {
   });
 
   it("after a restart, a Dismiss on today's brief edits that card: the row goes and both copies leave state", async () => {
-    const waitsOnMe = (title: string, prompt: string): JobResult => {
-      const answer = defaultReply(title, prompt);
-      return answer.ok && title === "Email check" ? { ...answer, reply: answer.reply.replaceAll('"action":', '"needsReply": true, "action":') } : answer;
-    };
     const w = twoInboxes({ emails: [IN_G1], reply: waitsOnMe });
     w.live.inboxes.g2 = [IN_G2];
     await w.settle();

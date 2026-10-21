@@ -89,10 +89,11 @@ export function emailRecords(emails: readonly EmailHeader[], label?: (accountId:
   return recordsBlock("Gmail", emails.map((email) => `id ${clean(email.id, 120)}${label ? ` · account ${clean(label(email.account), 120)}` : ""} · from ${clean(email.from, 120)} · subject ${clean(email.subject, 200)} · preview ${clean(email.preview, 300)}`));
 }
 
-/** The records, plus where the draft must come from: the account that received the email. */
-export function replyRecords(email: EmailHeader, label: string, accountId?: string): string {
+/** The records, plus where the draft must come from: the account that received the email. With only its id known, the
+ * records name the message by id. */
+export function replyRecords(email: EmailHeader | { id: string }, label: string, accountId?: string): string {
   return [
-    emailRecords([email], () => label),
+    "from" in email ? emailRecords([email], () => label) : recordsBlock("Gmail", [`id ${clean(email.id, 120)} · account ${clean(label, 120)}`]),
     `Draft the reply from ${clean(label, 120)}${accountId ? ` (connected account ${clean(accountId, 120)})` : ""}, and name that account in the draft call.`,
   ].join("\n");
 }
