@@ -90,7 +90,7 @@ describe("mausbotPersona", () => {
     expect(MAUSBOT_PERSONA).not.toMatch(/draft|connect|meeting prep|email that matters/i);
     const withApps = mausbotPersona(true);
     expect(withApps.startsWith(MAUSBOT_PERSONA)).toBe(true);
-    expect(withApps).toContain("meeting prep, the email that matters");
+    expect(withApps).toContain("meeting prep, the email that matters, reminders and a daily brief.");
     expect(withApps).toContain("Draft replies, follow-ups and invites");
     expect(withApps).toContain("offer to connect it");
     const withoutApps = mausbotPersona(false);

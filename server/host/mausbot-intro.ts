@@ -6,7 +6,7 @@ import { ownerOrAdmin, type RequestAuth } from "../request-auth.ts";
 import type { BotRecord, Store } from "../store.ts";
 import type { BriefState, BriefStateStore } from "./brief-state.ts";
 
-export const MAUSBOT_INTRO = "Hi, I'm MausBot, your assistant. Before each meeting I look up who you're meeting, why the meeting exists and what's still open, and suggest a next step. I point out the emails you shouldn't miss, remind you ten minutes before a call, and have a Today card ready when you start your day. I only draft: nothing is sent, booked or accepted without your OK.";
+export const MAUSBOT_INTRO = "Hi, I'm MausBot, your assistant. Before each meeting I look up who you're meeting, why the meeting exists and what's still open, and suggest a next step. I point out the emails you shouldn't miss, remind you ten minutes before a call, and post a daily brief when you start your day. I only draft: nothing is sent, booked or accepted without your OK.";
 export const MAUSBOT_NO_APPS = "Connected apps aren't set up on this server yet, so for now I can help you here in chat.";
 export const CONNECT_LINE = "Connect Gmail & Calendar so I can do this.";
 export const CHIEF_OFFER_TITLE = "Set up a Chief of Staff?";

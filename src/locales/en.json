@@ -1092,7 +1092,7 @@
   "settings.routinesInConversation.aria": "Run routines in the conversation",
   "settings.routinesInConversation.error": "Could not save the routine setting.",
   "settings.assistantActs.title": "MausBot can act on its own",
-  "settings.assistantActs.subtitle": "MausBot reads your calendar and inbox and prepares meeting notes, reminders, important-email cards and a Today card without being asked. Turn this off to stop all of it. The \"Since you last looked\" recap is not affected.",
+  "settings.assistantActs.subtitle": "MausBot reads your calendar and inbox and prepares meeting notes, reminders, important-email cards and a daily brief without being asked. Turn this off to stop all of it. The \"Since you last looked\" recap is not affected.",
   "settings.assistantActs.aria": "Let MausBot act on its own",
   "settings.assistantActs.error": "Could not save the MausBot setting.",
   "settings.toolCalls.title": "Tool calls",

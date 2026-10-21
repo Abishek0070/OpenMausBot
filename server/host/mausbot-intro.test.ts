@@ -83,6 +83,7 @@ describe("MausBot's intro", () => {
     await w.intro.introduce();
     const lines = w.thread();
     expect(lines[0]).toMatchObject({ role: "bot", kind: "text", text: MAUSBOT_INTRO });
+    expect(MAUSBOT_INTRO).toContain("post a daily brief when you start your day.");
     expect(w.offer().card).toMatchObject({ options: [CREATE_CHIEF, appointOption("Tango"), NOT_NOW], fixedOptions: true, requestId: "id1" });
     expect(lines.filter((line) => line.kind === "text").map((line) => line.text)).toEqual([MAUSBOT_INTRO, CONNECT_LINE]);
     expect(lines.filter((line) => line.kind === "connector").map((line) => line.connector)).toEqual([
