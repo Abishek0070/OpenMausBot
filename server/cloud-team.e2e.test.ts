@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { launchCloudSendFixture, type CloudSendFixture, type CloudTeamFixture } from "../scripts/testing/cloud-send-fixture.ts";
 import { TEAM_SESSION_MAX_MS } from "./cloud-team.ts";
+import { ASSISTANT_STATE_FILE } from "./host/assistant-state.ts";
+import { BRIEF_STATE_FILE } from "./host/chief-brief.ts";
 import { personKey } from "./person-key.ts";
 import { startBrokerFake, type BrokerFake } from "./testing/broker-fake.ts";
 import { hostTimeout } from "./testing/host-timeout.ts";
@@ -245,3 +247,12 @@ it("a person's own connected apps cannot be brought into the team, and the team'
   const seen = await turn(cleo, await newThread(cleo, "Cleo and Scout"), "Check my mail.");
   expect(Object.keys(seen.mcpConfig.mcpServers)).toContain("composio");
 }, hostTimeout(120_000));
+
+it("has no MausBot, no brief and no recap, like a hosted team workspace, so the team's Gmail and Calendar are never read for one", async () => {
+  for (const token of [owner, admin]) {
+    const bots = (await team.as(token, "GET", "/api/bots?messages=0")).body.bots as Array<{ name: string; builtIn?: string }>;
+    expect(bots.filter((entry) => entry.builtIn !== undefined).map((entry) => entry.name)).toEqual([]);
+    expect((await team.as(token, "POST", "/api/presence/active", { source: "desktop" })).body).toEqual({ ok: true, returned: false });
+  }
+  for (const file of [ASSISTANT_STATE_FILE, BRIEF_STATE_FILE]) expect(existsSync(join(team.home, ".openmausbot", file)), file).toBe(false);
+}, hostTimeout(60_000));

@@ -16,7 +16,7 @@ It is built from records only and runs no model. Design:
   Chief may also see.
 - `OMB_BRIEF_RECAP=0` turns the recap off; `features.briefRecap: false` does too.
 - With no Chief, MausBot posts the recap in its own chat.
-- A hosted team workspace has no recap.
+- A hosted team workspace has no recap, and neither has a Team Cloud.
 - A team backup keeps the card marked as built by the server, so a restored
   recap replays to the Chief as records, never as its own words.
 

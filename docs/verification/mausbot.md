@@ -42,8 +42,9 @@ The posted lines are in `server/host/mausbot-intro.ts`.
 - `launchVerificationServer` renames the seeded Chief of Staff to "Fixture
   Starter" and un-appoints it, so a fixture starts with one plain bot plus a
   silent MausBot.
-- A hosted team workspace has no MausBot and no recap. Like every new
-  workspace, it starts with its Chief of Staff.
+- A hosted team workspace has no MausBot and no recap, and a Team Cloud is
+  treated the same way. Like every new workspace, each starts with its Chief of
+  Staff.
 - What MausBot does on its own is in [MausBot's watcher](mausbot-watcher.md).
 
 ## Server
@@ -61,7 +62,8 @@ and exports leave it out. A send waits for Approve (a denied one never reaches t
 a read passes, and a batch of messages is refused. An install from before this
 version gets MausBot added, offers a Chief once, and only the admin's answer
 appoints one; "Not now" is not asked again. A hosted workspace seeds its Chief
-and no MausBot. After nine hours away, a home install posts the Chief's recap, and
+and no MausBot (`server/cloud-team.e2e.test.ts` checks the same for a Team
+Cloud). After nine hours away, a home install posts the Chief's recap, and
 a hosted one posts none.
 
 ## Renderer

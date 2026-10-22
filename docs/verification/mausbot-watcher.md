@@ -16,8 +16,8 @@ on top of
 
 - "MausBot can act on its own" (Settings, `features.assistantActs`, on unless
   `false`) stops all of it. A job already running when it goes off posts
-  nothing, and its daily turn is refunded. A hosted team workspace has no
-  watcher and makes no reads.
+  nothing, and its daily turn is refunded. A hosted team workspace, and a Team
+  Cloud the same way, has no watcher and makes no reads.
 - MausBot reads and posts nothing until its intro is saved in `brief.json`.
   The intro posts on the owner's first presence, before any recap or daily
   brief that presence brings.
@@ -119,7 +119,7 @@ on top of
   goes, and the rest of the card stays as it was. A Dismiss on an older card
   after a restart only drops the email. With the switch off or before the
   intro, Dismiss drops the email, edits nothing and starts no turn. A hosted
-  workspace answers no press.
+  workspace or a Team Cloud answers no press.
 - **Routines and the Chief's recap.** Routine runs leave the Chief's recap only
   when MausBot's watcher is on (switch on, intro saved, not hosted) and every
   reader of the recap can see MausBot (`takesRoutines` in

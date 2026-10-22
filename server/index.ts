@@ -759,7 +759,7 @@ const onePassword = new OnePasswordLogins({
 if (logins.onePasswordToken()) void onePassword.refresh();
 const botLogins = new BotLogins(logins, onePassword);
 const SESSION_COOKIE = sessionCookieName(PORT, ENVIRONMENT_ID);
-const HOSTED_WORKSPACE = hostedWorkspaceConfigured();
+const HOSTED_WORKSPACE = hostedWorkspaceConfigured(), TEAM_WORKSPACE = HOSTED_WORKSPACE || CLOUD_TEAM !== null; // Security: a workspace a team shares has no MausBot, no watcher and no recap.
 let workspaceAccess: WorkspaceAccess | null = null;
 const DESKTOP_MANAGED = process.env.OMB_DESKTOP_PARENT === "1";
 const SHARED_WORKSPACE_FULL_ACCESS = sharedWorkspaceFullAccessConfigured();
@@ -3134,7 +3134,7 @@ for (const pending of startupCatalogs) {
     broadcast({ kind: "config", ...configStatus() });
   }, () => {});
 }
-seedBots(store, { hosted: HOSTED_WORKSPACE });
+seedBots(store, { hosted: TEAM_WORKSPACE });
 hostedModels?.reconcile(store);
 if (skillsLibraryEnabled(cfg)) {
   try {
@@ -9324,9 +9324,9 @@ async function stopBotForEmergencyApprovalDowngrade(botId: string): Promise<void
   await directStop;
 }
 
-const chiefBrief = createChiefBrief({ store, dataDir: DATA_DIR, threadOwner, hosted: HOSTED_WORKSPACE, threadBusy, settings: () => ({ recap: briefRecapEnabled(cfg.features), awayMs: briefAwayMs(cfg.features) }),
+const chiefBrief = createChiefBrief({ store, dataDir: DATA_DIR, threadOwner, hosted: TEAM_WORKSPACE, threadBusy, settings: () => ({ recap: briefRecapEnabled(cfg.features), awayMs: briefAwayMs(cfg.features) }),
   routineRuns: (since) => (routines?.listRuns() ?? []).filter((run) => run.finishedAt === undefined ? run.status === "running" || run.status === "waiting" : run.finishedAt >= since), mausbot: () => findMausBot(store.bots.filter((bot) => !bot.hidden)), beforePresence: () => mausbotHost.introduce(), onPresence: (event) => mausbotHost.onPresence(event), routinesToMausBot: (poster) => mausbotHost.takesRoutines(poster) });
-const mausbotHost = createMausBotHost({ store, cfg, composio, registry, brief: chiefBrief, dataDir: DATA_DIR, hosted: HOSTED_WORKSPACE, cloudHome: Boolean(CLOUD_HOME), maxBots: MAX_WORKSPACE_BOTS, notify, threadBusy, newId, startTurn, interruptDirectThread, cloudOwnerOnlyThread, othersMaySee: () => Boolean(cfg.signIn?.members?.length) || sessions.list().some((session) => !session.scopes.includes("admin")) });
+const mausbotHost = createMausBotHost({ store, cfg, composio, registry, brief: chiefBrief, dataDir: DATA_DIR, hosted: TEAM_WORKSPACE, cloudHome: Boolean(CLOUD_HOME), maxBots: MAX_WORKSPACE_BOTS, notify, threadBusy, newId, startTurn, interruptDirectThread, cloudOwnerOnlyThread, othersMaySee: () => Boolean(cfg.signIn?.members?.length) || sessions.list().some((session) => !session.scopes.includes("admin")) });
 bus.subscribe((event: RuntimeEvent) => { if (!shouldIgnoreProviderEvent(event)) mausbotHost.onEvent(event); });
 const engineName = (engine: string) => engineLabel(engine, registry.get(engine) ?? undefined);
 const limitClock = new LimitResetClock({ accounts: () => planAccountsFromInstances(instanceConfigs(cfg)), onChange: () => routines?.retimeLimitResets(),
