@@ -353,6 +353,32 @@ describe("every account", () => {
     return w;
   };
   const ORDERS = [{ order: "c1 listed first", listed: [G1, C1, C2] }, { order: "c2 listed first", listed: [G1, C2, C1] }];
+
+  it("posts no attendee update when an account's address arrives after its meeting was prepped, and still posts a real one", async () => {
+    // On c1's calendar, with c2's own address among the guests: until c2's address is known, it reads as someone else.
+    const both = meeting("b", NOW + 3 * HOUR, { attendees: [ME, { email: ADMIN, self: false, organizer: false }, JAKE] });
+    const w = world({ listed: [G1, C1, C2], events: [both] });
+    w.live.addresses.c2 = ADMIN;
+    let unreadable = true;
+    w.sources.address.mockImplementation(async (account: SourceAccount) => {
+      if (account.id === "c2" && unreadable) throw new Error("rate limited");
+      return w.live.addresses[account.id] ?? null;
+    });
+    await w.settle();
+    expect(w.titles()).toEqual(["Prep: Meeting b"]);
+    expect(w.watch.state.get().accounts?.c2?.address).toBeUndefined();
+    unreadable = false;
+    await w.settle();
+    await w.settle();
+    expect(w.watch.state.get().accounts?.c2?.address).toBe(ADMIN);
+    expect(w.titles()).toEqual(["Prep: Meeting b"]);
+    w.sources.address.mockImplementation(async () => { throw new Error("rate limited"); });
+    w.live.events = [{ ...both, attendees: [...both.attendees, { email: "sam@pin.example", self: false, organizer: false }] }];
+    await w.settle();
+    await w.settle();
+    expect(w.watch.state.get().accounts?.c2?.address).toBe(ADMIN);
+    expect(w.titles()).toEqual(["Prep: Meeting b", "Changed: Meeting b"]);
+  });
   /** One message in g1 and in g2: Gmail gives each inbox its own id, and both carry the same Message-ID header. */
   const IN_G1 = { ...mail("important-1", NOW - MINUTE), messageIdHeader: "<q3@pin.example>" };
   const IN_G2 = { ...mail("important-1-copy", NOW - 2 * MINUTE), messageIdHeader: "<q3@pin.example>" };

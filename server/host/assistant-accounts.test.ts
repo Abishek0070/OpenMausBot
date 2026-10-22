@@ -73,6 +73,20 @@ describe("createAssistantAccounts", () => {
     expect(w.accounts.label("ca_g1")).toBe("admin@example.test");
   });
 
+  it("keeps an account's cached address when a later re-read of it fails", async () => {
+    const w = world();
+    w.listed = google([{ id: "ca_g1", status: "ACTIVE" }, { id: "ca_g2", status: "ACTIVE" }]);
+    Object.assign(w.addresses, { ca_g1: "me@example.test", ca_g2: "me@example.test" });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await w.accounts.refresh();
+    expect(w.accounts.address("ca_g2")).toBe("me@example.test");
+    w.addresses.ca_g2 = new Error("rate limited");
+    w.address.mockClear();
+    await w.accounts.refresh();
+    expect(w.address.mock.calls.map(([account]) => account.id)).toContain("ca_g2");
+    expect(w.accounts.address("ca_g2")).toBe("me@example.test");
+  });
+
   it("labels an account by its address, else its alias, else a short id", () => {
     expect(accountLabel({ id: "ca_abcdef123456", alias: "work" }, "a@x.test")).toBe("a@x.test");
     expect(accountLabel({ id: "ca_abcdef123456", alias: "work" })).toBe("work");

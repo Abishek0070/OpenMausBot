@@ -131,6 +131,8 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
   let events: Meeting[] = [];
   const calendarReads = new Map<string, CalendarRead>();
   let calendarReadAt: number | undefined;
+  /** Undefined until the first calendar read. */
+  let addressesKnown: boolean | undefined;
   let recovered = false;
   let missedCheck = false;
   const cardEvents = new Map<string, Meeting>();
@@ -338,7 +340,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
 
   function meetingsDue(bot: BotRecord, threadId: string, remindersOnly: boolean): void {
     const at = now();
-    for (const job of planMeetings({ now: at, events, meetings: meetings(), checkMs: deps.checkMs })) {
+    for (const job of planMeetings({ now: at, events, meetings: meetings(), checkMs: deps.checkMs, attendeesKnown: addressesKnown !== false })) {
       if (job.kind === "remind") {
         remind(bot, threadId, job.event, at);
       } else if (remindersOnly) {
@@ -564,7 +566,18 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     for (const id of calendarReads.keys()) if (!kept.has(id)) calendarReads.delete(id);
     events = mergeMeetings(eventsToMerge(calendarReads, { now: at, fresh: answered }), accounts.addresses())
       .filter((meeting) => storable(meeting.id) && storable(meeting.seriesId));
+    const known = usable.every((account) => accounts.address(account.id) !== undefined);
+    if (known && addressesKnown === false) rebaselineAttendees();
+    addressesKnown = known;
     return answered.size > 0;
+  }
+
+  /** A guest list read while an account's address was unknown counted that person as a guest; learning it posts no update. */
+  function rebaselineAttendees(): void {
+    for (const event of events) {
+      const record = meetings()[event.id];
+      if (record && record.fingerprint !== fingerprint(event)) setMeeting(event.id, { fingerprint: fingerprint(event) });
+    }
   }
 
   async function readMail(at: number): Promise<MailRead[]> {
@@ -658,7 +671,7 @@ export function createAssistantWatch(deps: AssistantWatchDeps) {
     if (!event || !record || budget().left <= 0) return "no";
     const reopened: Record<string, unknown> = { ...record };
     for (const key of RETRY_CLEARS[kind]!) delete reopened[key];
-    const planned = planMeetings({ now: now(), events: [event], meetings: { ...meetings(), [id]: reopened as MeetingRecord }, checkMs: deps.checkMs });
+    const planned = planMeetings({ now: now(), events: [event], meetings: { ...meetings(), [id]: reopened as MeetingRecord }, checkMs: deps.checkMs, attendeesKnown: addressesKnown !== false });
     return planned.some((job) => (kind === "update" ? job.kind === "update" : job.kind === "prep" || job.kind === "repeat")) ? "yes" : "no";
   }
 

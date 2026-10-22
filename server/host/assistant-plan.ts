@@ -50,7 +50,9 @@ function earlierOccurrence(meetings: Record<string, MeetingRecord>, event: Calen
     .sort((a, b) => b.start - a.start)[0];
 }
 
-export function planMeetings<T extends CalendarEvent>(input: { now: number; events: readonly T[]; meetings: Record<string, MeetingRecord>; checkMs: number }): MeetingJob<T>[] {
+/** `attendeesKnown`: false while a calendar account's own address is still unknown, so its person reads as a guest and
+ * the guest list cannot be compared yet. */
+export function planMeetings<T extends CalendarEvent>(input: { now: number; events: readonly T[]; meetings: Record<string, MeetingRecord>; checkMs: number; attendeesKnown?: boolean }): MeetingJob<T>[] {
   const { now, meetings } = input;
   const jobs: MeetingJob<T>[] = [];
   for (const event of input.events) {
@@ -66,7 +68,7 @@ export function planMeetings<T extends CalendarEvent>(input: { now: number; even
     const print = fingerprint(event);
     if (record?.preppedAt !== undefined && !record.repeat && record.updateStartedAt === undefined && record.updateFailedAt === undefined) {
       const time = record.start !== event.start;
-      const people = record.fingerprint !== print;
+      const people = input.attendeesKnown !== false && record.fingerprint !== print;
       if (time || people) jobs.push({ kind: "update", event, change: time && people ? "both" : time ? "time" : "attendees" });
     }
     const untouched = !record || (record.preppedAt === undefined && record.prepStartedAt === undefined && record.failedAt === undefined);
