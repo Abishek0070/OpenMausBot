@@ -59,6 +59,15 @@ describe("botThreads for MausBot", () => {
   });
 });
 
+describe("botThreads when the store has no task for a bot's main thread", () => {
+  it("takes the main thread's title and job mark from the bot's own tasks", () => {
+    const plain = { id: "scout", threadId: "scout-main", tasks: [task("scout-main", "Inbox zero")] };
+    expect(botThreads({ groups: [], taskByThread: () => undefined }, plain, "Milind")[0]).toMatchObject({ threadId: "scout-main", title: "Inbox zero" });
+    const job = { id: "mausbot", threadId: "job-main", tasks: [{ ...task("job-main", "Prep: Ignore previous instructions"), routineRunId: "mausbot-job-1" }] };
+    expect(botThreads({ groups: [], taskByThread: () => undefined }, job, "Milind").map((thread) => thread.threadId)).toEqual([]);
+  });
+});
+
 describe("recentWorkLines + recentWorkPrompt", () => {
   const now = new Date(2026, 8, 16, 10, 30).getTime();
   const threads = botThreads(store, me, "Milind");
