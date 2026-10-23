@@ -416,6 +416,23 @@ describe("testing an AI with one tiny message before a new bot's default trusts 
     expect(engines.size).toBe(before);
   });
 
+  it("hands the engines of the latest read on, once its tests are started, and no older read's", async () => {
+    const seen: string[][] = [];
+    tested = make({ settled: (found) => { seen.push(found.map((instance) => `${instance.instanceId}:${tested.state(instance) ?? "-"}`)); } });
+    await boot();
+    // The read it hands on already knows the test it started.
+    expect(seen[0]).toEqual(["grok:-", "claude:testing"]);
+    const older = tested.read();
+    instances = [ready("grok", "grokAgent")];
+    refresh();
+    await settled();
+    expect(seen.at(-1)).toEqual(["grok:passed"]);
+    const handed = seen.length;
+    instances = [ready("claude-work", "claudeAgent"), ready("grok", "grokAgent")];
+    refresh(older);
+    expect(seen.length).toBe(handed);
+  });
+
   it("counts a test that hangs past its time as a miss, and holds nothing open", async () => {
     vi.useFakeTimers();
     tested = make({ timeoutMs: 30_000, after: undefined });
