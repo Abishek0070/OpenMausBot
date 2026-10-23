@@ -522,6 +522,9 @@ export interface InstanceInfo {
     composioMcp?: boolean;
     /** the engine can mount the native HighLevel tools (a connected app without Composio) */
     highlevelMcp?: boolean;
+    /** the engine can mount the paired phone's app tools */
+    deviceMcp?: boolean;
+    dataMcp?: boolean;
     browserMcp?: boolean;
     images?: boolean;
     effortLevels?: readonly EffortLevel[];
