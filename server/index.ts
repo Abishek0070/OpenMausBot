@@ -101,7 +101,7 @@ import { DATA_INTERNAL_MCP_PATH, dataRpc } from "./data/rpc.ts";
 import { createHighLevelHost } from "./highlevel/host.ts";
 import { HIGHLEVEL_INTERNAL_MCP_PATH } from "./highlevel/rpc.ts";
 import { createHighLevelService } from "./highlevel/service.ts";
-import { createHighLevelRoutes } from "./routes/highlevel.ts";
+import { createHighLevelRoutes } from "./routes/highlevel.ts"; import { createPhoneHost } from "./phones/host.ts"; import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts"; import { PhoneRegistry } from "./phones/registry.ts"; import { PhoneJobs } from "./phones/jobs.ts"; import { createPhoneRoutes, isLongPollPath } from "./routes/phones.ts";
 import { createDataRoutes } from "./data/routes.ts";
 import { DataSheetRegistry } from "./data/sheet.ts";
 import { DataFailure } from "./data/types.ts";
@@ -692,7 +692,7 @@ const sessions = new SessionRegistry({
   },
   portalMembership: hostedWorkspaceConfiguration()?.portalMembership === true,
 });
-const deviceLinks = new DeviceLinks(); const sharedComputers = new SharedComputers(id => sessions.isLive(id), new LentComputers(join(DATA_DIR, "lent-computers.json")), deviceLinks);
+const deviceLinks = new DeviceLinks(); const sharedComputers = new SharedComputers(id => sessions.isLive(id), new LentComputers(join(DATA_DIR, "lent-computers.json")), deviceLinks); const phoneRegistry = new PhoneRegistry(join(DATA_DIR, "phones.json")); const phoneJobs = new PhoneJobs((phone, id) => broadcast({ kind: "device.job", phone, id }, { adminOnly: true }));
 // A Cloud home's secrets come over the launcher's pipe, never this process's environment.
 const CLOUD_SECRETS = BOOT_CLOUD_SECRETS;
 const CLOUD_ENV: NodeJS.ProcessEnv = { ...process.env, ...CLOUD_SECRETS };
@@ -703,7 +703,7 @@ const appLanguage = (): string | undefined => cfg.language ?? CLOUD_TEAM?.langua
 if (CLOUD_HOME) repairMovedWorkspacePaths(DATA_DIR);
 if (CLOUD_PERSONAL) sessions.requireAdmin(CLOUD_PERSONAL_REFUSAL);
 const lendingEnabled = () => sharedComputersEnabled(cfg) || CLOUD_HOME !== null;
-const CLOUD_HOME_LENDER = "cloud-home";
+const CLOUD_HOME_LENDER = "cloud-home"; const DESKTOP_OWNER = "owner"; function phoneOwnerOf(auth: RequestAuth): string | null { return HOSTED_WORKSPACE || CLOUD_TEAM ? null : CLOUD_HOME ? (cloudOwnerSession(auth) ? CLOUD_OWNER_KEY : null) : DESKTOP_OWNER; }
 /** Owner-written routines and owner-started runs: the only routine turns that may use a lent Mac. */
 const cloudRoutineAuthors = CLOUD_HOME ? createCloudRoutineAuthors(join(DATA_DIR, "lending-routines.json")) : null;
 const ownerStartedRoutineRuns = new Set<string>();
@@ -906,7 +906,7 @@ function cloudLendingRefusal(capability: Pick<InternalCapability, "botId" | "thr
   const refusal = cloudHomeLendingRefusal(cloudLendingTurn(capability));
   if (refusal) return refusal;
   return lendingMemory?.reconcile(capability.botId, foreignTurnRunning(capability.botId), { cached: true }).changedBySomeoneElse ? "memory-changed" : null;
-}
+} /** Whose phones a turn may use: on a Cloud home the owner's, when the lent Mac would allow the turn; elsewhere the owner's, for a turn whose lines name no person (a person's session line carries its sender) or a routine run, never a webhook. */ function phoneTurnOwner(c: Pick<InternalCapability, "botId" | "threadId" | "generation">): string | null { if (HOSTED_WORKSPACE || CLOUD_TEAM) return null; if (CLOUD_HOME) return cloudLendingRefusal(c) === null ? CLOUD_OWNER_KEY : null; const turn = cloudLendingTurn(c); return cloudHomeLendingRefusal({ ...turn, ownerPerson: (p) => p === undefined, routineRun: () => { const run = turn.routineRun(); return run && { ...run, ownerStarted: true, ownerAuthored: true }; } }) === null ? DESKTOP_OWNER : null; }
 
 function cloudThreadStarters(threadId: string): (string | undefined)[] {
   const room = store.groupByThread(threadId);
@@ -1742,7 +1742,7 @@ type InternalCapability = {
   threadId: string;
   generation: string;
   depth: number;
-  kind: "agents" | "connectors" | "computer" | "browser" | "hooks" | "phone" | "data" | "highlevel";
+  kind: "agents" | "connectors" | "computer" | "browser" | "hooks" | "phone" | "data" | "highlevel" | "device";
   skillAuthoring: boolean;
   createdBots: number;
   createdRooms?: number;
@@ -2633,7 +2633,7 @@ function dataIntegration(botId: string, turn: { threadId: string; generation: st
 /** Only with a connection and for a bot allowed to use it (connected apps on; scopes and grants name highlevel). */
 function highlevelIntegration(bot: BotRecord, turn: { threadId: string; generation: string }) {
   return highlevelHost.integration(bot, () => mintInternalCapability({ botId: bot.id, ...turn, kind: "highlevel", depth: 0, skillAuthoring: false, createdBots: 0, openedThreads: 0 }), `http://127.0.0.1:${PORT}`);
-}
+} /** Only for the owner's own turn and a bot granted an app one of the owner's phones allows. */ function deviceIntegration(bot: BotRecord, turn: { threadId: string; generation: string }) { return phoneHost.integration(bot, phoneTurnOwner({ botId: bot.id, ...turn }), () => mintInternalCapability({ botId: bot.id, ...turn, kind: "device", depth: 0, skillAuthoring: false, createdBots: 0, openedThreads: 0 }), `http://127.0.0.1:${PORT}`); }
 
 let browserEngineInstall: Promise<void> | null = null;
 let browserEngineInstallError: string | null = null;
@@ -3198,7 +3198,7 @@ function previewSystemPrompt(bot: BotRecord) {
     }, { note: previewPlan.note, cloudHome: Boolean(CLOUD_HOME) }) },
     { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(agentsMounted && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER)) : "" },
     { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false && composio.configured(cfg) ? composioSystemPrompt(bot.connectorTools) + describeConnectorScopes(bot.connectorScopes) : "" },
-    { id: "highlevel", label: "HighLevel", text: caps?.highlevelMcp === true && highlevelHost.mounts(bot) ? highlevelHost.prompt(bot) : "" },
+    { id: "highlevel", label: "HighLevel", text: caps?.highlevelMcp === true && highlevelHost.mounts(bot) ? highlevelHost.prompt(bot) : "" }, { id: "device", label: "Phone", text: caps?.deviceMcp === true && phoneHost.mounts(bot, CLOUD_HOME ? CLOUD_OWNER_KEY : DESKTOP_OWNER) ? phoneHost.prompt(bot, CLOUD_HOME ? CLOUD_OWNER_KEY : DESKTOP_OWNER) : "" },
     { id: "mcp", label: "MCP servers", text: caps?.customMcp ? customMcpPrompt(Object.keys(engineMcpServers(bot))) : "" }, { id: "to-connect", label: "Connections to make", text: cloudConnections.prompt(bot) },
     { id: "browser", label: "Browser", text: previewPlan.browser ? browserPromptFor(bot, agentsMounted) : "" },
     { id: "coordination", label: "Team", text: agentsMounted && coordination ? ` ${coordination}` : "" },
@@ -8839,7 +8839,7 @@ async function startTurn(
         const data = dataIntegration(bot.id, { threadId, generation: dispatchClaimId });
         if (data) integrations.data = data;
       }
-      if (liveBot && instance.adapter.capabilities.highlevelMcp === true) { const crm = highlevelIntegration(liveBot, { threadId, generation: dispatchClaimId }); if (crm) integrations.highlevel = crm; }
+      if (liveBot && instance.adapter.capabilities.highlevelMcp === true) { const crm = highlevelIntegration(liveBot, { threadId, generation: dispatchClaimId }); if (crm) integrations.highlevel = crm; } if (liveBot && instance.adapter.capabilities.deviceMcp === true) { const phone = deviceIntegration(liveBot, { threadId, generation: dispatchClaimId }); if (phone) integrations.device = phone; }
       const mountedComputer = surfaceOfComputerKind(computerKind);
       if (
         liveBot &&
@@ -8906,7 +8906,7 @@ async function startTurn(
         { id: "mcp", label: "MCP servers", text: customMcpPrompt(Object.keys(integrations.custom ?? {})) }, { id: "to-connect", label: "Connections to make", text: cloudConnections.prompt(liveBot ?? bot) },
         { id: "browser", label: "Browser", text: integrations.browser ? browserPromptFor(bot, Boolean(integrations.agents)) : "" },
         { id: "data", label: "Data", text: integrations.data ? BUILT_IN_DATA_SYSTEM_PROMPT : "" },
-        { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(liveBot ?? bot) : "" },
+        { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(liveBot ?? bot) : "" }, { id: "device", label: "Phone", text: integrations.device ? phoneHost.prompt(liveBot ?? bot, phoneTurnOwner({ botId: bot.id, threadId, generation: dispatchClaimId })) : "" },
         { id: "coordination", label: "Team", text: coordinationPrompt ? ` ${coordinationPrompt}` : "" },
         { id: "assignment", label: "Teammate task", text: coordinationNode?.parentId ? `\n${coordinationSystemInstructions()}` : "" },
         { id: "outstanding", label: "Outstanding teammate work", text: outstandingAssignmentsPrompt(threadId) },
@@ -9698,7 +9698,7 @@ const teamMemory = new TeamMemory(join(DATA_DIR, "team-memory.json"));
 const teamMemoryRequests = createTeamMemoryRequests({ teamMemory, store, sectionKey: sectionContextKey, decide: (row) => appendDecision(DATA_DIR, row) });
 const outboundRequests = new OutboundRequestService();
 const outboundCounts = new OutboundCounts(join(DATA_DIR, "outbound-counts.json"));
-const OUTBOUND_HOLD_MS = 9 * 60_000; const outboundHold = createOutboundHold({ store, dataDir: DATA_DIR, outboundRequests, outboundCounts, holdMs: OUTBOUND_HOLD_MS, connectorThread, activeGroupTurnForBot, notify });
+const OUTBOUND_HOLD_MS = 9 * 60_000; const outboundHold = createOutboundHold({ store, dataDir: DATA_DIR, outboundRequests, outboundCounts, holdMs: OUTBOUND_HOLD_MS, connectorThread, activeGroupTurnForBot, notify }); const phoneHost = createPhoneHost({ registry: phoneRegistry, jobs: phoneJobs, dataDir: DATA_DIR, bot: (id) => store.bot(id), turnOwner: phoneTurnOwner, inRoom: (t) => Boolean(store.groupByThread(t)), appendMessage: (t, m) => { store.appendMessage(t, m as Parameters<typeof store.appendMessage>[1]); }, outboundHold, sendsFreely: (c) => roomTurnLevels.forRequest(c.threadId, c.botId, () => sourceApprovalMode(c.botId, c.threadId)) === "full", active: (c) => internalCapabilityIsActive(c as InternalCapability) });
 
 function resolveAndSendTrust(res: ServerResponse, threadId: string, requestId: string, behavior: "allow" | "deny" | "answer"): boolean {
   const remembered = teamMemoryRequests.resolve(threadId, requestId, behavior);
@@ -10525,7 +10525,7 @@ async function runClaimedGroupMemberTurn(
     const data = dataIntegration(readyBot.id, { threadId, generation: internalGeneration });
     if (data) integrations.data = data;
   }
-  if (instance.adapter.capabilities.highlevelMcp === true) { const crm = highlevelIntegration(readyBot, { threadId, generation: internalGeneration }); if (crm) integrations.highlevel = crm; }
+  if (instance.adapter.capabilities.highlevelMcp === true) { const crm = highlevelIntegration(readyBot, { threadId, generation: internalGeneration }); if (crm) integrations.highlevel = crm; } if (instance.adapter.capabilities.deviceMcp === true) { const phone = deviceIntegration(readyBot, { threadId, generation: internalGeneration }); if (phone) integrations.device = phone; }
   if (roomPlan.browser && !(roomPlan.computer === undefined && roomTeamComputer)) {
     const selectedProfile = readyBot.browserProfile;
     const browser = await browserIntegration(readyBot.id, selectedProfile, { threadId, generation: internalGeneration });
@@ -10738,7 +10738,7 @@ async function runClaimedGroupMemberTurn(
     { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(Boolean(integrations.agents) && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER)) : "" },
     { id: "browser", label: "Browser", text: integrations.browser ? browserPromptFor(bot, Boolean(integrations.agents)) : "" },
     { id: "data", label: "Data", text: integrations.data ? BUILT_IN_DATA_SYSTEM_PROMPT : "" },
-    { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(readyBot) : "" },
+    { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(readyBot) : "" }, { id: "device", label: "Phone", text: integrations.device ? phoneHost.prompt(readyBot, phoneTurnOwner({ botId: readyBot.id, threadId, generation: internalGeneration })) : "" },
     { id: "recall", label: "Recall", text: integrations.agents && bot.memoryEnabled !== false ? SESSION_SEARCH_SYSTEM_PROMPT : "" },
     teamAvailabilityPart(outsideRoom),
     { id: "recent", label: "Recent work", text: recentWorkPrompt(recentLines) },
@@ -13222,7 +13222,7 @@ ROUTES.push(createBotLifecycleRoutes({
   activeGroupTurnForBot, cancelGroupTurnOperations, runningTurnInstance, closeOpenApprovals, deleteBotWithLifecycle,
 }));
 ROUTES.push(createBotSkillsRoutes({ store, cfg, listBotSkills, readBotSkillFile, stagedSkillListing }));
-ROUTES.push(createHighLevelRoutes({ service: highlevel }));
+ROUTES.push(createHighLevelRoutes({ service: highlevel })); ROUTES.push(createPhoneRoutes({ registry: phoneRegistry, jobs: phoneJobs, owner: phoneOwnerOf, isAdmin: ownerOrAdmin }));
 ROUTES.push(createSkillShareRoutes({ enabled: () => skillsHost.mode() !== "off", botExists: (id) => Boolean(store.bot(id)),
   cardRefusal: (auth, threadId, requestId) => cardAnswerRefusal(auth, threadId, requestId, "allow"), shareFromReceipt: skillsHost.shareFromReceipt, shareFromBot: skillsHost.shareFromBot }));
 ROUTES.push(createTeamContextRoutes({ store, teamMemory }));
@@ -13784,7 +13784,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (await workspaceBackupRoutes(req, res, path, auth)) return;
     if (cloudMoveRoutes(res, path)) return;
     // Count requests until their handler returns, not until the browser disconnects: a cancelled upload can still write.
-    if (path.startsWith("/api/") && path !== "/api/events" && path !== "/api/health" && path !== "/api/sync/changes" && !path.startsWith("/api/shared-computers/") && !isWorkspaceBackupSessionControl(method, path)) {
+    if (path.startsWith("/api/") && path !== "/api/events" && path !== "/api/health" && path !== "/api/sync/changes" && !isLongPollPath(path) && !isWorkspaceBackupSessionControl(method, path)) {
       releaseWorkspaceRequest = workspaceMaintenance.request();
     }
 
@@ -13944,7 +13944,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const parsed = z.object({
         botId: z.string().regex(/^[\w-]{1,128}$/),
         threadId: z.string().regex(/^[\w-]{1,128}$/),
-        kind: z.enum(["agents", "connectors", "computer", "data", "highlevel"]).default("agents"),
+        kind: z.enum(["agents", "connectors", "computer", "data", "highlevel", "device"]).default("agents"),
         depth: z.number().int().min(0).max(MAX_COMMS_DEPTH).default(0),
         skillAuthoring: z.boolean().default(false),
         deliversSavedFiles: z.boolean().default(false),
@@ -13998,7 +13998,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         : path === DATA_INTERNAL_MCP_PATH
         ? "data"
         : path === HIGHLEVEL_INTERNAL_MCP_PATH
-        ? "highlevel"
+        ? "highlevel" : path === PHONE_INTERNAL_MCP_PATH ? "device"
         : path === "/api/internal/phone/claim"
         ? "phone"
         : path.startsWith("/api/internal/connectors/")
@@ -14234,7 +14234,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The CRM tokens stay here; the agent process holds only the turn's capability, and every call gets the live bot's verdict.
       if (method === "POST" && path === HIGHLEVEL_INTERNAL_MCP_PATH) {
         return json(res, 200, { result: await highlevelHost.handle(await readInternalBody(), internalCapability, requireActiveInternalCapability) });
-      }
+      } if (method === "POST" && path === PHONE_INTERNAL_MCP_PATH) { return json(res, 200, { result: await phoneHost.handle(await readInternalBody(), internalCapability, requireActiveInternalCapability) }); }
       if (method === "POST" && path === "/api/internal/phone/claim") {
         requireActiveInternalCapability();
         if (!claimTurnResource(internalCapability, "computer:phone")) {
@@ -16232,9 +16232,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (method === "GET" && path === "/api/connectors/tools") {
       const availability = composio.connectorAvailability(cfg);
-      const highlevelTools = highlevelHost.toolListing();
+      const highlevelTools = { ...highlevelHost.toolListing(), ...phoneHost.toolListing() };
       if (availability !== "configured") {
-        return json(res, 200, { configured: Boolean(highlevelTools), services: { ...highlevelTools } });
+        return json(res, 200, { configured: Object.keys(highlevelTools).length > 0, services: highlevelTools });
       }
       try {
         return json(res, 200, { configured: true, services: { ...await composio.listConnectorTools(cfg), ...highlevelTools } });
@@ -16777,7 +16777,7 @@ const gracefulShutdown = createGracefulShutdown({
       if (workspaceAccessTimer) clearInterval(workspaceAccessTimer);
       // Invalidate turn bearers before any cleanup reaches an await: child MCP processes and the listener may outlive it.
       revokeAllInternalCapabilities();
-      sharedComputers.close(); deviceLinks.close();
+      sharedComputers.close(); deviceLinks.close(); phoneJobs.close();
       sharedComputerControl.close();
       browserLive.closeAll();
       desktopViewer.closeAll();
