@@ -1,22 +1,17 @@
 // /api/phones: a paired phone offering its own apps (calendar, contacts, ...) to this server's bots. The phone is known by
 // what authenticated it (a Cloud session, or the companion sidecar's device header), never by anything in the body.
-import type { IncomingMessage } from "node:http";
-
 import { phoneJobOutcome, type PhoneJobs } from "../phones/jobs.ts";
 import { phoneRegistration, type PhoneRegistry } from "../phones/registry.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { responseGone } from "../shared-computers.ts";
 import { PASS, type RouteContext, type RouteHandler } from "./table.ts";
 
-const DEVICE_ID = /^[\w-]{1,128}$/;
 const SELF_ONLY = "Only a paired phone can register its apps, and only for itself.";
 
-/** Keyed by what authenticated the request, never by the body: a Cloud session, or the sidecar's device header. */
-export function phoneKey(req: IncomingMessage, auth: RequestAuth): string | null {
-  if (auth.kind === "session" && !auth.session.cookieOnly) return `session:${auth.session.id}`;
-  if (req.headers["x-openmausbot-companion"] !== "1") return null;
-  const device = req.headers["x-openmausbot-companion-device"];
-  return typeof device === "string" && DEVICE_ID.test(device) ? `companion:${device}` : null;
+/** Keyed by what authenticated the request, never by the body or its headers: a Cloud session, or the device the verified companion sidecar vouched for. */
+export function phoneKey(auth: RequestAuth): string | null {
+  if (auth.kind === "session") return auth.session.cookieOnly ? null : `session:${auth.session.id}`;
+  return auth.companionDevice ? `companion:${auth.companionDevice}` : null;
 }
 
 /** Long polls are held open on purpose; Task 10's idle-timeout exemption asks this. */
@@ -44,7 +39,7 @@ export function createPhoneRoutes(deps: PhoneRouteDeps): RouteHandler {
     }
 
     if (path === "/api/phones/self" || path.startsWith("/api/phones/self/")) {
-      const key = phoneKey(req, auth);
+      const key = phoneKey(auth);
       const owner = deps.owner(auth);
       if (!key || !owner) return json(res, 403, { error: SELF_ONLY });
       registry.seen(key);

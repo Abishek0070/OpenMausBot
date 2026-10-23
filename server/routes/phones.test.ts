@@ -25,6 +25,7 @@ const clientSession = (id: string): RequestAuth => ({
   kind: "session", via: "bearer", scopes: ["client"],
   session: { id, cookieOnly: false } as unknown as Extract<RequestAuth, { kind: "session" }>["session"],
 });
+const companion = (device: string): RequestAuth => ({ kind: "loopback", scopes: ["admin", "client"], companionDevice: device });
 const registration = {
   installId: "install-0001", name: "Maus's iPhone", platform: "ios", appVersion: "1.5.0", timeZone: "Asia/Kolkata", capabilities: { calendar: "full" },
 };
@@ -72,7 +73,7 @@ describe("phone routes", () => {
   });
 
   it("registers from the companion header and lists for the owner", async () => {
-    const { call } = await setup();
+    const { call } = await setup({ auth: companion("d1") });
     const put = await call("PUT", "/api/phones/self", registration, fromPhone("d1"));
     expect(put.status).toBe(200);
     expect(put.body.phone.key).toBe("companion:d1");
@@ -93,7 +94,7 @@ describe("phone routes", () => {
   });
 
   it("long-polls a job, leases and answers it", async () => {
-    const { call, jobs } = await setup();
+    const { call, jobs } = await setup({ auth: companion("d1") });
     await call("PUT", "/api/phones/self", registration, fromPhone("d1"));
     const outcome = jobs.request("companion:d1", "PHONE_LIST_EVENTS", { days: 1 }, { active: () => true, timeoutMs: 10_000, offlineText: "offline", online: () => true });
     const polled = await call("GET", "/api/phones/self/jobs", undefined, fromPhone("d1"));
@@ -106,11 +107,23 @@ describe("phone routes", () => {
   });
 
   it("refuses a result for an unknown job with 409", async () => {
-    const { call } = await setup();
+    const { call } = await setup({ auth: companion("d1") });
     await call("PUT", "/api/phones/self", registration, fromPhone("d1"));
     const out = await call("POST", "/api/phones/self/jobs/nope/result", { ok: true, result: 1 }, fromPhone("d1"));
     expect(out.status).toBe(409);
     expect((await call("POST", "/api/phones/self/jobs/nope/result", { bad: true }, fromPhone("d1"))).status).toBe(400);
+  });
+
+  it("a cookie-only session cannot claim a companion identity", async () => {
+    const auth = clientSession("s1");
+    if (auth.kind === "session") (auth.session as { cookieOnly?: boolean }).cookieOnly = true;
+    const { call } = await setup({ auth });
+    expect((await call("PUT", "/api/phones/self", registration, fromPhone("d1"))).status).toBe(403);
+  });
+
+  it("plain loopback with companion headers, but no verified device, gets 403 on the poll", async () => {
+    const { call } = await setup();
+    expect((await call("GET", "/api/phones/self/jobs", undefined, fromPhone("d1"))).status).toBe(403);
   });
 
   it("GET /api/phones needs an admin", async () => {
