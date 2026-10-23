@@ -143,6 +143,14 @@ export class PhoneJobs {
     }
     this.finish(key, phone, job, outcome);
   }
+  /** The phone's access changed (it was removed): every job queued for it or in its hands fails at once as denied, and
+   * its open poll answers empty. */
+  drop(key: string, error: string): void {
+    const phone = this.phones.get(key);
+    if (!phone) return;
+    for (const job of phone.jobs.values()) this.finish(key, phone, job, { ok: false, code: "denied", error }, false);
+    phone.wake?.();
+  }
   busy(key: string): boolean {
     for (const job of this.phones.get(key)?.jobs.values() ?? []) if (job.sent) return true;
     return false;

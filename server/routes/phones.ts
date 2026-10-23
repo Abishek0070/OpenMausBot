@@ -7,6 +7,8 @@ import { responseGone } from "../shared-computers.ts";
 import { PASS, type RouteContext, type RouteHandler } from "./table.ts";
 
 const SELF_ONLY = "Only a paired phone can register its apps, and only for itself.";
+/** What a job waiting on a phone that was just removed answers. */
+export const PHONE_ACCESS_CHANGED = "This phone's access changed.";
 
 /** Keyed by what authenticated the request, never by the body or its headers: a Cloud session, or the device the verified companion sidecar vouched for. */
 export function phoneKey(auth: RequestAuth): string | null {
@@ -53,7 +55,11 @@ export function createPhoneRoutes(deps: PhoneRouteDeps): RouteHandler {
           return json(res, 200, { phone });
         }
         if (method === "GET") return json(res, 200, { phone: registry.list(owner, (k) => jobs.busy(k)).find((p) => p.key === key) ?? null });
-        if (method === "DELETE") return json(res, 200, { removed: registry.remove(key) });
+        if (method === "DELETE") {
+          const removed = registry.remove(key);
+          jobs.drop(key, PHONE_ACCESS_CHANGED);
+          return json(res, 200, { removed });
+        }
       }
       if (path === "/api/phones/self/jobs" && method === "GET") {
         if (!registry.get(key)) return json(res, 404, { error: "Register this phone first" });
@@ -75,7 +81,11 @@ export function createPhoneRoutes(deps: PhoneRouteDeps): RouteHandler {
     const one = /^\/api\/phones\/([^/]+)$/.exec(path);
     if (one && method === "DELETE") {
       if (!deps.isAdmin(auth)) return json(res, 403, { error: "Only the owner or an admin can remove phones." });
-      return json(res, 200, { removed: registry.remove(decodeURIComponent(one[1]!)) });
+      // Removed on the computer: its waiting jobs fail and the key stays refused, so the phone must pair again.
+      const key = decodeURIComponent(one[1]!);
+      const removed = registry.remove(key, { block: true });
+      jobs.drop(key, PHONE_ACCESS_CHANGED);
+      return json(res, 200, { removed });
     }
     return json(res, 404, { error: "not found" });
   };

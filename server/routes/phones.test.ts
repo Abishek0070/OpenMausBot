@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { json, readBody } from "../harness/http.ts";
 import { PhoneJobs } from "../phones/jobs.ts";
@@ -129,6 +129,45 @@ describe("phone routes", () => {
   it("GET /api/phones needs an admin", async () => {
     const { call } = await setup({ auth: clientSession("s1") });
     expect((await call("GET", "/api/phones")).status).toBe(403);
+  });
+
+  it("the phone removing itself fails its waiting jobs and may register again", async () => {
+    const { call, jobs } = await setup({ auth: companion("d1") });
+    await call("PUT", "/api/phones/self", registration, fromPhone("d1"));
+    const options = { active: () => true, timeoutMs: 10_000, offlineText: "offline", online: () => true };
+    const leased = jobs.request("companion:d1", "PHONE_LIST_EVENTS", {}, options);
+    const job = (await call("GET", "/api/phones/self/jobs", undefined, fromPhone("d1"))).body.job;
+    await call("POST", `/api/phones/self/jobs/${job.id}/lease`, {}, fromPhone("d1"));
+    const queued = jobs.request("companion:d1", "PHONE_LIST_EVENTS", {}, options);
+    expect((await call("DELETE", "/api/phones/self", undefined, fromPhone("d1"))).body).toEqual({ removed: true });
+    const denied = { ok: false, code: "denied", error: "This phone's access changed." };
+    expect(await leased).toEqual(denied);
+    expect(await queued).toEqual(denied);
+    expect(jobs.busy("companion:d1")).toBe(false);
+    // A result for the dropped job is refused.
+    expect((await call("POST", `/api/phones/self/jobs/${job.id}/result`, { ok: true, result: 1 }, fromPhone("d1"))).status).toBe(409);
+    expect((await call("PUT", "/api/phones/self", registration, fromPhone("d1"))).status).toBe(200);
+  });
+
+  it("a phone removed on the computer fails its jobs, wakes its poll and is refused until it pairs again", async () => {
+    const { call, jobs, registry } = await setup({ auth: companion("d1") });
+    await call("PUT", "/api/phones/self", registration, fromPhone("d1"));
+    const queued = jobs.request("companion:d1", "PHONE_LIST_EVENTS", {}, { active: () => true, timeoutMs: 10_000, offlineText: "offline", online: () => true });
+    expect((await call("DELETE", `/api/phones/${encodeURIComponent("companion:d1")}`)).body).toEqual({ removed: true });
+    expect(await queued).toEqual({ ok: false, code: "denied", error: "This phone's access changed." });
+    expect(registry.blocked("companion:d1")).toBe(true);
+    const again = await call("PUT", "/api/phones/self", registration, fromPhone("d1"));
+    expect(again).toEqual({ status: 403, body: { error: "This phone was removed on the computer. Pair it again to use its apps." } });
+    expect((await call("GET", "/api/phones/self/jobs", undefined, fromPhone("d1"))).status).toBe(404);
+  });
+
+  it("an open poll answers empty when its phone is removed", async () => {
+    const { call, jobs } = await setup({ auth: companion("d1") });
+    await call("PUT", "/api/phones/self", registration, fromPhone("d1"));
+    const poll = call("GET", "/api/phones/self/jobs", undefined, fromPhone("d1"));
+    await vi.waitFor(() => expect(jobs.polling("companion:d1")).toBe(true));
+    jobs.drop("companion:d1", "This phone's access changed.");
+    expect(await poll).toEqual({ status: 200, body: { job: null } });
   });
 
   it("a team Cloud offers no phones", async () => {

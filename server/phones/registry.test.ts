@@ -1,10 +1,10 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { removeTempDir } from "../testing/cleanup.ts";
-import { MAX_PHONES, PHONE_ONLINE_MS, PhoneRegistry, type PhoneRegistration } from "./registry.ts";
+import { MAX_BLOCKED, MAX_PHONES, PHONE_ONLINE_MS, PHONE_REMOVED_TEXT, PhoneRegistry, type PhoneRegistration } from "./registry.ts";
 
 const reg = (over: Partial<PhoneRegistration> = {}): PhoneRegistration => ({ installId: "inst-aaaaaaaa", name: "Omkar's iPhone", platform: "ios", appVersion: "1.9.0", timeZone: "Asia/Kolkata", capabilities: { calendar: "full", contacts: "limited" }, ...over });
 
@@ -74,7 +74,44 @@ describe("PhoneRegistry", () => {
     expect(registry.remove("companion:d1")).toBe(true);
     expect(registry.remove("companion:d1")).toBe(false);
     expect(registry.get("companion:d1")).toBeUndefined();
-    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ version: 1, phones: [] });
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ version: 1, phones: [], blocked: [] });
     expect(new PhoneRegistry(file, now).list(null, () => false)).toEqual([]);
+    // The phone removing itself may register again at once.
+    expect(() => registry.register("companion:d1", "owner", reg())).not.toThrow();
+  });
+
+  it("a phone removed on the computer stays refused across a restart until it pairs again", () => {
+    const registry = new PhoneRegistry(file, now);
+    registry.register("session:s1", "owner", reg());
+    expect(registry.remove("session:s1", { block: true })).toBe(true);
+    expect(registry.blocked("session:s1")).toBe(true);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ version: 1, phones: [], blocked: ["session:s1"] });
+    const reloaded = new PhoneRegistry(file, now);
+    expect(reloaded.blocked("session:s1")).toBe(true);
+    expect(() => reloaded.register("session:s1", "owner", reg())).toThrow(expect.objectContaining({ message: PHONE_REMOVED_TEXT, status: 403 }));
+    expect(reloaded.get("session:s1")).toBeUndefined();
+    // Pairing again gives the phone a new key, which registers.
+    expect(reloaded.register("session:s2", "owner", reg()).key).toBe("session:s2");
+    // Blocking a key already gone still records it; one too long for the file is never written.
+    expect(reloaded.remove("session:gone", { block: true })).toBe(false);
+    expect(reloaded.blocked("session:gone")).toBe(true);
+    expect(reloaded.remove(`session:${"x".repeat(400)}`, { block: true })).toBe(false);
+    expect(new PhoneRegistry(file, now).list(null, () => false).map((phone) => phone.key)).toEqual(["session:s2"]);
+  });
+
+  it("keeps only the newest blocks", () => {
+    const registry = new PhoneRegistry(file, now);
+    for (let i = 0; i <= MAX_BLOCKED; i++) registry.remove(`session:s${i}`, { block: true });
+    expect(registry.blocked("session:s0")).toBe(false);
+    expect(registry.blocked("session:s1")).toBe(true);
+    expect(registry.blocked(`session:s${MAX_BLOCKED}`)).toBe(true);
+    expect(new PhoneRegistry(file, now).blocked(`session:s${MAX_BLOCKED}`)).toBe(true);
+  });
+
+  it("reads a file written before blocks existed", () => {
+    writeFileSync(file, JSON.stringify({ version: 1, phones: [{ key: "companion:d1", owner: "owner", registration: reg(), registeredAt: 1, seen: 1, lastUsedAt: null }] }));
+    const registry = new PhoneRegistry(file, now);
+    expect(registry.get("companion:d1")?.owner).toBe("owner");
+    expect(registry.blocked("companion:d1")).toBe(false);
   });
 });
