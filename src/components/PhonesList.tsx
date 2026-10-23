@@ -1,16 +1,26 @@
+import { useState } from "react";
 import { Trash2 } from "lucide-react";
 
 import { t } from "@/lib/i18n";
-import { api } from "@/state/store";
+import { api, useStore } from "@/state/store";
 import { phoneAppChips, phonePlatformLabel, phoneRemovePath, usePhones } from "../lib/phones";
 import { relative } from "./CompanionSection";
 
 export function PhonesList() {
   const { phase, phones, refresh } = usePhones();
+  const { dispatch } = useStore();
+  const [removing, setRemoving] = useState<string | null>(null);
   if (phase === "loading") return null;
 
   const remove = (key: string) => {
-    void api(phoneRemovePath(key), { method: "DELETE" }).finally(refresh);
+    if (removing) return;
+    setRemoving(key);
+    void api(phoneRemovePath(key), { method: "DELETE" })
+      .catch((error: unknown) => dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) }))
+      .finally(() => {
+        setRemoving(null);
+        refresh();
+      });
   };
 
   return (
@@ -34,6 +44,7 @@ export function PhonesList() {
                     </div>
                   </div>
                   <button
+                    disabled={removing !== null}
                     onClick={() => remove(phone.key)}
                     aria-label={t("remote.phones.remove", { name })}
                     className="shrink-0 rounded p-1.5 text-ink-secondary hover:bg-control hover:text-danger disabled:opacity-40"
