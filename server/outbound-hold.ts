@@ -10,7 +10,7 @@ import { outboundCard } from "./outbound-requests.ts";
 import type { BotRecord, GroupRecord, Store } from "./store.ts";
 
 /** The bot fields the hold reads. */
-export type OutboundHoldBot = Pick<BotRecord, "id" | "name" | "color" | "outbound" | "avatarUrl">;
+export type OutboundHoldBot = Pick<BotRecord, "id" | "name" | "color" | "outbound" | "avatarUrl" | "notifications">;
 
 export interface OutboundHoldDeps {
   store: Pick<Store, "appendMessage" | "bot" | "messagesFor" | "patchMessage" | "setActivity" | "setTaskActivity" | "taskByThread">;

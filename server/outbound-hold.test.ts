@@ -65,7 +65,7 @@ function setup(bot: HoldBot) {
   return { hold: createOutboundHold(deps), dataDir, appended, patches, activity, notified, outboundRequests, input };
 }
 
-const bot = (outbound: HoldBot["outbound"]): HoldBot => ({ id: "b1", name: "Scout", color: "green", outbound });
+const bot = (outbound: HoldBot["outbound"], notifications = true): HoldBot => ({ id: "b1", name: "Scout", color: "green", outbound, notifications });
 
 describe("createOutboundHold", () => {
   it("allow policy under the cap approves without a card and records the row", async () => {
@@ -119,6 +119,14 @@ describe("createOutboundHold", () => {
     expect(readDecisions(dataDir, 10)).toMatchObject([{ requestId, decision: "card-shown", source: "outbound", tool: "GMAIL_SEND_EMAIL" }]);
     // An approved hold lets the dispatch through without spending the allowance.
     expect(() => hold.reserve({ ...input, bot: bot({ policy: "ask", dailyCap: 10 }), approved: true })).not.toThrow();
+
+    // A bot the user muted still posts the card, but sends no notification.
+    const muted = setup(bot({ policy: "ask", dailyCap: 10 }, false));
+    const mutedPending = muted.hold.hold({ ...muted.input, active: () => true });
+    expect(muted.appended).toHaveLength(1);
+    expect(muted.notified).toEqual([null]);
+    muted.outboundRequests.resolve({ threadId: "t1", requestId: muted.appended[0].message.card!.requestId as string, behavior: "allow" });
+    await expect(mutedPending).resolves.toEqual({ ok: true, approved: true });
   });
 
   it("deny answers the decline text; timeout marks the card unavailable", async () => {
