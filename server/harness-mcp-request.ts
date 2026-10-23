@@ -25,13 +25,13 @@ export function parseHarnessMcpKind(value: unknown): HarnessMcpKind | null {
 }
 
 /** Node's fetch (undici) rejects with the socket error as its `cause`: refused before anything was sent, reset or closed after. */
-function unansweredText(error: unknown, name: string): string {
+function unansweredText(error: unknown, name: string, timeoutMs: number): string {
   const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
   const call = `this ${name.toLowerCase()} call`;
   if (code === "ECONNREFUSED") return `OpenMausBot is restarting, so ${call} did not reach it and did not run. Wait a few seconds, then make it again.`;
   if (code === "ECONNRESET" || code === "UND_ERR_SOCKET") return `OpenMausBot restarted while ${call} was running, so it may or may not have taken effect. Check its result before repeating it.`;
   if ((error as { name?: unknown } | null)?.name === "TimeoutError") {
-    return `OpenMausBot did not answer ${call} within ${HARNESS_PROXY_TIMEOUT_MS / 1_000} seconds. It may still be running, or it may already have taken effect. Do not repeat it until its result is checked.`;
+    return `OpenMausBot did not answer ${call} within ${timeoutMs / 1_000} seconds. It may still be running, or it may already have taken effect. Do not repeat it until its result is checked.`;
   }
   return error instanceof Error && !/fetch failed|abort|timeout|terminated/i.test(error.message)
     ? error.message : `${name} connection was interrupted. Do not repeat the action until its state is checked.`;
@@ -97,7 +97,7 @@ export async function harnessMcpRequest(
     }
     return { jsonrpc: "2.0", id, result: payload.result };
   } catch (error) {
-    return failure(id, message.method, unansweredText(error, name) + RECOVERY[connection.kind]);
+    return failure(id, message.method, unansweredText(error, name, HARNESS_PROXY_TIMEOUTS_MS[connection.kind] ?? HARNESS_PROXY_TIMEOUT_MS) + RECOVERY[connection.kind]);
   }
 }
 

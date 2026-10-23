@@ -129,6 +129,14 @@ describe("harness MCP capability proxy", () => {
     } finally { vi.unstubAllGlobals(); }
   });
 
+  it("reports the device call's own ten-minute timeout, not the default", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); }));
+    try {
+      const answer = await harnessMcpRequest(frame("tools/call", { name: "phone_send", arguments: {} }), connection("device")) as { result: { content: Array<{ text: string }> } };
+      expect(answer.result.content[0]!.text).toContain("within 600 seconds");
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("fails closed with an MCP tool refusal, but tools/list uses an RPC error", async () => {
     status = 403;
     payload = { error: "Browser tools are paused while a person controls this browser." };
