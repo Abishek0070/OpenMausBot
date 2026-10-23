@@ -359,6 +359,8 @@ export interface WireBot {
   connectorTools?: Record<string, ConnectorToolGrant>;
   connectorScopes?: { apps: Record<string, "read" | "write"> };
   outbound?: { policy: "ask" | "allow"; dailyCap: number };
+  /** Which of a paired phone's apps this bot may use; absent: the Chief gets all, others none (shared/phone-apps.ts). */
+  phoneApps?: import("./phone-apps.ts").PhoneApps;
   /** Ordered backups used only by opt-in, pre-prompt startup recovery. */
   fallback?: Array<{ instanceId: string; model: string }>;
   /** Whether this bot gets the app's built-in browser. */
@@ -990,5 +992,7 @@ export type ServerFrame =
   | DataBroadcast
   | { kind: "bot.deleted"; botId: string }
   | { kind: "live.call"; botId: string; threadId: string; call: LiveCallState | null }
+  /** A job is waiting for the phone whose registry key this is; it polls now. */
+  | { kind: "device.job"; phone: string; id: string }
   /** The config status object spread flat into the frame. */
   | ({ kind: "config" } & Record<string, unknown>);
