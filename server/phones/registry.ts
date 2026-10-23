@@ -105,6 +105,12 @@ export class PhoneRegistry {
       .map(({ owner: _owner, ...rest }) => ({ ...rest, online: at - rest.seen < PHONE_ONLINE_MS, busy: busy(rest.key) }));
   }
 
+  /** Seen within the last minute. */
+  online(key: string): boolean {
+    const phone = this.phones.get(key);
+    return phone !== undefined && this.now() - phone.seen < PHONE_ONLINE_MS;
+  }
+
   forOwner(owner: string): PhoneRecord[] {
     return [...this.phones.values()].filter((phone) => phone.owner === owner);
   }

@@ -23,10 +23,11 @@ export interface PhoneDecisionRow {
 
 export type PhoneAccess = { ok: true; rows: PhoneDecisionRow[] } | { ok: false; text: string; rows: PhoneDecisionRow[] };
 
-const capName = (cap: PhoneCapability) => cap[0]!.toUpperCase() + cap.slice(1);
+/** calendar → "Calendar". */
+export const capName = (cap: PhoneCapability) => cap[0]!.toUpperCase() + cap.slice(1);
 
 /** PHONE_CREATE_EVENT → "Create event". */
-function describeAction(name: string): string {
+export function describeAction(name: string): string {
   const action = name.replace(/^PHONE_/u, "").replace(/_+/gu, " ").toLowerCase();
   return action ? action[0]!.toUpperCase() + action.slice(1) : name;
 }
