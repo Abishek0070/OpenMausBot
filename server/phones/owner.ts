@@ -4,12 +4,15 @@
 // run and its reports are the owner's only while the owner wrote it and nobody else has changed it since; a webhook's
 // payload and an outside event's run stay someone else's words.
 import type { CloudLendingTurn } from "../cloud-lending.ts";
+import type { LoopbackTrust } from "../request-auth.ts";
 
 type Line = CloudLendingTurn["thread"][number];
 /** The lines as the store keeps them: what they say about where their words came from, beyond the lending test's fields. */
 export type DesktopLine = Line & {
   kind?: string;
   webhookPost?: boolean;
+  /** An external interface (the Slack worker) relayed it: nobody typed it at this machine or in one of its sessions. */
+  relayed?: boolean;
   automation?: { routineId?: string };
   routineRun?: { routineId?: string };
 };
@@ -24,9 +27,15 @@ export interface DesktopOwnerDeps {
   ownerWrote(routineId: string): boolean;
 }
 
-/** A person no owner test accepts: a bot's ask outside the user's work, a worker's answer, or a session answer with no
- * recorded person. Never a session's person key, which is a hash. */
+/** A person no owner test accepts: a bot's ask outside the user's work, a relayed line, a worker's answer, or a session
+ * answer with no recorded person. Never a session's person key, which is a hash. */
 export const NOT_THE_OWNER = "not-the-owner";
+
+/** One desktop owner exists only where one person uses this server: never where sign-in lets several people in (each
+ * admin would reach every admin's phones), and never where a request from this machine is a service, not the owner. */
+export function desktopPhonesOffered(server: { sharedMembership: boolean; loopbackTrust: LoopbackTrust }): boolean {
+  return !server.sharedMembership && server.loopbackTrust !== "service";
+}
 
 /** The routine a report or run card speaks for; an outside event's run names its trigger, which is no routine. */
 const routineOf = (line: DesktopLine): string | undefined =>
@@ -38,8 +47,9 @@ export function desktopLendingTurn(base: DesktopTurn, deps: DesktopOwnerDeps): C
   // A bot's ask names no person, so only the work's origin can vouch for it, and only for this turn's own request: an
   // earlier ask in the conversation may have carried another chain's work, which nothing recorded.
   const vouched = deps.originIsUser() ? base.request?.messageId : undefined;
+  // A relayed line names no person either, and nobody here vouches for it.
   const thread = base.thread.map((line) =>
-    (line.role === "user" && line.peerAsk && line.id !== vouched ? { ...line, peerAsk: undefined, sender: { id: NOT_THE_OWNER } } : line));
+    (line.role === "user" && (line.relayed === true || (line.peerAsk && line.id !== vouched)) ? { ...line, peerAsk: undefined, sender: { id: NOT_THE_OWNER } } : line));
   return {
     ...base,
     thread,

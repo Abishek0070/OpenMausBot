@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { cloudHomeLendingRefusal, type CloudLendingTurn } from "../cloud-lending.ts";
-import { desktopLendingTurn, NOT_THE_OWNER, type DesktopTurn } from "./owner.ts";
+import { desktopLendingTurn, desktopPhonesOffered, NOT_THE_OWNER, type DesktopTurn } from "./owner.ts";
 
 const ADMIN = "p_admin", MEMBER = "p_member", ROUTINE = "routine-1", WEBHOOK = "webhook-1";
 const said = (id: string, extra: Record<string, unknown> = {}) => ({ id, role: "user", ...extra });
@@ -32,6 +32,14 @@ describe("whose turn may use the desktop owner's phones", () => {
     expect(owners(base({ thread: [said("m0", { sender: { id: MEMBER } }), reply("r0"), said("m1")] }))).toBe(false);
     expect(owners(base({ starters: [MEMBER] }))).toBe(false);
     expect(owners(base({ starters: [ADMIN] }))).toBe(true);
+  });
+
+  it("a line an external interface relayed is never the owner's, as the request or anywhere in the conversation", () => {
+    expect(owners(base({ thread: [said("m1", { relayed: true })] }))).toBe(false);
+    expect(owners(base({ thread: [said("m0", { relayed: true }), reply("r0"), said("m1")] }))).toBe(false);
+    // Whatever sender it carries: the relay vouches for nobody here.
+    expect(owners(base({ thread: [said("m1", { relayed: true, sender: { id: ADMIN } })] }))).toBe(false);
+    expect(desktopLendingTurn(base({ thread: [said("m1", { relayed: true })] }), deps()).thread[0]).toMatchObject({ sender: { id: NOT_THE_OWNER } });
   });
 
   it("a bot's ask is the owner's only as this turn's request, and only while the work it carries came from the user", () => {
@@ -90,5 +98,16 @@ describe("whose turn may use the desktop owner's phones", () => {
     expect(cloudHomeLendingRefusal(runTurn("webhook", { ownerStarted: true, ownerAuthored: true }))).toBe("not-owner");
     const none: CloudLendingTurn = desktopLendingTurn(base(), deps());
     expect(none.routineRun()).toBeNull();
+  });
+});
+
+describe("where the desktop owner's phones are offered", () => {
+  it("only where one person uses the server and a local request is the owner", () => {
+    expect(desktopPhonesOffered({ sharedMembership: false, loopbackTrust: "owner" })).toBe(true);
+    // Sign-in lets several people in: each admin would reach every admin's phones.
+    expect(desktopPhonesOffered({ sharedMembership: true, loopbackTrust: "owner" })).toBe(false);
+    // A request from this machine is a service (a hosted workspace's or a headless server's shell), not the owner.
+    expect(desktopPhonesOffered({ sharedMembership: false, loopbackTrust: "service" })).toBe(false);
+    expect(desktopPhonesOffered({ sharedMembership: true, loopbackTrust: "service" })).toBe(false);
   });
 });

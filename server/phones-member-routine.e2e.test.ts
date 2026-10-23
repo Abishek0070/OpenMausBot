@@ -1,7 +1,7 @@
 // Off a Cloud home a client-scope device (the front desk's iPad) may write, edit and run routines on the Chief, but no
 // such routine reaches the owner's phone: its run mounts no device server, a device call made in that run is refused
 // before any job is queued, so the phone never hears of it, and the desk editing the owner's own routine takes the phone
-// away from that routine until the owner rewrites it.
+// away from that routine until the owner rewrites it. Where sign-in lets several people in, the desktop offers no phone.
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -58,20 +58,29 @@ const mint = async (botId: string, threadId: string) => {
   return (await response.json() as any).token as string;
 };
 type Launch = { prompt: unknown; mcpConfig: { mcpServers: Record<string, { env: Record<string, string> }> } | null };
-/** Starts a routine run with `token` (none: this machine) and returns the launch whose prompt carries `prompt` and the run's thread. */
-const run = async (routineId: string, prompt: string, token?: string) => {
+/** Starts whatever begins a turn and returns the MCP servers of the launch whose prompt carries `marker`. */
+const launched = async (marker: string, start: () => Promise<void>) => {
   rmSync(fixture.fixtureDumpPath, { force: true });
-  const started = await api("POST", `/api/routines/${routineId}/run`, undefined, token);
-  expect(started.status).toBe(201);
+  await start();
   const launch = await vi.waitFor(() => {
     expect(existsSync(fixture.fixtureDumpPath)).toBe(true);
     const dump = JSON.parse(readFileSync(fixture.fixtureDumpPath, "utf8")) as Launch;
-    expect(JSON.stringify(dump.prompt)).toContain(prompt);
+    expect(JSON.stringify(dump.prompt)).toContain(marker);
     expect(dump.mcpConfig).not.toBeNull();
     return dump as Launch & { mcpConfig: NonNullable<Launch["mcpConfig"]> };
   }, { timeout: 15_000 });
-  const threadId = (await api("GET", "/api/routines")).body.runs.find((one: { id: string }) => one.id === started.body.run.id).threadId as string;
-  return { servers: Object.keys(launch.mcpConfig.mcpServers), threadId };
+  return Object.keys(launch.mcpConfig.mcpServers);
+};
+/** Starts a routine run with `token` (none: this machine): the launch's MCP servers and the run's thread. */
+const run = async (routineId: string, prompt: string, token?: string) => {
+  let runId = "";
+  const servers = await launched(prompt, async () => {
+    const started = await api("POST", `/api/routines/${routineId}/run`, undefined, token);
+    expect(started.status).toBe(201);
+    runId = started.body.run.id;
+  });
+  const threadId = (await api("GET", "/api/routines")).body.runs.find((one: { id: string }) => one.id === runId).threadId as string;
+  return { servers, threadId };
 };
 const routine = async (name: string, token?: string) => {
   const prompt = `${name}: tell me where the boss is today.`;
@@ -95,11 +104,8 @@ const noJobReachesThePhone = async () => {
   expect((await phone("GET", "/api/phones")).body.phones).toMatchObject([{ registration: { name: PHONE_NAME }, busy: false }]);
 };
 
-beforeAll(async () => {
-  fixture = await launchVerificationServer({ FAKE_CLAUDE_MODE: "hang" });
-  url = fixture.info.url;
-  release = join(fixture.info.dataDir, "release-hanging-turns");
-  await waitForExit(fixture.child, { signal: "SIGTERM" });
+/** This file's own server on the fixture's data, port and fake engine, with the test capability route open. */
+const start = async () => {
   const log = openSync(fixture.info.logPath, "a", 0o600);
   child = spawn(process.execPath, ["--experimental-strip-types", fileURLToPath(new URL("./index.ts", import.meta.url))], {
     cwd: fileURLToPath(new URL("..", import.meta.url)),
@@ -112,6 +118,14 @@ beforeAll(async () => {
     if (Date.now() > deadline) throw new Error("isolated phone server did not start");
     await new Promise(resolve => setTimeout(resolve, 20));
   }
+};
+
+beforeAll(async () => {
+  fixture = await launchVerificationServer({ FAKE_CLAUDE_MODE: "hang" });
+  url = fixture.info.url;
+  release = join(fixture.info.dataDir, "release-hanging-turns");
+  await waitForExit(fixture.child, { signal: "SIGTERM" });
+  await start();
   const found = (await api("GET", "/api/bots")).body.bots.find((bot: { chiefOfStaff?: boolean }) => bot.chiefOfStaff);
   chief = { id: found.id, threadId: found.mainThreadId ?? found.threadId };
   // The owner's own phone, paired with the owner's scopes, with its calendar allowed; the desk has the client scope only.
@@ -162,3 +176,23 @@ it("the desk editing the owner's routine takes the phone away from it until the 
   expect((await run(mine.id, mine.prompt)).servers).toContain(PHONE_MCP_SERVER);
   await settle();
 }, 120_000);
+
+it("where sign-in lets several people in, the desktop offers no phone, even to the owner's own turn", async () => {
+  // A turn of the owner's own at this machine, in a conversation of their own (the Chief's main chat now holds the
+  // desk's routine reports), has the phone until then.
+  const threadId = (await api("POST", `/api/bots/${chief.id}/tasks`, { title: "My morning" })).body.task.threadId as string;
+  await settle();
+  const ask = (text: string) => launched(text, async () => {
+    expect((await api("POST", `/api/bots/${chief.id}/messages`, { threadId, text })).status).toBe(202);
+  });
+  expect(await ask("What is on my calendar this morning?")).toContain(PHONE_MCP_SERVER);
+  await settle();
+  await waitForExit(child, { signal: "SIGTERM" });
+  const config = join(fixture.info.dataDir, "config.json");
+  writeFileSync(config, JSON.stringify({ ...JSON.parse(readFileSync(config, "utf8")), signIn: { members: ["teammate@example.com"] } }));
+  await start();
+  expect(await phone("PUT", "/api/phones/self", { installId: "install-0001", name: PHONE_NAME, platform: "ios", appVersion: "1.6.0", timeZone: "Asia/Kolkata", capabilities: { calendar: "full" } }))
+    .toMatchObject({ status: 403 });
+  expect(await ask("What is on my calendar this afternoon?")).not.toContain(PHONE_MCP_SERVER);
+  await settle();
+}, 90_000);

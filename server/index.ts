@@ -101,7 +101,7 @@ import { DATA_INTERNAL_MCP_PATH, dataRpc } from "./data/rpc.ts";
 import { createHighLevelHost } from "./highlevel/host.ts";
 import { HIGHLEVEL_INTERNAL_MCP_PATH } from "./highlevel/rpc.ts";
 import { createHighLevelService } from "./highlevel/service.ts";
-import { createHighLevelRoutes } from "./routes/highlevel.ts"; import { createPhoneHost } from "./phones/host.ts"; import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts"; import { PhoneRegistry } from "./phones/registry.ts"; import { PhoneJobs } from "./phones/jobs.ts"; import { createPhoneRoutes, isLongPollPath } from "./routes/phones.ts"; import { desktopLendingTurn, NOT_THE_OWNER } from "./phones/owner.ts";
+import { createHighLevelRoutes } from "./routes/highlevel.ts"; import { createPhoneHost } from "./phones/host.ts"; import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts"; import { PhoneRegistry } from "./phones/registry.ts"; import { PhoneJobs } from "./phones/jobs.ts"; import { createPhoneRoutes, isLongPollPath } from "./routes/phones.ts"; import { desktopLendingTurn, desktopPhonesOffered, NOT_THE_OWNER } from "./phones/owner.ts";
 import { createDataRoutes } from "./data/routes.ts";
 import { DataSheetRegistry } from "./data/sheet.ts";
 import { DataFailure } from "./data/types.ts";
@@ -703,7 +703,7 @@ const appLanguage = (): string | undefined => cfg.language ?? CLOUD_TEAM?.langua
 if (CLOUD_HOME) repairMovedWorkspacePaths(DATA_DIR);
 if (CLOUD_PERSONAL) sessions.requireAdmin(CLOUD_PERSONAL_REFUSAL);
 const lendingEnabled = () => sharedComputersEnabled(cfg) || CLOUD_HOME !== null;
-const CLOUD_HOME_LENDER = "cloud-home"; const DESKTOP_OWNER = "owner"; function phoneOwnerOf(auth: RequestAuth): string | null { return HOSTED_WORKSPACE || CLOUD_TEAM ? null : CLOUD_HOME ? (cloudOwnerSession(auth) ? CLOUD_OWNER_KEY : null) : ownerOrAdmin(auth) ? DESKTOP_OWNER : null; }
+const CLOUD_HOME_LENDER = "cloud-home"; const DESKTOP_OWNER = "owner"; const desktopPhones = () => desktopPhonesOffered({ sharedMembership: sharedMembership(), loopbackTrust: LOOPBACK.trust }); function phoneOwnerOf(auth: RequestAuth): string | null { return HOSTED_WORKSPACE || CLOUD_TEAM ? null : CLOUD_HOME ? (cloudOwnerSession(auth) ? CLOUD_OWNER_KEY : null) : desktopPhones() && ownerOrAdmin(auth) ? DESKTOP_OWNER : null; }
 /** Owner-written routines and owner-started runs: the only routine turns that may use a lent Mac on a Cloud home, or the desktop owner's phones elsewhere. */
 const cloudRoutineAuthors = CLOUD_HOME ? createCloudRoutineAuthors(join(DATA_DIR, "lending-routines.json")) : null; const desktopRoutineAuthors = CLOUD_HOME ? null : createCloudRoutineAuthors(join(DATA_DIR, "owner-routines.json"));
 const ownerStartedRoutineRuns = new Set<string>();
@@ -906,7 +906,7 @@ function cloudLendingRefusal(capability: Pick<InternalCapability, "botId" | "thr
   const refusal = cloudHomeLendingRefusal(cloudLendingTurn(capability));
   if (refusal) return refusal;
   return lendingMemory?.reconcile(capability.botId, foreignTurnRunning(capability.botId), { cached: true }).changedBySomeoneElse ? "memory-changed" : null;
-} /** Whose phones a turn may use: on a Cloud home the owner's, when the lent Mac would allow the turn; elsewhere the desktop owner's, as server/phones/owner.ts decides. */ function phoneTurnOwner(c: Pick<InternalCapability, "botId" | "threadId" | "generation">): string | null { if (HOSTED_WORKSPACE || CLOUD_TEAM) return null; if (CLOUD_HOME) return cloudLendingRefusal(c) === null ? CLOUD_OWNER_KEY : null; return cloudHomeLendingRefusal(desktopLendingTurn({ ...cloudLendingTurn(c), thread: store.messagesFor(c.threadId) }, { adminPersons: () => new Set(sessions.list().filter((s) => s.scopes.includes("admin")).map((s) => personKey(s))), originIsUser: () => turnOrigin(c).kind === "user", ownerWrote: (id) => { const r = routines?.listRoutines().find((x) => x.id === id); return Boolean(r && desktopRoutineAuthors?.authored(r.id, r)); } })) === null ? DESKTOP_OWNER : null; }
+} /** Whose phones a turn may use: on a Cloud home the owner's, when the lent Mac would allow the turn; elsewhere the desktop owner's, as server/phones/owner.ts decides. */ function phoneTurnOwner(c: Pick<InternalCapability, "botId" | "threadId" | "generation">): string | null { if (HOSTED_WORKSPACE || CLOUD_TEAM) return null; if (CLOUD_HOME) return cloudLendingRefusal(c) === null ? CLOUD_OWNER_KEY : null; if (!desktopPhones()) return null; return cloudHomeLendingRefusal(desktopLendingTurn({ ...cloudLendingTurn(c), thread: store.messagesFor(c.threadId) }, { adminPersons: () => new Set(sessions.list().filter((s) => s.scopes.includes("admin")).map((s) => personKey(s))), originIsUser: () => turnOrigin(c).kind === "user", ownerWrote: (id) => { const r = routines?.listRoutines().find((x) => x.id === id); return Boolean(r && desktopRoutineAuthors?.authored(r.id, r)); } })) === null ? DESKTOP_OWNER : null; }
 
 function cloudThreadStarters(threadId: string): (string | undefined)[] {
   const room = store.groupByThread(threadId);
