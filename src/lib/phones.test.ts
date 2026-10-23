@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { effectivePhoneApps, nextPhoneApps, phoneAppRows, phoneNames, type PublicPhone } from "./phones";
+import { effectivePhoneApps, nextPhoneApps, phoneAppChips, phoneAppRows, phoneNames, phonePlatformLabel, phoneRemovePath, type PublicPhone } from "./phones";
 
 function phone(name: string, capabilities: PublicPhone["registration"]["capabilities"]): PublicPhone {
   return {
@@ -45,5 +45,22 @@ describe("phone apps card decisions", () => {
 
   it("joins phone names", () => {
     expect(phoneNames([phone("Pixel", {}), phone("iPhone", {})])).toBe("Pixel, iPhone");
+  });
+});
+
+describe("phone list helpers", () => {
+  it("lists allowed apps in capability order", () => {
+    expect(phoneAppChips(phone("P", { messages: "x", calendar: "y", home: "z" }))).toEqual(["calendar", "home", "messages"]);
+    expect(phoneAppChips(phone("P", {}))).toEqual([]);
+  });
+
+  it("labels platforms", () => {
+    expect(phonePlatformLabel("ios")).toBe("iPhone");
+    expect(phonePlatformLabel("android")).toBe("Android");
+  });
+
+  it("encodes the key in the remove path", () => {
+    expect(phoneRemovePath("session:abc")).toBe("/api/phones/session%3Aabc");
+    expect(phoneRemovePath("companion:d1")).toBe("/api/phones/companion%3Ad1");
   });
 });

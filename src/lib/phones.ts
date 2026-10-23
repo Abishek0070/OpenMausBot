@@ -67,6 +67,18 @@ export function phoneNames(phones: PublicPhone[]): string {
   return phones.map((phone) => phone.registration.name).join(", ");
 }
 
+export function phoneAppChips(phone: PublicPhone): PhoneCapability[] {
+  return PHONE_CAPABILITIES.filter((cap) => Boolean(phone.registration.capabilities[cap]));
+}
+
+export function phonePlatformLabel(platform: "ios" | "android"): string {
+  return platform === "ios" ? "iPhone" : "Android";
+}
+
+export function phoneRemovePath(key: string): string {
+  return `/api/phones/${encodeURIComponent(key)}`;
+}
+
 export function usePhones(): { phase: "loading" | "ready"; phones: PublicPhone[]; refresh(): void } {
   const [state, setState] = useState<{ phase: "loading" | "ready"; phones: PublicPhone[] }>({ phase: "loading", phones: [] });
   const disposed = useRef(false);
