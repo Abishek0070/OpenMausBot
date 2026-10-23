@@ -60,7 +60,7 @@ type NameValue = Array<{ name: string; value: string }>;
 export type AcpMcpServer = { name: string; command: string; args: string[]; env: NameValue }
   | { type: "http"; name: string; url: string; headers: NameValue };
 
-const HARNESS_KINDS = ["browser", "computer", "data", "highlevel"] as const;
+const HARNESS_KINDS = ["browser", "computer", "data", "highlevel", "device"] as const;
 
 /** OpenMausBot's own server behind a stdio proxy, as its HTTP endpoint on this server; null for any other server (the
  * person's, or one wrapped in a tool-selection gate). */
