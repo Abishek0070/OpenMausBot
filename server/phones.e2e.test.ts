@@ -3,7 +3,8 @@
 // and the phone hears of the job over SSE. A bot without a grant sees no phone tools, and a read-and-draft run gets no
 // phone at all.
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 
@@ -24,6 +25,8 @@ let url: string;
 let chief: { id: string; threadId: string };
 let pairing: { token: string; session: { id: string } };
 let events: SseRecorder | undefined;
+/** While this file exists every hanging fake turn ends normally (FAKE_CLAUDE_RELEASE). */
+let release: string;
 
 const api = async (method: string, path: string, body?: unknown, token?: string) => {
   const response = await fetch(url + path, {
@@ -33,6 +36,15 @@ const api = async (method: string, path: string, body?: unknown, token?: string)
   return { status: response.status, body: await response.json() as any };
 };
 const phone = (method: string, path: string, body?: unknown) => api(method, path, body, pairing.token);
+const pair = async (label: string, scopes: string[]) => {
+  const opened = await api("POST", "/api/auth/pairing", { label, scopes });
+  expect(opened.status).toBe(200);
+  const paired = (await api("POST", "/api/auth/pair", { code: opened.body.code })).body as typeof pairing;
+  expect(paired.token).toMatch(/^omb_sess_/u);
+  return paired;
+};
+const registration = (installId: string, name: string) =>
+  ({ installId, name, platform: "ios", appVersion: "1.6.0", timeZone: "Asia/Kolkata", capabilities: { calendar: "full" } });
 const rpc = async (token: string, method: string, params: unknown = {}) => {
   const response = await fetch(url + PHONE_INTERNAL_MCP_PATH, {
     method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
@@ -48,25 +60,42 @@ const mint = async (botId: string, threadId: string) => {
   expect(response.status).toBe(201);
   return (await response.json() as any).token as string;
 };
-/** Starts whatever begins a turn and returns that turn's launch: its MCP servers and its system prompt. */
-const launched = async (start: () => Promise<void>) => {
+type Launch = { prompt: unknown; mcpConfig: { mcpServers: Record<string, { env: Record<string, string> }> } | null; systemPrompt: string | null };
+/** Starts whatever begins a turn and returns the launch whose prompt carries `marker`: its MCP servers and its system prompt. */
+const launched = async (marker: string, start: () => Promise<void>) => {
   rmSync(fixture.fixtureDumpPath, { force: true });
   await start();
-  await vi.waitFor(() => expect(existsSync(fixture.fixtureDumpPath)).toBe(true), { timeout: 15_000 });
-  return JSON.parse(readFileSync(fixture.fixtureDumpPath, "utf8")) as { mcpConfig: { mcpServers: Record<string, { env: Record<string, string> }> }; systemPrompt: string | null };
+  return vi.waitFor(() => {
+    expect(existsSync(fixture.fixtureDumpPath)).toBe(true);
+    const dump = JSON.parse(readFileSync(fixture.fixtureDumpPath, "utf8")) as Launch;
+    expect(JSON.stringify(dump.prompt)).toContain(marker);
+    expect(dump.mcpConfig).not.toBeNull();
+    return dump as Launch & { mcpConfig: NonNullable<Launch["mcpConfig"]> };
+  }, { timeout: 15_000 });
 };
-const turn = (bot: { id: string; threadId: string }, text: string) => launched(async () => {
-  expect((await api("POST", `/api/bots/${bot.id}/messages`, { threadId: bot.threadId, text })).status).toBe(202);
+/** Ends every hanging turn and waits for the Chief to be idle, since a busy bot queues a new conversation's message;
+ * the turns after it hang again. */
+const settle = async () => {
+  writeFileSync(release, "");
+  try {
+    await expect.poll(async () => (await api("GET", "/api/bots")).body.bots.find((bot: { id: string }) => bot.id === chief.id).busy, { timeout: 20_000 }).toBe(false);
+  } finally {
+    rmSync(release, { force: true });
+  }
+};
+const turn = (bot: { id: string; threadId: string }, text: string, token?: string) => launched(text, async () => {
+  expect((await api("POST", `/api/bots/${bot.id}/messages`, { threadId: bot.threadId, text }, token)).status).toBe(202);
 });
 
 beforeAll(async () => {
   fixture = await launchVerificationServer({ FAKE_CLAUDE_MODE: "hang" });
   url = fixture.info.url;
+  release = join(fixture.info.dataDir, "release-hanging-turns");
   await waitForExit(fixture.child, { signal: "SIGTERM" });
   const log = openSync(fixture.info.logPath, "a", 0o600);
   child = spawn(process.execPath, ["--experimental-strip-types", fileURLToPath(new URL("./index.ts", import.meta.url))], {
     cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: { ...verificationServerEnvironment({ FAKE_CLAUDE_MODE: "hang" }, fixture.info.dataDir, Number(new URL(url).port)), OMB_TEST_INTERNAL_CAPABILITY_KEY: key },
+    env: { ...verificationServerEnvironment({ FAKE_CLAUDE_MODE: "hang", FAKE_CLAUDE_RELEASE: release, FAKE_CLAUDE_TEXT_DUMP: join(fixture.info.dataDir, "one-shot-dump.json") }, fixture.info.dataDir, Number(new URL(url).port)), OMB_TEST_INTERNAL_CAPABILITY_KEY: key },
     stdio: ["ignore", log, log],
   });
   closeSync(log);
@@ -78,10 +107,7 @@ beforeAll(async () => {
   const found = (await api("GET", "/api/bots")).body.bots.find((bot: { chiefOfStaff?: boolean }) => bot.chiefOfStaff);
   chief = { id: found.id, threadId: found.mainThreadId ?? found.threadId };
   // The owner's own phone: paired from the desktop with the owner's scopes, so it also hears the owner-only job nudge.
-  const opened = await api("POST", "/api/auth/pairing", { label: PHONE_NAME, scopes: ["admin", "client"] });
-  expect(opened.status).toBe(200);
-  pairing = (await api("POST", "/api/auth/pair", { code: opened.body.code })).body;
-  expect(pairing.token).toMatch(/^omb_sess_/u);
+  pairing = await pair(PHONE_NAME, ["admin", "client"]);
 }, 60_000);
 
 afterAll(async () => {
@@ -93,9 +119,7 @@ afterAll(async () => {
 it("a registered phone's tools reach the bot and a job round-trips", async () => {
   const phoneKey = `session:${pairing.session.id}`;
   events = await openSse(`${url}/api/events`, { authorization: `Bearer ${pairing.token}`, origin: url });
-  const registered = await phone("PUT", "/api/phones/self", {
-    installId: "install-0001", name: PHONE_NAME, platform: "ios", appVersion: "1.6.0", timeZone: "Asia/Kolkata", capabilities: { calendar: "full" },
-  });
+  const registered = await phone("PUT", "/api/phones/self", registration("install-0001", PHONE_NAME));
   expect(registered).toMatchObject({ status: 200, body: { phone: { key: phoneKey, online: true, registration: { name: PHONE_NAME } } } });
   // The per-bot grants picker lists the phone's tools once a phone is registered.
   expect((await api("GET", "/api/connectors/tools")).body.services.phone.map((tool: { name: string }) => tool.name)).toContain("PHONE_LIST_EVENTS");
@@ -145,9 +169,9 @@ it("a confined run has no device integration", async () => {
     expect(created.status).toBe(201);
     return created.body.routine.id as string;
   };
-  const run = async (id: string) => {
+  const run = async (id: string, name: string) => {
     let runId = "";
-    const launch = await launched(async () => {
+    const launch = await launched(`${name}: look at my calendar.`, async () => {
       const started = await api("POST", `/api/routines/${id}/run`);
       expect(started.status).toBe(201);
       runId = started.body.run.id;
@@ -156,9 +180,46 @@ it("a confined run has no device integration", async () => {
     return { launch, threadId };
   };
   // The same routine at the bot's own level reaches the phone, so the read-and-draft run below loses it to the fence alone.
-  expect(Object.keys((await run(await routine("Calendar look"))).launch.mcpConfig.mcpServers)).toContain(PHONE_MCP_SERVER);
-  const confined = await run(await routine("Calendar watch", "read-and-draft"));
+  expect(Object.keys((await run(await routine("Calendar look"), "Calendar look")).launch.mcpConfig.mcpServers)).toContain(PHONE_MCP_SERVER);
+  const confined = await run(await routine("Calendar watch", "read-and-draft"), "Calendar watch");
   expect(Object.keys(confined.launch.mcpConfig.mcpServers)).not.toContain(PHONE_MCP_SERVER);
   const refused = await rpc(await mint(chief.id, confined.threadId), "tools/list");
   expect(refused).toEqual({ status: 403, body: { error: READ_AND_DRAFT_REFUSAL } });
+}, 60_000);
+
+it("only the owner's own sessions hold a phone or lend their turn to one", async () => {
+  // A paired device without the owner's scopes cannot make itself one of the owner's phones.
+  const desk = await pair("Front desk iPad", ["client"]);
+  expect(await api("PUT", "/api/phones/self", registration("install-0002", "Front desk iPad"), desk.token)).toMatchObject({ status: 403 });
+  // A conversation the owner opened and wrote in from their paired phone is the owner's: its lines carry that session.
+  const mine = (await api("POST", `/api/bots/${chief.id}/tasks`, { title: "From my phone" }, pairing.token)).body.task;
+  await settle();
+  const launch = await turn({ id: chief.id, threadId: mine.threadId }, "Am I free at four?", pairing.token);
+  expect(launch.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
+  // One opened and written from the front desk is not.
+  const theirs = (await api("POST", `/api/bots/${chief.id}/tasks`, { title: "From the desk" }, desk.token)).body.task;
+  await settle();
+  const other = await turn({ id: chief.id, threadId: theirs.threadId }, "Is the boss free at four?", desk.token);
+  expect(other.mcpConfig.mcpServers[PHONE_MCP_SERVER]).toBeUndefined();
+}, 60_000);
+
+it("a conversation a routine reported into keeps the phone", async () => {
+  const reports = (await api("POST", `/api/bots/${chief.id}/tasks`, { title: "Morning reports" })).body.task;
+  const created = await api("POST", "/api/routines", {
+    name: "Morning look", prompt: "Morning look: check my calendar.", botId: chief.id,
+    schedule: { type: "interval", everyMinutes: 60, anchorAt: Date.now() + 60 * 60_000 }, resultsThreadId: reports.threadId,
+  });
+  expect(created.status).toBe(201);
+  const routineId = created.body.routine.id as string;
+  // Let the run finish, so its report lands in the conversation; later turns hang again.
+  writeFileSync(release, "");
+  try {
+    expect((await api("POST", `/api/routines/${routineId}/run`)).status).toBe(201);
+    await expect.poll(async () => (await api("GET", `/api/threads/${reports.threadId}/messages?limit=50`)).body.messages
+      .some((line: { automation?: { routineId?: string } }) => line.automation?.routineId === routineId), { timeout: 20_000 }).toBe(true);
+  } finally {
+    rmSync(release, { force: true });
+  }
+  const launch = await turn({ id: chief.id, threadId: reports.threadId }, "Anything after that on my calendar?");
+  expect(launch.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
 }, 60_000);

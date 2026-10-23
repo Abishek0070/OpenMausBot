@@ -703,7 +703,7 @@ const appLanguage = (): string | undefined => cfg.language ?? CLOUD_TEAM?.langua
 if (CLOUD_HOME) repairMovedWorkspacePaths(DATA_DIR);
 if (CLOUD_PERSONAL) sessions.requireAdmin(CLOUD_PERSONAL_REFUSAL);
 const lendingEnabled = () => sharedComputersEnabled(cfg) || CLOUD_HOME !== null;
-const CLOUD_HOME_LENDER = "cloud-home"; const DESKTOP_OWNER = "owner"; function phoneOwnerOf(auth: RequestAuth): string | null { return HOSTED_WORKSPACE || CLOUD_TEAM ? null : CLOUD_HOME ? (cloudOwnerSession(auth) ? CLOUD_OWNER_KEY : null) : DESKTOP_OWNER; }
+const CLOUD_HOME_LENDER = "cloud-home"; const DESKTOP_OWNER = "owner"; function phoneOwnerOf(auth: RequestAuth): string | null { return HOSTED_WORKSPACE || CLOUD_TEAM ? null : CLOUD_HOME ? (cloudOwnerSession(auth) ? CLOUD_OWNER_KEY : null) : ownerOrAdmin(auth) ? DESKTOP_OWNER : null; }
 /** Owner-written routines and owner-started runs: the only routine turns that may use a lent Mac. */
 const cloudRoutineAuthors = CLOUD_HOME ? createCloudRoutineAuthors(join(DATA_DIR, "lending-routines.json")) : null;
 const ownerStartedRoutineRuns = new Set<string>();
@@ -906,7 +906,7 @@ function cloudLendingRefusal(capability: Pick<InternalCapability, "botId" | "thr
   const refusal = cloudHomeLendingRefusal(cloudLendingTurn(capability));
   if (refusal) return refusal;
   return lendingMemory?.reconcile(capability.botId, foreignTurnRunning(capability.botId), { cached: true }).changedBySomeoneElse ? "memory-changed" : null;
-} /** Whose phones a turn may use: on a Cloud home the owner's, when the lent Mac would allow the turn; elsewhere the owner's, for a turn whose lines name no person (a person's session line carries its sender) or a routine run, never a webhook. */ function phoneTurnOwner(c: Pick<InternalCapability, "botId" | "threadId" | "generation">): string | null { if (HOSTED_WORKSPACE || CLOUD_TEAM) return null; if (CLOUD_HOME) return cloudLendingRefusal(c) === null ? CLOUD_OWNER_KEY : null; const turn = cloudLendingTurn(c); return cloudHomeLendingRefusal({ ...turn, ownerPerson: (p) => p === undefined, routineRun: () => { const run = turn.routineRun(); return run && { ...run, ownerStarted: true, ownerAuthored: true }; } }) === null ? DESKTOP_OWNER : null; }
+} /** Whose phones a turn may use: on a Cloud home the owner's, when the lent Mac would allow the turn; elsewhere the owner's, in a conversation only this machine and admin sessions wrote in and no webhook posted to (every routine here is the owner's), never a webhook's run. */ function phoneTurnOwner(c: Pick<InternalCapability, "botId" | "threadId" | "generation">): string | null { if (HOSTED_WORKSPACE || CLOUD_TEAM) return null; if (CLOUD_HOME) return cloudLendingRefusal(c) === null ? CLOUD_OWNER_KEY : null; const turn = cloudLendingTurn(c); const admins = new Set(sessions.list().filter((s) => s.scopes.includes("admin")).map((s) => personKey(s))); return cloudHomeLendingRefusal({ ...turn, reportsFromOthers: store.messagesFor(c.threadId).some((line) => line.webhookPost === true), ownerPerson: (p) => p === undefined || admins.has(p), routineRun: () => { const run = turn.routineRun(); return run && { ...run, ownerStarted: true, ownerAuthored: true }; } }) === null ? DESKTOP_OWNER : null; }
 
 function cloudThreadStarters(threadId: string): (string | undefined)[] {
   const room = store.groupByThread(threadId);
