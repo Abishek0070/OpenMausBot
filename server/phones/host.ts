@@ -1,8 +1,8 @@
 // What server/index.ts needs from the phone integration, in one object so the host file gains only a few lines: the
 // per-turn mount, the prompt part and the internal MCP handler (owner check, per-bot verdict, decision rows, the send
 // hold, the phone job, write activity).
-import { PHONE_MCP_SERVER, phoneToolCapability, phoneToolSends, type PhoneCapability } from "../../shared/phone-apps.ts";
-import { outboundCallsIn } from "../../shared/outbound.ts";
+import { isOutboundTool, outboundCallsIn } from "../../shared/outbound.ts";
+import { PHONE_MCP_SERVER, phoneToolCapability, type PhoneCapability, type PhoneToolName } from "../../shared/phone-apps.ts";
 import { appendDecision } from "../decision-log.ts";
 import { harnessMcpTokenEnv } from "../harness-mcp-token.ts";
 import type { OutboundHold } from "../outbound-hold.ts";
@@ -12,7 +12,7 @@ import { capName, phoneAccess, phoneAppsFor, phoneSystemPrompt, type PhoneAccess
 import { PHONE_NO_PHONE_TEXT } from "./instructions.ts";
 import { PHONE_JOB_TIMEOUT_MS, PHONE_SEND_TIMEOUT_MS, type PhoneJobs } from "./jobs.ts";
 import type { PhoneRecord, PhoneRegistry } from "./registry.ts";
-import { phoneRpc, type PhoneTarget, type PhoneToolsList } from "./rpc.ts";
+import { phoneRpc, type PhoneRefusal, type PhoneTarget, type PhoneToolsList } from "./rpc.ts";
 import { PHONE_TOOLS, type PhoneToolResult } from "./tools.ts";
 
 type TurnCapability = { botId: string; threadId: string; generation: string };
@@ -47,19 +47,25 @@ export interface PhoneHost {
 const NOT_OWNER_TEXT = "This conversation can't use a phone: only the owner's own turns can.";
 const GONE_TEXT = "This bot no longer exists.";
 
-const recency = (phone: PhoneRecord) => phone.lastUsedAt ?? phone.seen;
+/** The default phone: used ones first, the latest use first; then never-used ones, the newest pairing first. The poll
+ * heartbeat (`seen`) never ranks: a phone that merely polled must not take a send meant for the one in use. */
+const byUse = (a: PhoneRecord, b: PhoneRecord) =>
+  a.lastUsedAt !== null && b.lastUsedAt !== null ? b.lastUsedAt - a.lastUsedAt
+    : a.lastUsedAt !== null ? -1 : b.lastUsedAt !== null ? 1 : b.registeredAt - a.registeredAt;
 const allows = (phone: PhoneRecord, cap: PhoneCapability) => Boolean(phone.registration.capabilities[cap]);
 const target = (phone: PhoneRecord): PhoneTarget => ({ key: phone.key, name: phone.registration.name, platform: phone.registration.platform });
+const notAllowed = (phone: string, name: PhoneToolName): PhoneRefusal =>
+  ({ ok: false, code: "denied", text: `${phone} does not allow ${capName(phoneToolCapability(name))}.` });
 const denied = (name: string, text: string, rule: string, summary: string): PhoneAccess =>
   ({ ok: false, text, rows: [{ tool: name, summary, decision: "auto-denied", rule }] });
 
 export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
   const { registry, jobs } = deps;
-  /** The owner's phones that allow at least one app, the most recently used first (the default phone). */
+  /** The owner's phones that allow at least one app, in default order. */
   const phonesOf = (owner: string) => registry.forOwner(owner)
     .filter((phone) => Object.values(phone.registration.capabilities).some(Boolean))
-    .sort((a, b) => recency(b) - recency(a));
-  /** The apps any of the owner's phones allows: what exists for the verdict. The chosen phone's own apps decide at run. */
+    .sort(byUse);
+  /** The apps any of the owner's phones allows: what exists for the verdict. The chosen phone's own apps decide the pick and are checked again before it runs. */
   const merged = (phones: PhoneRecord[]) => Object.assign({}, ...phones.map((phone) => phone.registration.capabilities)) as Partial<Record<PhoneCapability, string>>;
   const mounts = (bot: PhoneBot, owner: string | null) => {
     if (owner === null) return false;
@@ -81,6 +87,7 @@ export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
     toolListing: () => (registry.list(null, () => false).length === 0 ? null : { phone: PHONE_TOOLS.map(({ name, description }) => ({ name, description })) }),
     async handle(body, capability, assertActive) {
       const active = () => deps.active(capability);
+      const send = (name: string, args: Record<string, unknown>) => ({ threadId: capability.threadId, tool: name, calls: outboundCallsIn(name, args), opaque: false });
       return phoneRpc(body as { method?: unknown; params?: unknown }, {
         assertActive,
         // Re-read the live bot and the turn's owner on every call, so a permission change wins over a request
@@ -98,36 +105,43 @@ export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
           }
           return verdict.ok ? { ok: true } : { ok: false, text: verdict.text };
         },
-        phone: (preferred) => {
+        // A named phone is looked up among all of the owner's phones; the default only among those allowing the tool's app.
+        phone: (preferred, name) => {
           const owner = deps.turnOwner(capability);
-          const phones = owner === null ? [] : phonesOf(owner);
+          const phones = owner === null ? [] : registry.forOwner(owner).sort(byUse);
+          if (preferred === undefined) {
+            const chosen = phones.find((phone) => allows(phone, phoneToolCapability(name)));
+            return chosen ? target(chosen) : null;
+          }
           if (phones.length === 0) return null;
-          if (preferred === undefined) return target(phones[0]!);
           const wanted = preferred.trim().toLowerCase();
           const match = phones.find((phone) => phone.registration.name.trim().toLowerCase() === wanted);
-          return match ? target(match) : { ok: false, text: `${PHONE_NO_PHONE_TEXT} Available phones: ${phones.map((phone) => phone.registration.name).join(", ")}.` };
+          if (!match) return { ok: false, code: "no_phone", text: `${PHONE_NO_PHONE_TEXT} Available phones: ${phones.map((phone) => phone.registration.name).join(", ")}.` };
+          return allows(match, phoneToolCapability(name)) ? target(match) : notAllowed(match.registration.name, name);
         },
         holdSend: async (name, args) => {
           const bot = deps.bot(capability.botId);
           if (!bot) return { ok: false, text: GONE_TEXT };
-          const send = { threadId: capability.threadId, tool: name, calls: outboundCallsIn(name, args), opaque: false };
           const fullAccess = deps.sendsFreely(capability);
-          const held = await deps.outboundHold.hold({ bot, ...send, fullAccess, active });
-          if (!held.ok) return held;
-          // At dispatch, as the connectors route does: the live bot's policy, and Full access only if it still holds.
-          const fresh = deps.bot(capability.botId);
-          if (!fresh) return { ok: false, text: GONE_TEXT };
-          try { deps.outboundHold.reserve({ bot: fresh, ...send, fullAccess: fullAccess && deps.sendsFreely(capability), approved: held.approved }); }
+          const held = await deps.outboundHold.hold({ bot, ...send(name, args), fullAccess, active });
+          return held.ok ? { ...held, fullAccess } : held;
+        },
+        allows: (phone, name) => {
+          const record = registry.get(phone.key);
+          if (!record) return { ok: false, code: "no_phone", text: PHONE_NO_PHONE_TEXT };
+          return allows(record, phoneToolCapability(name)) ? { ok: true } : notAllowed(phone.name, name);
+        },
+        // At dispatch, as the connectors route does: the live bot's policy, and Full access only if it still holds.
+        reserveSend: (name, args, hold) => {
+          const bot = deps.bot(capability.botId);
+          if (!bot) return { ok: false, text: GONE_TEXT };
+          try { deps.outboundHold.reserve({ bot, ...send(name, args), fullAccess: hold.fullAccess && deps.sendsFreely(capability), approved: hold.approved }); }
           catch (error) { return { ok: false, text: error instanceof Error ? error.message : String(error) }; }
           return { ok: true };
         },
         run: async (phone, name, args) => {
-          const record = registry.get(phone.key);
-          if (!record) return { ok: false, error: PHONE_NO_PHONE_TEXT };
-          const cap = phoneToolCapability(name);
-          if (!allows(record, cap)) return { ok: false, code: "denied", error: `${phone.name} does not allow ${capName(cap)}.` };
           const outcome = await jobs.request(phone.key, name, args, {
-            active, timeoutMs: phoneToolSends(name) ? PHONE_SEND_TIMEOUT_MS : PHONE_JOB_TIMEOUT_MS,
+            active, timeoutMs: isOutboundTool(name) ? PHONE_SEND_TIMEOUT_MS : PHONE_JOB_TIMEOUT_MS,
             offlineText: `${phone.name} is offline. Open the MausBot app on it.`, online: () => registry.online(phone.key),
           });
           if (outcome.ok) registry.used(phone.key);
