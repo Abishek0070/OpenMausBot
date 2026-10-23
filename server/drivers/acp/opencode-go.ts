@@ -10,6 +10,7 @@ import { DATA_DIR, OPENCODE_PROVIDER_ENV } from "../../config.ts";
 import { hostedWorkspaceConfigured } from "../../enterprise.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { applyStandaloneSpawnEnv } from "../../engine-install.ts";
+import { isAppStandaloneCopy } from "../../engine-standalone.ts";
 import { OPENCODE_STANDALONE } from "./opencode-release.ts";
 import { createAcpDriver, type AccountErrorCode, type AcpConfig, type AcpSupport } from "./core.ts";
 import { offeredModels } from "./config-options.ts";
@@ -561,6 +562,18 @@ export function openCodeFreeFallback(ownAccess: boolean, models: ModelCatalog): 
     && models.options.every((option) => option.custom === true || OPENCODE_OWN_MODEL.test(option.id));
 }
 
+/** Zen's free models whose provider keeps no prompt and trains on none (opencode.ai/docs/zen, 2026-10-24), best first.
+ * Big Pickle and MiMo may use prompts to improve their models; Beam keeps them for 30 days. */
+export const NO_RETENTION_FREE_MODELS = ["opencode/glm-5.3-flash-free", "opencode/deepseek-v4.1-flash-free"] as const;
+
+/** The app's own copy with nothing of the person's in it (the free backup, server/free-fallback.ts) starts on a model that
+ * keeps nothing, when one is offered. Any other OpenCode, or one signed in to anything, keeps its own pick. */
+function backupStartsOnNoRetention(catalog: ModelCatalog, environment: Record<string, string | undefined>, cli: string): ModelCatalog {
+  if (ownOpenCodeAccess(environment) || !isAppStandaloneCopy(cli)) return catalog;
+  const keepsNothing = NO_RETENTION_FREE_MODELS.find((id) => catalog.options.some((option) => option.id === id));
+  return keepsNothing ? { ...catalog, default: keepsNothing } : catalog;
+}
+
 function withinFolder(path: string, folder: string): boolean {
   const rest = relative(resolvePath(folder), resolvePath(path));
   return rest === "" || (rest !== ".." && !rest.startsWith(`..${sep}`) && !isAbsolute(rest));
@@ -804,7 +817,7 @@ const support = (loadCatalog: OpenCodeCatalogLoader, ownAccess = new Map<string,
   classifyError: classifyOpenCodeError,
   describeAccountError: describeOpenCodeAccountError,
   resolveModels: async (environment, config) => mergeLocalInject(
-    await loadCatalog(environment, config.cli),
+    backupStartsOnNoRetention(await loadCatalog(environment, config.cli), environment, config.cli),
     environment,
   ),
   buildPromptText: (turn) => turn.system ? `${turn.system}\n\n${turn.text}` : turn.text,

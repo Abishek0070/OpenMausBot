@@ -1315,3 +1315,63 @@ describe.skipIf(process.platform === "win32")("which OpenCode runs", () => {
     expect(env.OPENCODE_DISABLE_AUTOUPDATE).toBe("1");
   });
 });
+
+describe("the free backup's model on the app's own copy of OpenCode", () => {
+  const noKeys = { OPENCODE_API_KEY: "", OPENCODE_AUTH_CONTENT: "", ...Object.fromEntries(OPENCODE_PROVIDER_ENV.map((key) => [key, ""])) };
+  // OpenCode's own pick comes first, as discovery reports it.
+  const FREE = ["opencode/mimo-v2.6-flash-free", "opencode/big-pickle", "opencode/glm-5.3-flash-free", "opencode/deepseek-v4.1-flash-free"];
+
+  async function startsOn(options: { appCopy: boolean; offered?: string[]; environment?: Record<string, string>; login?: Record<string, unknown> }) {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-opencode-backup-model-"));
+    let cli = FAKE_CLI;
+    if (options.appCopy) {
+      const bin = join(standaloneEngineDir("opencode"), "bin");
+      mkdirSync(bin, { recursive: true });
+      cli = join(bin, "opencode");
+      writeFileSync(cli, `#!/bin/sh\nexec '${FAKE_CLI}' "$@"\n`, { mode: 0o755 });
+    }
+    if (options.login) {
+      mkdirSync(join(scratch, "data", "opencode"), { recursive: true });
+      writeFileSync(join(scratch, "data", "opencode", "auth.json"), JSON.stringify(options.login));
+    }
+    resetOpenCodeModelCache();
+    const driver = createOpenCodeDriver(async () => catalog(...(options.offered ?? FREE)));
+    const instance = await driver.create({
+      instanceId: "opencode-backup-model", displayName: "OpenCode", enabled: true, config: { cli, fullAuto: false },
+      environment: { HOME: scratch, USERPROFILE: scratch, XDG_DATA_HOME: join(scratch, "data"), ...noKeys, ...options.environment },
+    });
+    try {
+      await instance.refreshModels?.();
+      return instance.models.default;
+    } finally {
+      await instance.dispose();
+      await removeTempDir(standaloneEngineDir("opencode"));
+      await removeTempDir(scratch);
+      resetOpenCodeModelCache();
+    }
+  }
+
+  it("starts on GLM-5.3-Flash Free, whose provider keeps nothing and trains on nothing", async () => {
+    expect(await startsOn({ appCopy: true })).toBe("opencode/glm-5.3-flash-free");
+  });
+
+  it("takes DeepSeek V4.1 Flash Free, which keeps nothing either, when GLM is not offered", async () => {
+    expect(await startsOn({ appCopy: true, offered: FREE.filter((id) => !id.includes("glm")) })).toBe("opencode/deepseek-v4.1-flash-free");
+  });
+
+  it("keeps OpenCode's own pick when neither is offered", async () => {
+    expect(await startsOn({ appCopy: true, offered: ["opencode/mimo-v2.6-flash-free", "opencode/big-pickle"] })).toBe("opencode/mimo-v2.6-flash-free");
+  });
+
+  it("leaves the model of an OpenCode the person installed alone", async () => {
+    expect(await startsOn({ appCopy: false })).toBe("opencode/mimo-v2.6-flash-free");
+  });
+
+  it.each<[string, Parameters<typeof startsOn>[0]]>([
+    ["an OpenCode login", { appCopy: true, login: { opencode: { type: "oauth", access: "acc-token", refresh: "ref-token" } } }],
+    ["an OpenCode key", { appCopy: true, environment: { OPENCODE_API_KEY: "zen-key" } }],
+    ["a provider key", { appCopy: true, environment: { ANTHROPIC_API_KEY: "provider-key" } }],
+  ])("leaves the app's copy on its own pick with %s of the person's", async (_label, options) => {
+    expect(await startsOn(options)).toBe("opencode/mimo-v2.6-flash-free");
+  });
+});
