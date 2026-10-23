@@ -58,6 +58,34 @@ describe("phone jobs", () => {
     expect(() => jobs.complete(KEY, "nope", { ok: true, result: 1 })).toThrow(/This job expired; it will not be replayed\./);
   });
 
+  it("a result for a job whose turn ended is refused and never applied", async () => {
+    const jobs = new PhoneJobs();
+    let active = true;
+    const outcome = jobs.request(KEY, "PHONE_LIST_EVENTS", {}, turn({ active: () => active }));
+    const job = await jobs.poll(KEY);
+    expect(jobs.lease(KEY, job!.id)).toBe(true);
+    active = false;
+    expect(() => jobs.complete(KEY, job!.id, { ok: true, result: 1 })).toThrow(expect.objectContaining({ status: 409 }));
+    await expect(outcome).resolves.toEqual({ ok: false, code: "turn_ended", error: "The requesting turn ended" });
+    expect(jobs.busy(KEY)).toBe(false);
+    // lease on a dead turn fails it; a request whose turn is already over never queues; a queued dead job is dropped by poll
+    let live = true;
+    const second = jobs.request(KEY, "PHONE_LIST_EVENTS", {}, turn({ active: () => live }));
+    const delivered = await jobs.poll(KEY);
+    live = false;
+    expect(jobs.lease(KEY, delivered!.id)).toBe(false);
+    await expect(second).resolves.toMatchObject({ code: "turn_ended" });
+    await expect(jobs.request(KEY, "PHONE_LIST_EVENTS", {}, turn({ active: () => false }))).resolves.toMatchObject({ code: "turn_ended" });
+    let queuedLive = true;
+    const queued = jobs.request(KEY, "PHONE_LIST_EVENTS", {}, turn({ active: () => queuedLive }));
+    queuedLive = false;
+    vi.useFakeTimers();
+    const poll = jobs.poll(KEY);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(poll).resolves.toBeNull();
+    await expect(queued).resolves.toMatchObject({ code: "turn_ended" });
+  });
+
   it("runs one job at a time per phone and nudges on queue", async () => {
     const onQueued = vi.fn();
     const jobs = new PhoneJobs(onQueued);
@@ -89,6 +117,12 @@ describe("phone jobs", () => {
     expect(JSON.stringify(big).length).toBeGreaterThan(PHONE_RESULT_MAX_BYTES);
     jobs.complete(KEY, job!.id, { ok: true, result: big });
     await expect(outcome).resolves.toEqual({ ok: false, code: "too_large", error: "The phone's answer was over 256 KB; ask for a narrower range." });
+    const multi = jobs.request(KEY, "PHONE_LIST_EVENTS", {}, turn());
+    const next = await jobs.poll(KEY);
+    jobs.lease(KEY, next!.id);
+    const devanagari = "\u0915".repeat(100_000); // 100k characters, 300k bytes
+    jobs.complete(KEY, next!.id, { ok: true, result: devanagari });
+    await expect(multi).resolves.toMatchObject({ ok: false, code: "too_large" });
   });
 
   it("close fails every waiting request as offline", async () => {
@@ -100,6 +134,13 @@ describe("phone jobs", () => {
     const text = "This server is restarting. Phone jobs resume by themselves once it is back.";
     await expect(queued).resolves.toEqual({ ok: false, code: "offline", error: text });
     await expect(delivered).resolves.toEqual({ ok: false, code: "offline", error: text });
+  });
+
+  it("a poll after close resolves null at once and leaves no state", async () => {
+    const jobs = new PhoneJobs();
+    jobs.close();
+    await expect(jobs.poll(KEY)).resolves.toBeNull();
+    expect(jobs.polling(KEY)).toBe(false);
   });
 
   it("in-turn jobs go first and a background job survives its turn ending", async () => {

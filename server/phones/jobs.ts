@@ -89,6 +89,7 @@ export class PhoneJobs {
   }
   /** The newest poll wins: one whose client dropped never takes the next job. */
   async poll(key: string, gone?: AbortSignal): Promise<PhoneJobDelivery | null> {
+    if (this.closed) return null;
     const phone = this.phone(key);
     const mine = ++phone.polls;
     phone.wake?.();
@@ -133,8 +134,11 @@ export class PhoneJobs {
     const phone = this.phones.get(key);
     const job = phone?.jobs.get(jobId);
     if (!phone || !job || !job.sent) throw failure("This job expired; it will not be replayed.");
-    if (!job.active()) return this.finish(key, phone, job, { ok: false, code: "turn_ended", error: "The requesting turn ended" });
-    if (outcome.ok && (JSON.stringify(outcome.result) ?? "").length > PHONE_RESULT_MAX_BYTES) {
+    if (!job.active()) {
+      this.finish(key, phone, job, { ok: false, code: "turn_ended", error: "The requesting turn ended" });
+      throw failure("This job expired; it will not be replayed.");
+    }
+    if (outcome.ok && Buffer.byteLength(JSON.stringify(outcome.result) ?? "") > PHONE_RESULT_MAX_BYTES) {
       return this.finish(key, phone, job, { ok: false, code: "too_large", error: "The phone's answer was over 256 KB; ask for a narrower range." });
     }
     this.finish(key, phone, job, outcome);
