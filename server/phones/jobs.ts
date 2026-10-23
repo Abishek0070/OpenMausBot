@@ -25,6 +25,7 @@ export type PhoneJobDelivery = { id: string; tool: string; arguments: Record<str
 type Job = {
   id: string; tool: string; args: Record<string, unknown>; active: () => boolean; background: boolean; seq: number; expiresAt: number;
   sent: boolean; leased: boolean; nudged: boolean; resolve: (outcome: PhoneJobOutcome) => void; timer: NodeJS.Timeout; delivery?: NodeJS.Timeout;
+  offline?: NodeJS.Timeout;
 };
 type Phone = { jobs: Map<string, Job>; wake?: () => void; polls: number };
 const failure = (message: string, status = 409) => Object.assign(new Error(message), { status });
@@ -50,22 +51,24 @@ export class PhoneJobs {
   async request(key: string, tool: string, args: Record<string, unknown>, options: PhoneJobOptions): Promise<PhoneJobOutcome> {
     const background = options.background === true;
     if (background && isPhoneWrite(tool)) return { ok: false, code: "unsupported", error: "Background checks only read the phone." };
-    const started = Date.now();
     if (this.closed) return { ok: false, code: "offline", error: RESTARTING };
-    for (const deadline = started + RECONNECT_WAIT_MS; !options.online();) {
-      if (!background && !options.active()) return { ok: false, code: "turn_ended", error: "The requesting turn ended" };
-      if (Date.now() >= deadline) return { ok: false, code: "offline", error: options.offlineText };
-      await new Promise(resolve => setTimeout(resolve, 250));
-      if (this.closed) return { ok: false, code: "offline", error: RESTARTING };
-    }
     if (!background && !options.active()) return { ok: false, code: "turn_ended", error: "The requesting turn ended" };
     const phone = this.phone(key);
+    const seconds = Math.round(options.timeoutMs / 1000);
     return new Promise<PhoneJobOutcome>(resolve => {
-      const remaining = Math.max(0, options.timeoutMs - (Date.now() - started));
       const job: Job = { id: randomUUID(), tool, args, active: background ? () => true : options.active, background, seq: ++this.seq,
-        expiresAt: started + options.timeoutMs, sent: false, leased: false, nudged: false, resolve,
-        timer: setTimeout(() => this.finish(key, phone, job, { ok: false, code: "timeout",
-          error: `${tool} did not finish on the phone within ${Math.round(options.timeoutMs / 1000)} seconds. It may still have run; check before repeating.` }), remaining) };
+        expiresAt: Date.now() + options.timeoutMs, sent: false, leased: false, nudged: false, resolve,
+        // A job the phone never took never ran; one it took may have.
+        timer: setTimeout(() => this.finish(key, phone, job, { ok: false, code: "timeout", error: job.sent || job.leased
+          ? `${tool} did not finish on the phone within ${seconds} seconds. It may still have run; check before repeating.`
+          : `${tool} was never picked up by the phone within ${seconds} seconds. It did not run.` }), options.timeoutMs) };
+      // Queued and nudged before anything asks whether the phone is online: a phone only listening for the nudge polls
+      // within the reconnect window. Still undelivered then, from a phone not seen lately, it is offline.
+      job.offline = setTimeout(() => {
+        if (job.sent) return;
+        if (!job.active()) this.finish(key, phone, job, { ok: false, code: "turn_ended", error: "The requesting turn ended" });
+        else if (!options.online()) this.finish(key, phone, job, { ok: false, code: "offline", error: options.offlineText });
+      }, RECONNECT_WAIT_MS);
       phone.jobs.set(job.id, job);
       phone.wake?.();
       this.nudge(key, phone);
@@ -165,7 +168,7 @@ export class PhoneJobs {
     this.phones.clear();
   }
   private finish(key: string, phone: Phone, job: Job, outcome: PhoneJobOutcome, advance = true) {
-    clearTimeout(job.timer); clearTimeout(job.delivery);
+    clearTimeout(job.timer); clearTimeout(job.delivery); clearTimeout(job.offline);
     if (phone.jobs.get(job.id) === job) phone.jobs.delete(job.id);
     job.resolve(outcome);
     if (advance) { this.nudge(key, phone); if (phone.jobs.size) phone.wake?.(); }

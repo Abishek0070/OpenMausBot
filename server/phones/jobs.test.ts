@@ -36,13 +36,60 @@ describe("phone jobs", () => {
     await expect(outcome).resolves.toEqual({ ok: true, result: 1 });
   });
 
-  it("answers the offline sentence when nobody polls", async () => {
+  it("queues and nudges a phone not seen lately, and answers the offline sentence when nobody polls within 15 s", async () => {
     vi.useFakeTimers();
-    const jobs = new PhoneJobs();
+    const onQueued = vi.fn();
+    const jobs = new PhoneJobs(onQueued);
+    const settled = vi.fn();
     const outcome = jobs.request(KEY, "PHONE_LIST_EVENTS", {}, turn({ online: () => false }));
-    await vi.advanceTimersByTimeAsync(15_000);
+    void outcome.then(settled);
+    expect(onQueued).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     await expect(outcome).resolves.toEqual({ ok: false, code: "offline", error: "Phone is offline." });
     expect(jobs.busy(KEY)).toBe(false);
+    // Nothing is left for a later poll.
+    const poll = jobs.poll(KEY);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(poll).resolves.toBeNull();
+  });
+
+  it("a phone not seen lately that polls because of the nudge gets the job", async () => {
+    vi.useFakeTimers();
+    const onQueued = vi.fn();
+    const jobs = new PhoneJobs(onQueued);
+    const outcome = jobs.request(KEY, "PHONE_LIST_EVENTS", { n: 1 }, turn({ online: () => false }));
+    expect(onQueued).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const job = await jobs.poll(KEY);
+    expect(job).toMatchObject({ tool: "PHONE_LIST_EVENTS", arguments: { n: 1 } });
+    expect(onQueued).toHaveBeenCalledWith(KEY, job!.id);
+    expect(jobs.lease(KEY, job!.id)).toBe(true);
+    // Past the reconnect window: delivered, so never offline.
+    await vi.advanceTimersByTimeAsync(15_000);
+    jobs.complete(KEY, job!.id, { ok: true, result: { events: [] } });
+    await expect(outcome).resolves.toEqual({ ok: true, result: { events: [] } });
+  });
+
+  it("a job the phone never picked up times out saying it did not run", async () => {
+    vi.useFakeTimers();
+    const jobs = new PhoneJobs();
+    const outcome = jobs.request(KEY, "PHONE_LIST_EVENTS", {}, turn());
+    await vi.advanceTimersByTimeAsync(45_000);
+    await expect(outcome).resolves.toEqual({ ok: false, code: "timeout",
+      error: "PHONE_LIST_EVENTS was never picked up by the phone within 45 seconds. It did not run." });
+    expect(jobs.busy(KEY)).toBe(false);
+  });
+
+  it("a turn that ends while its job waits for an absent phone ends the job at the reconnect window", async () => {
+    vi.useFakeTimers();
+    const jobs = new PhoneJobs();
+    let active = true;
+    const outcome = jobs.request(KEY, "PHONE_LIST_EVENTS", {}, turn({ online: () => false, active: () => active }));
+    active = false;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(outcome).resolves.toEqual({ ok: false, code: "turn_ended", error: "The requesting turn ended" });
   });
 
   it("a late result is refused", async () => {
@@ -171,7 +218,7 @@ describe("phone jobs", () => {
     const second = jobs.request(KEY, "PHONE_LIST_EVENTS", {}, turn());
     await jobs.poll(KEY);
     await vi.advanceTimersByTimeAsync(45_000);
-    await expect(second).resolves.toMatchObject({ ok: false, code: "timeout" });
+    await expect(second).resolves.toEqual({ ok: false, code: "timeout", error: "PHONE_LIST_EVENTS was never picked up by the phone within 45 seconds. It did not run." });
     jobs.close();
   });
 
