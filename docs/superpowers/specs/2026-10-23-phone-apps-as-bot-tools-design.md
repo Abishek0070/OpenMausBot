@@ -470,3 +470,47 @@ shapes. Android reaches pocket mode at C; iPhone at D.
 - `PHONE_*` tool naming so the outbound classifier needs no special case.
 - The free plan gets the tools while the app is open; only pocket mode is
   Cloud-only.
+
+## As built: sub-project A (server), 2026-10-23
+
+The server half shipped on OpenMausBot branch `feat/phone-apps-server`. Where
+it differs from the sections above, this list wins; B and C build against it.
+
+- **Routes** are under `/api/phones` (the sidecar reserves `/api/devices`):
+  `PUT /api/phones/self` (register; the body may carry fields this server does
+  not know, they are dropped), `GET /api/phones/self`, `DELETE /api/phones/self`,
+  `GET /api/phones/self/jobs` (long poll, answers within 20 s),
+  `POST /api/phones/self/jobs/:id/lease`, `POST /api/phones/self/jobs/:id/result`
+  (`{ ok: true, result }` or `{ ok: false, error, code? }`; an unknown `code` is
+  read as absent). Admin only: `GET /api/phones`, `DELETE /api/phones/:key`.
+- **Identity** is never the body: a Cloud or direct session (`session:<id>`,
+  not cookie-only) or the sidecar's verified device (`companion:<device id>`).
+  The register response's `phone.key` is the value to filter `device.job`
+  frames by.
+- **Removal on the computer sticks.** `DELETE /api/phones/:key` fails the
+  phone's queued and leased jobs with "This phone's access changed." and
+  blocks the key; the next `PUT /api/phones/self` from it gets 403 "This phone
+  was removed on the computer. Pair it again to use its apps." Pairing again
+  gives a new key. The phone's own `DELETE /api/phones/self` does not block.
+- **Online and the nudge.** A job is queued and the `device.job` frame
+  (admin-only on the events stream, `{ kind, phone, id }`) is sent first; if
+  no poll picks the job up within 15 s and the phone was not seen in the last
+  60 s, the job fails as offline. An app without an open events stream should
+  poll at least once a minute to stay "online".
+- **Owner rule as built.** Team Clouds, hosted workspaces, servers with shared
+  sign-in and service-trust servers offer no phones. On a Cloud home the
+  lending proof decides. On a desktop: the owner's own lines, live admin
+  sessions, and routines the owner wrote (recorded in `owner-routines.json`
+  when an owner or admin creates or re-saves the prompt) count as the owner;
+  peer-asked, relayed and webhook-handed work never does. Routines created
+  before this change get no phone until the owner re-saves them.
+- **Tools.** 23 `PHONE_*` tools through MCP kind `device`; the grant is
+  `bot.phoneApps` (the Chief defaults to everything the phone allows, other
+  bots to nothing); held tools are those `shared/outbound.ts` classes as
+  outbound: `PHONE_SEND_MESSAGE`, `PHONE_SEND_WHATSAPP`, `PHONE_RESPOND_TO_INVITE`.
+  The phone used most recently that allows the tool's app is chosen when the
+  bot names none. Timeouts: 45 s read/write jobs, 120 s held jobs; results
+  over 256 KB are refused as `too_large`.
+- **Fixture.** `server/testing/fixtures/phone-jobs.json` pins every shape
+  above; copy it by hand into `ios/Tests/CompanionCoreTests/Fixtures/` (the
+  capture script captures live and does not copy files).
