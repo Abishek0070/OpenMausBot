@@ -465,7 +465,7 @@ import { TeamMemory, TEAM_MEMORY_KINDS, type TeamMemoryKind } from "./team-memor
 import { describeTool } from "./activity.ts";
 import { OutboundCounts } from "./outbound-counts.ts";
 import { OutboundRequestService } from "./outbound-requests.ts";
-import { createOutboundHold, type OutboundHoldAnswer } from "./outbound-hold.ts";
+import { createOutboundHold, OUTBOUND_HOLD_MS, type OutboundHoldAnswer } from "./outbound-hold.ts";
 import { connectorCallsIn, outboundCallsIn } from "../shared/outbound.ts";
 import { connectorAccessDecision, describeConnectorScopes } from "../shared/connector-scopes.ts";
 import { bindThreadLogCapProvider } from "./thread-log-rotation.ts";
@@ -9698,7 +9698,7 @@ const teamMemory = new TeamMemory(join(DATA_DIR, "team-memory.json"));
 const teamMemoryRequests = createTeamMemoryRequests({ teamMemory, store, sectionKey: sectionContextKey, decide: (row) => appendDecision(DATA_DIR, row) });
 const outboundRequests = new OutboundRequestService();
 const outboundCounts = new OutboundCounts(join(DATA_DIR, "outbound-counts.json"));
-const OUTBOUND_HOLD_MS = 9 * 60_000; const outboundHold = createOutboundHold({ store, dataDir: DATA_DIR, outboundRequests, outboundCounts, holdMs: OUTBOUND_HOLD_MS, connectorThread, activeGroupTurnForBot, notify }); const phoneHost = createPhoneHost({ registry: phoneRegistry, jobs: phoneJobs, dataDir: DATA_DIR, bot: (id) => store.bot(id), turnOwner: phoneTurnOwner, inRoom: (t) => Boolean(store.groupByThread(t)), appendMessage: (t, m) => { store.appendMessage(t, m as Parameters<typeof store.appendMessage>[1]); }, outboundHold, sendsFreely: (c) => roomTurnLevels.forRequest(c.threadId, c.botId, () => sourceApprovalMode(c.botId, c.threadId)) === "full", active: (c) => internalCapabilityIsActive(c as InternalCapability) });
+const outboundHold = createOutboundHold({ store, dataDir: DATA_DIR, outboundRequests, outboundCounts, holdMs: OUTBOUND_HOLD_MS, connectorThread, activeGroupTurnForBot, notify }); const phoneHost = createPhoneHost({ registry: phoneRegistry, jobs: phoneJobs, dataDir: DATA_DIR, bot: (id) => store.bot(id), turnOwner: phoneTurnOwner, inRoom: (t) => Boolean(store.groupByThread(t)), appendMessage: (t, m) => { store.appendMessage(t, m as Parameters<typeof store.appendMessage>[1]); }, outboundHold, sendsFreely: (c) => roomTurnLevels.forRequest(c.threadId, c.botId, () => sourceApprovalMode(c.botId, c.threadId)) === "full", active: (c) => internalCapabilityIsActive(c as InternalCapability) });
 
 function resolveAndSendTrust(res: ServerResponse, threadId: string, requestId: string, behavior: "allow" | "deny" | "answer"): boolean {
   const remembered = teamMemoryRequests.resolve(threadId, requestId, behavior);

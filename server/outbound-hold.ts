@@ -9,6 +9,9 @@ import type { OutboundRequestService } from "./outbound-requests.ts";
 import { outboundCard } from "./outbound-requests.ts";
 import type { BotRecord, GroupRecord, Store } from "./store.ts";
 
+/** How long a "Send on your behalf?" card waits on the person before it times out. */
+export const OUTBOUND_HOLD_MS = 9 * 60_000;
+
 /** The bot fields the hold reads. */
 export type OutboundHoldBot = Pick<BotRecord, "id" | "name" | "color" | "outbound" | "avatarUrl" | "notifications">;
 
@@ -36,7 +39,7 @@ export interface OutboundHold {
 export function createOutboundHold(deps: OutboundHoldDeps): OutboundHold {
   const { store, outboundRequests, outboundCounts, connectorThread, activeGroupTurnForBot, notify } = deps;
   const DATA_DIR = deps.dataDir;
-  const OUTBOUND_HOLD_MS = deps.holdMs;
+  const { holdMs } = deps;
 
   return {
     async hold({ bot: currentSender, threadId, tool: outboundTool, calls: outboundCalls, opaque, fullAccess, active }) {
@@ -57,7 +60,7 @@ export function createOutboundHold(deps: OutboundHoldDeps): OutboundHold {
         }
       } else {
         const owner = connectorThread(currentSender.id, threadId);
-        const held = outboundRequests.open({ botId: currentSender.id, threadId, tool: outboundTool, timeoutMs: OUTBOUND_HOLD_MS });
+        const held = outboundRequests.open({ botId: currentSender.id, threadId, tool: outboundTool, timeoutMs: holdMs });
         const card = store.appendMessage(threadId, {
           role: "bot",
           kind: "options",

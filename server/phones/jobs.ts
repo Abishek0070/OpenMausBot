@@ -19,7 +19,8 @@ export const PHONE_SEND_TIMEOUT_MS = 120_000;
 export const PHONE_POLL_MS = 20_000;
 export const PHONE_DELIVERY_MS = 10_000;
 export const PHONE_RESULT_MAX_BYTES = 262_144;
-const RECONNECT_WAIT_MS = 15_000;
+/** How long a job waits to be delivered to a phone not seen lately before it fails as offline. */
+export const PHONE_RECONNECT_WAIT_MS = 15_000;
 const RESTARTING = "This server is restarting. Phone jobs resume by themselves once it is back.";
 
 export type PhoneJobOptions = { active: () => boolean; timeoutMs: number; offlineText: string; online: () => boolean; background?: boolean };
@@ -71,7 +72,7 @@ export class PhoneJobs {
         if (job.sent) return;
         if (!job.active()) this.finish(key, phone, job, { ok: false, code: "turn_ended", error: "The requesting turn ended" });
         else if (!options.online()) this.finish(key, phone, job, { ok: false, code: "offline", error: options.offlineText });
-      }, RECONNECT_WAIT_MS);
+      }, PHONE_RECONNECT_WAIT_MS);
       phone.jobs.set(job.id, job);
       phone.wake?.();
       this.nudge(key, phone);

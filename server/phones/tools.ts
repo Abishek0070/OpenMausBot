@@ -80,6 +80,7 @@ export function phoneErrorResult(message: string, extra: Record<string, unknown>
 }
 
 export function phoneOkResult(result: unknown, phone: { name: string; platform: PhonePlatform }): PhoneToolResult {
-  const body = result && typeof result === "object" && !Array.isArray(result) ? { phone, ...(result as object) } : { phone, result };
+  // The phone last, so no key in the phone's answer can relabel where it ran.
+  const body = result && typeof result === "object" && !Array.isArray(result) ? { ...(result as object), phone } : { phone, result };
   return { content: [{ type: "text", text: JSON.stringify(body) }], structuredContent: body as Record<string, unknown> };
 }

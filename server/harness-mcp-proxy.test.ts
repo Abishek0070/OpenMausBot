@@ -2,8 +2,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { HARNESS_PROXY_TIMEOUT_MS } from "./harness-budget.ts";
+import { DEVICE_PROXY_TIMEOUT_MS, HARNESS_PROXY_TIMEOUT_MS } from "./harness-budget.ts";
+import { OUTBOUND_HOLD_MS } from "./outbound-hold.ts";
 import { PHONE_RECOVERY } from "./phones/instructions.ts";
+import { PHONE_RECONNECT_WAIT_MS, PHONE_SEND_TIMEOUT_MS } from "./phones/jobs.ts";
 import { harnessMcpRequest } from "./harness-mcp-proxy.ts";
 
 let server: Server;
@@ -129,11 +131,12 @@ describe("harness MCP capability proxy", () => {
     } finally { vi.unstubAllGlobals(); }
   });
 
-  it("reports the device call's own ten-minute timeout, not the default", async () => {
+  it("reports the device call's own timeout, not the default: the send hold, the send's phone job, the reconnect window and a margin", async () => {
+    expect(DEVICE_PROXY_TIMEOUT_MS).toBe(OUTBOUND_HOLD_MS + PHONE_SEND_TIMEOUT_MS + PHONE_RECONNECT_WAIT_MS + 30_000);
     vi.stubGlobal("fetch", vi.fn(async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); }));
     try {
       const answer = await harnessMcpRequest(frame("tools/call", { name: "phone_send", arguments: {} }), connection("device")) as { result: { content: Array<{ text: string }> } };
-      expect(answer.result.content[0]!.text).toContain("within 600 seconds");
+      expect(answer.result.content[0]!.text).toContain("within 705 seconds");
     } finally { vi.unstubAllGlobals(); }
   });
 

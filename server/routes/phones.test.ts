@@ -171,7 +171,8 @@ describe("phone routes", () => {
   });
 
   it("a team Cloud offers no phones", async () => {
-    const { call } = await setup({ owner: () => null });
+    // A verified phone key, so the refusal comes from there being no owner, not from a missing key.
+    const { call } = await setup({ auth: companion("d1"), owner: () => null });
     expect((await call("PUT", "/api/phones/self", registration, fromPhone("d1"))).status).toBe(403);
   });
 });
