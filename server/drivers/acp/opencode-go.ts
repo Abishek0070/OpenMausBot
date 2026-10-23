@@ -566,11 +566,17 @@ export function openCodeFreeFallback(ownAccess: boolean, models: ModelCatalog): 
  * Big Pickle and MiMo may use prompts to improve their models; Beam keeps them for 30 days. */
 export const NO_RETENTION_FREE_MODELS = ["opencode/glm-5.3-flash-free", "opencode/deepseek-v4.1-flash-free"] as const;
 
-/** The app's own copy with nothing of the person's in it (the free backup, server/free-fallback.ts) starts on a model that
- * keeps nothing, when one is offered. Any other OpenCode, or one signed in to anything, keeps its own pick. */
+/** The app's own copy with nothing of the person's in it: the free backup (server/free-fallback.ts). */
+function backupCopy(environment: Record<string, string | undefined>, cli: string): boolean {
+  return !ownOpenCodeAccess(environment) && isAppStandaloneCopy(cli);
+}
+
+const keepingNothing = (offered: readonly string[]) => NO_RETENTION_FREE_MODELS.find((id) => offered.includes(id));
+
+/** The free backup starts on a model that keeps nothing, when one is offered. Any other OpenCode, or one signed in to
+ * anything, keeps its own pick. */
 function backupStartsOnNoRetention(catalog: ModelCatalog, environment: Record<string, string | undefined>, cli: string): ModelCatalog {
-  if (ownOpenCodeAccess(environment) || !isAppStandaloneCopy(cli)) return catalog;
-  const keepsNothing = NO_RETENTION_FREE_MODELS.find((id) => catalog.options.some((option) => option.id === id));
+  const keepsNothing = backupCopy(environment, cli) ? keepingNothing(catalog.options.map((option) => option.id)) : undefined;
   return keepsNothing ? { ...catalog, default: keepsNothing } : catalog;
 }
 
@@ -782,6 +788,15 @@ const support = (loadCatalog: OpenCodeCatalogLoader, ownAccess = new Map<string,
     const offered = offeredModels(sessionConfig, "model");
     if (catalogDefault && offered.includes(catalogDefault)) return catalogDefault;
     return preferredOpenCodeModel(offered, catalogFromOpenCodeSession(sessionConfig)?.current) || null;
+  },
+  // A background call (a test message, memory upkeep) asks for no model, so it would run on OpenCode's own pick: on the
+  // free backup it runs on the model that keeps nothing instead, or not at all. A turn's model is set by selectModel.
+  configureSession: async ({ request, sessionId, env, config, turn, configOptions }) => {
+    if (turn.model || !backupCopy(env, config.cli)) return;
+    const keepsNothing = keepingNothing(offeredModels({ configOptions }, "model"));
+    if (!keepsNothing || configOptions.find((option) => option.id === "model")?.currentValue === keepsNothing) return;
+    const switched = await request("session/set_config_option", { sessionId, configId: "model", value: keepsNothing });
+    if (catalogFromOpenCodeSession(switched)?.current !== keepsNothing) throw new Error(`OpenCode did not switch to ${keepsNothing}`);
   },
   modelVariants: true,
   ownMcpOverHttp: true,

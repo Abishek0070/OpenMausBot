@@ -1374,4 +1374,55 @@ describe("the free backup's model on the app's own copy of OpenCode", () => {
   ])("leaves the app's copy on its own pick with %s of the person's", async (_label, options) => {
     expect(await startsOn(options)).toBe("opencode/mimo-v2.6-flash-free");
   });
+
+  /** The model a background call (a test message, memory upkeep) ran on, as the fake OpenCode saw it. */
+  async function backgroundCallRunsOn(options: { appCopy: boolean; environment?: Record<string, string>; refused?: boolean }) {
+    const scratch = mkdtempSync(join(tmpdir(), "omb-opencode-backup-call-"));
+    const dump = join(scratch, "rpc");
+    let cli = FAKE_CLI;
+    if (options.appCopy) {
+      const bin = join(standaloneEngineDir("opencode"), "bin");
+      mkdirSync(bin, { recursive: true });
+      cli = join(bin, "opencode");
+      writeFileSync(cli, `#!/bin/sh\nexec '${FAKE_CLI}' "$@"\n`, { mode: 0o755 });
+    }
+    resetOpenCodeModelCache();
+    const driver = createOpenCodeDriver(async () => catalog(...FREE));
+    const instance = await driver.create({
+      instanceId: `opencode-backup-call-${options.appCopy}`, displayName: "OpenCode", enabled: true, config: { cli, fullAuto: false },
+      environment: {
+        HOME: scratch, USERPROFILE: scratch, XDG_CONFIG_HOME: scratch, XDG_DATA_HOME: join(scratch, "data"), ...noKeys, ...options.environment,
+        FAKE_ACP_MODELS: FREE.join(","), FAKE_ACP_DUMP: dump, FAKE_ACP_TEXT_REPLY: "OK",
+      },
+    });
+    try {
+      if (options.refused) {
+        await expect(instance.generateMemoryText!("This is a connection check. Reply with the single word OK.")).rejects.toThrow(/did not switch/);
+        return existsSync(`${dump}.prompts.jsonl`) ? readFileSync(`${dump}.prompts.jsonl`, "utf8").split("\n").filter(Boolean) : [];
+      }
+      expect(await instance.generateMemoryText!("This is a connection check. Reply with the single word OK.")).toBe("OK");
+      return readFileSync(`${dump}.prompts.jsonl`, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line).model as string);
+    } finally {
+      await instance.dispose();
+      await removeTempDir(standaloneEngineDir("opencode"));
+      await removeTempDir(scratch);
+      resetOpenCodeModelCache();
+    }
+  }
+
+  it.skipIf(process.platform === "win32")("sends the app's backup copy's background calls to the model that keeps nothing", async () => {
+    expect(await backgroundCallRunsOn({ appCopy: true })).toEqual(["opencode/glm-5.3-flash-free"]);
+  });
+
+  it.skipIf(process.platform === "win32")("fails a background call rather than send it to a model that may keep it", async () => {
+    // OpenCode acknowledges the switch but stays on its own pick: nothing is sent.
+    expect(await backgroundCallRunsOn({ appCopy: true, environment: { FAKE_ACP_MODEL_STICKS: "1" }, refused: true })).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32").each<[string, Parameters<typeof backgroundCallRunsOn>[0]]>([
+    ["an OpenCode the person installed", { appCopy: false }],
+    ["the app's copy with an OpenCode key of the person's", { appCopy: true, environment: { OPENCODE_API_KEY: "zen-key" } }],
+  ])("leaves the background calls of %s on OpenCode's own pick", async (_label, options) => {
+    expect(await backgroundCallRunsOn(options)).toEqual(["opencode/mimo-v2.6-flash-free"]);
+  });
 });
