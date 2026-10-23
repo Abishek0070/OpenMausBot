@@ -14,9 +14,10 @@ const base = (overrides: Partial<DesktopTurn> = {}): DesktopTurn => ({
   ownerPerson: () => false, cardAnswerer: (c) => (c.answeredBy?.kind === "session" ? c.answeredBy.person : undefined),
   routineRun: () => null, reportsFromOthers: true, ...overrides,
 });
-const deps = (overrides: { originIsUser?: boolean; routines?: string[] } = {}) => ({
+/** `written`: the routines the owner wrote and nobody has changed since. */
+const deps = (overrides: { originIsUser?: boolean; written?: string[] } = {}) => ({
   adminPersons: () => new Set([ADMIN]), originIsUser: () => overrides.originIsUser ?? true,
-  isRealRoutine: (id: string) => (overrides.routines ?? [ROUTINE]).includes(id),
+  ownerWrote: (id: string) => (overrides.written ?? [ROUTINE]).includes(id),
 });
 const owners = (turn: DesktopTurn, d = deps()) => cloudHomeLendingRefusal(desktopLendingTurn(turn, d)) === null;
 
@@ -57,25 +58,36 @@ describe("whose turn may use the desktop owner's phones", () => {
     expect(owners(inFlight(NOT_THE_OWNER))).toBe(false);
   });
 
-  it("a webhook's posted payload and an outside event's run report are someone else's words; a real routine's report is the owner's", () => {
+  it("a webhook's posted payload, an outside event's run report and the report of a routine the owner did not write are someone else's words", () => {
     expect(owners(base({ thread: [said("m1"), reply("w1", { webhookPost: true })] }))).toBe(false);
     expect(owners(base({ thread: [said("m1"), reply("a1", { automation: { routineId: WEBHOOK } })] }))).toBe(false);
     expect(owners(base({ thread: [said("m1"), reply("a1", { kind: "routine.run", routineRun: { routineId: WEBHOOK } })] }))).toBe(false);
     expect(owners(base({ thread: [said("m1"), reply("a1", { automation: { routineId: ROUTINE } })] }))).toBe(true);
     expect(owners(base({ thread: [said("m1"), reply("a1", { kind: "routine.run", routineRun: { routineId: ROUTINE } })] }))).toBe(true);
+    // Written by a client session, or changed by one since the owner wrote it.
+    expect(owners(base({ thread: [said("m1"), reply("a1", { automation: { routineId: ROUTINE } })] }), deps({ written: [] }))).toBe(false);
+    expect(owners(base({ thread: [said("m1"), reply("a1", { kind: "routine.run", routineRun: { routineId: ROUTINE } })] }), deps({ written: [] }))).toBe(false);
   });
 
-  it("a routine's run is the owner's, started and written, unless a webhook started it", () => {
-    const runTurn = (triggerSource: "schedule" | "manual" | "startup" | "webhook") => desktopLendingTurn(base({
+  it("a routine's run is the owner's only when the owner wrote it, unchanged, and a schedule, a restart or the owner started it", () => {
+    type Trigger = "schedule" | "manual" | "startup" | "webhook";
+    const runTurn = (triggerSource: Trigger, record: { ownerStarted: boolean; ownerAuthored: boolean }) => desktopLendingTurn(base({
       request: { messageId: "m1", generations: new Set(["g1"]), automation: triggerSource },
-      routineRun: () => ({ triggerSource, ownerStarted: false, ownerAuthored: false }),
+      routineRun: () => ({ triggerSource, ...record }),
     }), deps());
-    for (const trigger of ["schedule", "manual", "startup"] as const) {
-      expect(runTurn(trigger).routineRun()).toEqual({ triggerSource: trigger, ownerStarted: true, ownerAuthored: true });
-      expect(cloudHomeLendingRefusal(runTurn(trigger))).toBeNull();
+    for (const trigger of ["schedule", "startup"] as const) {
+      expect(runTurn(trigger, { ownerStarted: false, ownerAuthored: true }).routineRun()).toEqual({ triggerSource: trigger, ownerStarted: true, ownerAuthored: true });
+      expect(cloudHomeLendingRefusal(runTurn(trigger, { ownerStarted: false, ownerAuthored: true }))).toBeNull();
+      // Someone else wrote it, or changed it since: never the owner's, however it started.
+      expect(cloudHomeLendingRefusal(runTurn(trigger, { ownerStarted: true, ownerAuthored: false }))).toBe("not-owner");
     }
-    expect(runTurn("webhook").routineRun()).toEqual({ triggerSource: "webhook", ownerStarted: false, ownerAuthored: false });
-    expect(cloudHomeLendingRefusal(runTurn("webhook"))).toBe("not-owner");
+    // By hand, only the owner's own start counts.
+    expect(cloudHomeLendingRefusal(runTurn("manual", { ownerStarted: true, ownerAuthored: true }))).toBeNull();
+    expect(runTurn("manual", { ownerStarted: false, ownerAuthored: true }).routineRun()).toEqual({ triggerSource: "manual", ownerStarted: false, ownerAuthored: true });
+    expect(cloudHomeLendingRefusal(runTurn("manual", { ownerStarted: false, ownerAuthored: true }))).toBe("not-owner");
+    expect(cloudHomeLendingRefusal(runTurn("manual", { ownerStarted: true, ownerAuthored: false }))).toBe("not-owner");
+    expect(runTurn("webhook", { ownerStarted: true, ownerAuthored: true }).routineRun()).toMatchObject({ ownerStarted: false });
+    expect(cloudHomeLendingRefusal(runTurn("webhook", { ownerStarted: true, ownerAuthored: true }))).toBe("not-owner");
     const none: CloudLendingTurn = desktopLendingTurn(base(), deps());
     expect(none.routineRun()).toBeNull();
   });

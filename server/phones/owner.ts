@@ -1,7 +1,8 @@
 // Whose turn may use the desktop owner's phones, off a Cloud home: the Cloud lending test (server/cloud-lending.ts) with
 // the desktop's owner in place of the Cloud owner. The owner is whoever works at this machine or holds an admin session;
-// a bot's ask counts only as this turn's own request, and only while the work it carries came from the user; every real
-// routine is the owner's, but a webhook's payload and an outside event's run stay someone else's words.
+// a bot's ask counts only as this turn's own request, and only while the work it carries came from the user; a routine's
+// run and its reports are the owner's only while the owner wrote it and nobody else has changed it since; a webhook's
+// payload and an outside event's run stay someone else's words.
 import type { CloudLendingTurn } from "../cloud-lending.ts";
 
 type Line = CloudLendingTurn["thread"][number];
@@ -19,7 +20,8 @@ export interface DesktopOwnerDeps {
   adminPersons(): ReadonlySet<string>;
   /** The harness's record says this turn's work came from the user, not handed on from a webhook or another outside run. */
   originIsUser(): boolean;
-  isRealRoutine(id: string): boolean;
+  /** The owner wrote this routine (at this machine or from an admin session) and nobody else has changed it since. */
+  ownerWrote(routineId: string): boolean;
 }
 
 /** A person no owner test accepts: a bot's ask outside the user's work, a worker's answer, or a session answer with no
@@ -51,12 +53,13 @@ export function desktopLendingTurn(base: DesktopTurn, deps: DesktopOwnerDeps): C
     reportsFromOthers: base.thread.some((line) => {
       if (line.webhookPost === true) return true;
       const routine = routineOf(line);
-      return routine !== undefined && !deps.isRealRoutine(routine);
+      return routine !== undefined && !deps.ownerWrote(routine);
     }),
+    // Written comes from the harness's record of who wrote the routine (server/index.ts). Started: a schedule or a restart
+    // starts it on its writer's behalf; by hand, only the owner's own start counts; a webhook never.
     routineRun: () => {
       const run = base.routineRun();
-      const owners = run !== null && run.triggerSource !== "webhook";
-      return run && { ...run, ownerStarted: owners, ownerAuthored: owners };
+      return run && { ...run, ownerStarted: run.triggerSource === "manual" ? run.ownerStarted : run.triggerSource !== "webhook" };
     },
   };
 }
