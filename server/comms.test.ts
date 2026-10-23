@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 
 import { ENVELOPE_MARK } from "./runtime/envelope.ts";
-import { mentionedBots, normalizeGroupDefaultResponder, roomResponders } from "./store.ts";
+import { mentionedBots, normalizeGroupDefaultResponder, roomResponders } from "./room-responders.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { readHandoffs } from "./testing/handoff-rows.ts";
 

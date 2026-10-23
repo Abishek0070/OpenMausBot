@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { SkillsLibrarySkillWire } from "../../shared/wire.ts";
+import type { SkillsLibrarySkillWire } from "../../shared/skills-library.ts";
 import type { AppConfig } from "../config.ts";
 import { importedSkillListings, setImportedSkillEnabled } from "../imported-skills.ts";
 import { botSkillTemplateSchema } from "../new-bot-defaults.ts";

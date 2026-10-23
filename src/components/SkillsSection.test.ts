@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { setLocale } from "@/lib/i18n";
 import { filterLibrarySkills, LibrarySkillMeta } from "./SkillsSection";
-import type { SkillsLibrarySkillWire } from "../../shared/wire";
+import type { SkillsLibrarySkillWire } from "../../shared/skills-library";
 
 afterEach(() => setLocale("en"));
 

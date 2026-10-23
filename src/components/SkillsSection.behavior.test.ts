@@ -1,6 +1,6 @@
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SkillsLibrarySkillWire } from "../../shared/wire";
+import type { SkillsLibrarySkillWire } from "../../shared/skills-library";
 
 const fixture = vi.hoisted(() => ({ values: [] as unknown[], index: 0, modal: vi.fn(), request: vi.fn() }));
 vi.mock("react", async (original) => ({
