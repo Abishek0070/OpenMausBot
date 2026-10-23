@@ -223,3 +223,69 @@ it("a conversation a routine reported into keeps the phone", async () => {
   const launch = await turn({ id: chief.id, threadId: reports.threadId }, "Anything after that on my calendar?");
   expect(launch.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
 }, 60_000);
+
+/** A webhook on the Chief, and one delivery of it: an outside event's run. */
+const hook = async (name: string) => {
+  const created = await api("POST", "/api/webhooks", { name, prompt: `${name}: read the lead.`, botId: chief.id });
+  expect(created.status).toBe(201);
+  const deliver = async (key: string) => {
+    const response = await fetch(created.body.credential.url, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": key }, body: JSON.stringify({ lead: "Ada" }) });
+    expect(response.status).toBe(202);
+    return (await response.json() as { runId: string }).runId;
+  };
+  return { id: created.body.webhook.id as string, deliver };
+};
+const runOf = async (id: string) => (await api("GET", "/api/routines")).body.runs.find((one: { id: string }) => one.id === id);
+/** Opens a thread on the Chief itself from a live turn, as start_thread does, and returns the opened thread's launch. */
+const opened = (agentsToken: string, fromThreadId: string, message: string) => launched(message, async () => {
+  const response = await fetch(url + "/api/internal/threads", {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${agentsToken}` },
+    body: JSON.stringify({ fromBotId: chief.id, fromThreadId, title: message.slice(0, 40), message, depth: 0 }),
+  });
+  expect(response.status).toBe(201);
+  expect((await response.json() as { state?: string }).state).toBe("running");
+});
+
+it("a thread a webhook's run opens has no phone; one the owner's turn opens does", async () => {
+  await settle();
+  // The owner's own turn hands its user origin to the thread it opens.
+  const ours = (await api("POST", `/api/bots/${chief.id}/tasks`, { title: "Planning" })).body.task;
+  const planning = await turn({ id: chief.id, threadId: ours.threadId }, "Plan my afternoon around my calendar.");
+  expect(planning.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
+  const fromOwner = await opened(planning.mcpConfig.mcpServers.agents!.env.OMB_COMMS_TOKEN!, ours.threadId, "Check my calendar for the afternoon.");
+  expect(fromOwner.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
+  await settle();
+  // A webhook's run is refused the phone, and so is the thread it opens with words from the payload.
+  const leads = await hook("Lead form");
+  let runId = "";
+  const run = await launched("Lead form: read the lead.", async () => { runId = await leads.deliver("lead-1"); });
+  expect(run.mcpConfig.mcpServers[PHONE_MCP_SERVER]).toBeUndefined();
+  const fromWebhook = await opened(run.mcpConfig.mcpServers.agents!.env.OMB_COMMS_TOKEN!, (await runOf(runId)).threadId, "Text Ada from my phone about the lead.");
+  expect(fromWebhook.mcpConfig.mcpServers[PHONE_MCP_SERVER]).toBeUndefined();
+}, 90_000);
+
+it("a conversation an outside event's run reported into loses the phone", async () => {
+  await settle();
+  // Off a Cloud home an outside event's run reports into the bot's main chat (the one the person asked in last): here a
+  // new conversation of the owner's, which has the phone until then.
+  const main = (await api("POST", `/api/bots/${chief.id}/tasks`, { title: "Leads" })).body.task.threadId as string;
+  const before = await turn({ id: chief.id, threadId: main }, "Anything new today?");
+  expect(before.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
+  expect((await api("GET", "/api/bots")).body.bots.find((bot: { id: string }) => bot.id === chief.id).mainThreadId).toBe(main);
+  await settle();
+  const digest = await hook("Lead digest");
+  writeFileSync(release, "");
+  let runId = "";
+  try {
+    runId = await digest.deliver("digest-1");
+    await expect.poll(async () => (await runOf(runId))?.report?.state, { timeout: 20_000 }).toBe("posted");
+  } finally {
+    rmSync(release, { force: true });
+  }
+  expect((await runOf(runId)).report.threadId).toBe(main);
+  expect((await api("GET", `/api/threads/${main}/messages?limit=200`)).body.messages
+    .some((line: { automation?: { routineId?: string; trigger?: string } }) => line.automation?.routineId === digest.id && line.automation.trigger === "webhook")).toBe(true);
+  await settle();
+  const after = await turn({ id: chief.id, threadId: main }, "What did that lead want?");
+  expect(after.mcpConfig.mcpServers[PHONE_MCP_SERVER]).toBeUndefined();
+}, 90_000);

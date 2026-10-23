@@ -413,8 +413,8 @@ export interface ResolvedSender {
  * owner on this machine, or a session-less local caller on a shared server
  * (`worker`: the Slack worker, or any other process on that machine). */
 export type CardAnswerer = (
-  /** `person`: the answering session's opaque person key, recorded on an OMB
-   * Cloud home only. */
+  /** `person`: the answering session's opaque person key, so the owner checks
+   * can tell whose answer it was. */
   | { kind: "session"; name: string; person?: string }
   | { kind: "loopback" }
   | { kind: "worker" }

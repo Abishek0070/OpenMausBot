@@ -101,7 +101,7 @@ import { DATA_INTERNAL_MCP_PATH, dataRpc } from "./data/rpc.ts";
 import { createHighLevelHost } from "./highlevel/host.ts";
 import { HIGHLEVEL_INTERNAL_MCP_PATH } from "./highlevel/rpc.ts";
 import { createHighLevelService } from "./highlevel/service.ts";
-import { createHighLevelRoutes } from "./routes/highlevel.ts"; import { createPhoneHost } from "./phones/host.ts"; import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts"; import { PhoneRegistry } from "./phones/registry.ts"; import { PhoneJobs } from "./phones/jobs.ts"; import { createPhoneRoutes, isLongPollPath } from "./routes/phones.ts";
+import { createHighLevelRoutes } from "./routes/highlevel.ts"; import { createPhoneHost } from "./phones/host.ts"; import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts"; import { PhoneRegistry } from "./phones/registry.ts"; import { PhoneJobs } from "./phones/jobs.ts"; import { createPhoneRoutes, isLongPollPath } from "./routes/phones.ts"; import { desktopLendingTurn, NOT_THE_OWNER } from "./phones/owner.ts";
 import { createDataRoutes } from "./data/routes.ts";
 import { DataSheetRegistry } from "./data/sheet.ts";
 import { DataFailure } from "./data/types.ts";
@@ -906,7 +906,7 @@ function cloudLendingRefusal(capability: Pick<InternalCapability, "botId" | "thr
   const refusal = cloudHomeLendingRefusal(cloudLendingTurn(capability));
   if (refusal) return refusal;
   return lendingMemory?.reconcile(capability.botId, foreignTurnRunning(capability.botId), { cached: true }).changedBySomeoneElse ? "memory-changed" : null;
-} /** Whose phones a turn may use: on a Cloud home the owner's, when the lent Mac would allow the turn; elsewhere the owner's, in a conversation only this machine and admin sessions wrote in and no webhook posted to (every routine here is the owner's), never a webhook's run. */ function phoneTurnOwner(c: Pick<InternalCapability, "botId" | "threadId" | "generation">): string | null { if (HOSTED_WORKSPACE || CLOUD_TEAM) return null; if (CLOUD_HOME) return cloudLendingRefusal(c) === null ? CLOUD_OWNER_KEY : null; const turn = cloudLendingTurn(c); const admins = new Set(sessions.list().filter((s) => s.scopes.includes("admin")).map((s) => personKey(s))); return cloudHomeLendingRefusal({ ...turn, reportsFromOthers: store.messagesFor(c.threadId).some((line) => line.webhookPost === true), ownerPerson: (p) => p === undefined || admins.has(p), routineRun: () => { const run = turn.routineRun(); return run && { ...run, ownerStarted: true, ownerAuthored: true }; } }) === null ? DESKTOP_OWNER : null; }
+} /** Whose phones a turn may use: on a Cloud home the owner's, when the lent Mac would allow the turn; elsewhere the desktop owner's, as server/phones/owner.ts decides. */ function phoneTurnOwner(c: Pick<InternalCapability, "botId" | "threadId" | "generation">): string | null { if (HOSTED_WORKSPACE || CLOUD_TEAM) return null; if (CLOUD_HOME) return cloudLendingRefusal(c) === null ? CLOUD_OWNER_KEY : null; return cloudHomeLendingRefusal(desktopLendingTurn({ ...cloudLendingTurn(c), thread: store.messagesFor(c.threadId) }, { adminPersons: () => new Set(sessions.list().filter((s) => s.scopes.includes("admin")).map((s) => personKey(s))), originIsUser: () => turnOrigin(c).kind === "user", isRealRoutine: (id) => Boolean(routines?.listRoutines().some((r) => r.id === id)) })) === null ? DESKTOP_OWNER : null; }
 
 function cloudThreadStarters(threadId: string): (string | undefined)[] {
   const room = store.groupByThread(threadId);
@@ -1181,7 +1181,7 @@ function decisionActorFor(auth: RequestAuth): DecisionActor {
 function cardAnswererFor(auth: RequestAuth): CardAnswerer {
   if (auth.kind === "loopback") return auth.trust === "service" ? { kind: "worker" } : { kind: "loopback" };
   return { kind: "session", name: (auth.session.email ?? auth.session.label ?? "").trim() || "Signed-in user",
-    ...(CLOUD_HOME ? { person: actorKey(auth) } : {}) };
+    person: actorKey(auth) };
 }
 
 /** The answer reaches the turn before `answeredBy` is written, so a lending turn reads its answerer here. */
@@ -1197,7 +1197,7 @@ async function answeringCardAs(auth: RequestAuth, threadId: string, requestId: s
     const card = store.messagesFor(threadId).find((message) => message.card?.requestId === requestId)?.card;
     return Boolean(card && !card.answered && !card.dismissed && !card.expired);
   })();
-  if (CLOUD_HOME && open) cloudCardAnswersInFlight.set(requestId, auth.kind === "session" ? actorKey(auth) : undefined);
+  if (open) cloudCardAnswersInFlight.set(requestId, auth.kind === "session" ? actorKey(auth) : !CLOUD_HOME && auth.trust === "service" ? NOT_THE_OWNER : undefined);
   try {
     await withDecisionActor(decisionActorFor(auth), work, via);
   } finally {
@@ -1206,7 +1206,7 @@ async function answeringCardAs(auth: RequestAuth, threadId: string, requestId: s
     if (message && card && !card.answeredBy && card.answered !== "unavailable" && (card.answered || card.dismissed)) {
       store.patchMessage(threadId, message.id, { card: { ...card, answeredBy: { ...cardAnswererFor(auth), ...(via ? { via } : {}) } } });
     }
-    if (CLOUD_HOME && open) cloudCardAnswersInFlight.delete(requestId);
+    if (open) cloudCardAnswersInFlight.delete(requestId);
   }
 }
 
@@ -16143,7 +16143,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ...existing.card,
           ...(body.answered !== undefined ? { answered: body.answered } : {}),
           ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
-          ...(CLOUD_HOME && body.answered !== undefined ? { answeredBy: cardAnswererFor(auth) } : {}),
+          ...(body.answered !== undefined ? { answeredBy: cardAnswererFor(auth) } : {}),
         },
       });
       return json(res, 200, { message: patched });
