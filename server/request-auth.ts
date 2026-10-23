@@ -273,6 +273,10 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/shared-computers$/, feature: "sharedComputers" },
   // The same desktop's device link: a WebSocket bound to that secret too.
   { methods: ["GET"], path: /^\/api\/shared-computers\/[\w-]+\/link$/, feature: "sharedComputers" },
+  // This phone's own apps, keyed by its session (routes/phones.ts): register, poll, lease, answer.
+  { methods: ["GET", "PUT", "DELETE"], path: /^\/api\/phones\/self$/ },
+  { methods: ["GET"], path: /^\/api\/phones\/self\/jobs$/ },
+  { methods: ["POST"], path: /^\/api\/phones\/self\/jobs\/[\w-]+\/(?:lease|result)$/ },
   { methods: ["GET"], path: /^\/api\/health$/ },
   { methods: ["GET"], path: /^\/api\/edition$/ },
   { methods: ["GET"], path: /^\/api\/brand$/ },
