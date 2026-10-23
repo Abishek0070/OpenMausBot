@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { removeTempDir } from "../testing/cleanup.ts";
-import { MAX_BLOCKED, MAX_PHONES, PHONE_ONLINE_MS, PHONE_REMOVED_TEXT, PhoneRegistry, type PhoneRegistration } from "./registry.ts";
+import { MAX_BLOCKED, MAX_PHONES, PHONE_ONLINE_MS, PHONE_REMOVED_TEXT, phoneRegistration, PhoneRegistry, type PhoneRegistration } from "./registry.ts";
 
 const reg = (over: Partial<PhoneRegistration> = {}): PhoneRegistration => ({ installId: "inst-aaaaaaaa", name: "Omkar's iPhone", platform: "ios", appVersion: "1.9.0", timeZone: "Asia/Kolkata", capabilities: { calendar: "full", contacts: "limited" }, ...over });
 
@@ -113,5 +113,16 @@ describe("PhoneRegistry", () => {
     const registry = new PhoneRegistry(file, now);
     expect(registry.get("companion:d1")?.owner).toBe("owner");
     expect(registry.blocked("companion:d1")).toBe(false);
+  });
+
+  it("a newer phone's registration registers: an unknown field is stripped and an unknown app dropped", () => {
+    const parsed = phoneRegistration.safeParse({ ...reg(), pushToken: "abc", capabilities: { calendar: "full", inbox: ["whatsapp:Family", "sms"], contacts: "limited" } });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toEqual(reg());
+    const registry = new PhoneRegistry(file, now);
+    registry.register("companion:d1", "owner", parsed.data!);
+    expect(new PhoneRegistry(file, now).get("companion:d1")?.registration.capabilities).toEqual({ calendar: "full", contacts: "limited" });
+    // A known app with a malformed grant is still refused.
+    expect(phoneRegistration.safeParse({ ...reg(), capabilities: { calendar: "" } }).success).toBe(false);
   });
 });

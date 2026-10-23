@@ -6,9 +6,12 @@ import { isPhoneWrite } from "../../shared/phone-apps.ts";
 export const PHONE_JOB_CODES = ["denied", "foreground_required", "not_found", "too_large", "unsupported", "offline", "timeout", "turn_ended"] as const;
 export type PhoneJobCode = (typeof PHONE_JOB_CODES)[number];
 export type PhoneJobOutcome = { ok: true; result: unknown } | { ok: false; error: string; code?: PhoneJobCode };
+const KNOWN_CODES: readonly unknown[] = PHONE_JOB_CODES;
+/** A newer phone's extra field is stripped, and a code this server does not know yet reads as none: the error still
+ * reaches the bot. */
 export const phoneJobOutcome = z.union([
-  z.object({ ok: z.literal(true), result: z.unknown() }).strict(),
-  z.object({ ok: z.literal(false), error: z.string().max(2000), code: z.enum(PHONE_JOB_CODES).optional() }).strict(),
+  z.object({ ok: z.literal(true), result: z.unknown() }),
+  z.object({ ok: z.literal(false), error: z.string().max(2000), code: z.preprocess((code) => (KNOWN_CODES.includes(code) ? code : undefined), z.enum(PHONE_JOB_CODES).optional()) }),
 ]);
 
 export const PHONE_JOB_TIMEOUT_MS = 45_000;

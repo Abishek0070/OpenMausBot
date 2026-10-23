@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PHONE_RESULT_MAX_BYTES, PhoneJobs } from "./jobs.ts";
+import { PHONE_RESULT_MAX_BYTES, phoneJobOutcome, PhoneJobs } from "./jobs.ts";
 
 afterEach(() => vi.useRealTimers());
 const KEY = "phone-key";
@@ -228,5 +228,16 @@ describe("phone jobs", () => {
     expect(outcome).toEqual({ ok: false, code: "unsupported", error: "Background checks only read the phone." });
     expect(jobs.busy(KEY)).toBe(false);
     expect(jobs.polling(KEY)).toBe(false);
+  });
+
+  it("a newer phone's outcome is accepted: an unknown code reads as none and an unknown field is stripped", () => {
+    const unknownCode = phoneJobOutcome.safeParse({ ok: false, error: "Needs the new thing.", code: "something_new" });
+    expect(unknownCode.success).toBe(true);
+    expect(unknownCode.data).toMatchObject({ ok: false, error: "Needs the new thing." });
+    expect((unknownCode.data as { code?: string }).code).toBeUndefined();
+    expect(phoneJobOutcome.safeParse({ ok: false, error: "No access.", code: "denied", retryAfter: 5 }).data).toEqual({ ok: false, error: "No access.", code: "denied" });
+    expect(phoneJobOutcome.safeParse({ ok: true, result: { events: [] }, elapsedMs: 40 }).data).toEqual({ ok: true, result: { events: [] } });
+    expect(phoneJobOutcome.safeParse({ ok: false, error: "Plain." }).data).toEqual({ ok: false, error: "Plain." });
+    expect(phoneJobOutcome.safeParse({ bad: true }).success).toBe(false);
   });
 });
