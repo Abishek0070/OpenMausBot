@@ -24,7 +24,7 @@ export interface PhoneHostDeps {
   dataDir: string;
   /** The live store bot, re-read on every check so a permission change wins over a call already under way. */
   bot(id: string): BotRecord | undefined | null;
-  /** The owner whose phones a turn may use, or null when the turn is not provably the owner's (spec §2 "Whose phone"). */
+  /** The owner whose phones a turn may use, or null when the turn is not provably the owner's. */
   turnOwner(capability: TurnCapability): string | null;
   /** True when the thread is a room, so the activity row names its author. */
   inRoom(threadId: string): boolean;

@@ -412,6 +412,21 @@ describe("phone MCP host", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("a send whose turn ended while it waited on the hold spends nothing and never runs", async () => {
+    const run = vi.fn<PhoneRpcDeps["run"]>();
+    const reserveSend = vi.fn<PhoneRpcDeps["reserveSend"]>(() => ({ ok: true }));
+    let checks = 0;
+    const result = phoneRpc(call("PHONE_SEND_MESSAGE", { to: "Mom", text: "On my way" }), {
+      assertActive: () => { if (++checks > 1) throw new Error("turn ended"); },
+      authorize: () => ({ ok: true }), holdSend: async () => ({ ok: true, approved: true, fullAccess: false }),
+      phone: () => ({ name: "Omkar's iPhone", platform: "ios" }) as ReturnType<PhoneRpcDeps["phone"]>,
+      allows: () => ({ ok: true }), reserveSend, run,
+    });
+    await expect(result).rejects.toThrow("turn ended");
+    expect(reserveSend).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("a turn that is not the owner's sees no tools", async () => {
     const h = harness();
     h.state.owner = null;

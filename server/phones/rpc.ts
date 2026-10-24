@@ -62,6 +62,8 @@ export async function phoneRpc(
   if (isOutboundTool(name)) {
     const held = await deps.holdSend(name, input);
     if (!held.ok) return phoneErrorResult(held.text, { code: "refused" });
+    // An ended turn must not spend the allowance or record a decision for a send nobody is waiting on.
+    deps.assertActive();
     // The hold can wait minutes: a grant lowered meanwhile stops the send, as the connectors route re-checks at dispatch.
     const again = deps.authorize(name);
     if (!again.ok) return phoneErrorResult(again.text, { code: "refused" });

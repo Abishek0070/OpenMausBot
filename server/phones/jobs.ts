@@ -48,8 +48,8 @@ export class PhoneJobs {
     return phone;
   }
   /** One job in flight per phone; a second request waits for the first to finish, up to its own timeout.
-   * Two classes (spec §2): an in-turn job is bound to `active()` and times out in seconds; a `background` job (a routine's
-   * check, sub-project E) has no caller waiting, is never failed by `active()`, waits `timeoutMs` (the routine's tick) and
+   * Two classes: an in-turn job is bound to `active()` and times out in seconds; a `background` job (a routine's
+   * check) has no caller waiting, is never failed by `active()`, waits `timeoutMs` (the routine's tick) and
    * is dequeued only when no in-turn job is waiting. Background jobs are reads only: the queue refuses a write tool with
    * {ok:false, code:"unsupported"}. */
   async request(key: string, tool: string, args: Record<string, unknown>, options: PhoneJobOptions): Promise<PhoneJobOutcome> {

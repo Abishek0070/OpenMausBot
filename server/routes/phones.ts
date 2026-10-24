@@ -16,7 +16,7 @@ export function phoneKey(auth: RequestAuth): string | null {
   return auth.companionDevice ? `companion:${auth.companionDevice}` : null;
 }
 
-/** Long polls are held open on purpose; Task 10's idle-timeout exemption asks this. */
+/** Long polls are held open on purpose, so the idle-timeout check exempts them. */
 export function isLongPollPath(path: string): boolean {
   return path.startsWith("/api/shared-computers/") || path === "/api/phones/self/jobs";
 }

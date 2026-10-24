@@ -1,4 +1,4 @@
-// Whose turn may use the desktop owner's phones, off a Cloud home: the Cloud lending test (server/cloud-lending.ts) with
+// Whose turn may use the desktop owner's phones, off a Cloud home: the Cloud lending test with
 // the desktop's owner in place of the Cloud owner. The owner is whoever works at this machine or holds an admin session;
 // a bot's ask counts only as this turn's own request, and only while the work it carries came from the user; a routine's
 // run and its reports are the owner's only while the owner wrote it and nobody else has changed it since; a webhook's

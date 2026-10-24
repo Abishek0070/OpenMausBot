@@ -30,7 +30,7 @@ export interface OutboundHoldDeps {
 export type OutboundHoldAnswer = { ok: true; approved: boolean } | { ok: false; text: string };
 
 export interface OutboundHold {
-  /** Below Full access, a send waits on the "Send on your behalf?" card or spends the daily allowance. Writes the same decision rows as before. */
+  /** Below Full access, a send waits on the "Send on your behalf?" card or spends the daily allowance. */
   hold(input: { bot: OutboundHoldBot; threadId: string; tool: string; calls: ConnectorCall[]; opaque: boolean; fullAccess: boolean; active: () => boolean }): Promise<OutboundHoldAnswer>;
   /** At dispatch time: Full access logs auto-approved; "allow" reserves against the cap; otherwise the hold must have been approved. Throws the refusal text. */
   reserve(input: { bot: OutboundHoldBot; threadId: string; tool: string; calls: ConnectorCall[]; opaque: boolean; fullAccess: boolean; approved: boolean }): void;
