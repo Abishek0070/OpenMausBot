@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { phoneAccess, phoneSystemPrompt, type PhoneBot } from "./access.ts";
+import { phoneAccess, phoneSystemPrompt, phoneWithheldPrompt, type PhoneBot } from "./access.ts";
 
 const chief: PhoneBot = { id: "c", name: "Chief of Staff", chiefOfStaff: true };
 const scout: PhoneBot = { id: "s", name: "Scout" };
@@ -24,5 +24,24 @@ describe("phoneAccess", () => {
   it("the prompt names the phone and its apps", () => {
     expect(phoneSystemPrompt(chief, [{ name: "Omkar's iPhone", platform: "ios", capabilities: onPhone }])).toContain("Omkar's iPhone");
     expect(phoneSystemPrompt(scout, [{ name: "Omkar's iPhone", platform: "ios", capabilities: onPhone }])).toBe("");
+  });
+
+  it("a phone named after its kind is not described as itself", () => {
+    const text = phoneSystemPrompt(chief, [{ name: "iPhone", platform: "ios", capabilities: onPhone }]);
+    expect(text).not.toContain("iPhone is an iPhone");
+    expect(text).toContain("The iPhone");
+  });
+
+  it("says the USB phone tools are a different phone", () => {
+    expect(phoneSystemPrompt(chief, [{ name: "Omkar's iPhone", platform: "ios", capabilities: onPhone }])).toMatch(/USB/);
+  });
+
+  it("when this conversation may not use the phone, the bot hears that it exists and how to reach it, not nothing", () => {
+    const text = phoneWithheldPrompt(chief, [{ name: "Omkar's iPhone", platform: "ios" }]);
+    expect(text).toContain("Omkar's iPhone");
+    expect(text).toMatch(/new conversation/);
+    expect(text).toMatch(/USB/);
+    expect(phoneWithheldPrompt(scout, [{ name: "Omkar's iPhone", platform: "ios" }])).toBe("");
+    expect(phoneWithheldPrompt(chief, [])).toBe("");
   });
 });

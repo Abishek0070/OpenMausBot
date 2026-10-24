@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { cloudHomeLendingRefusal, type CloudLendingTurn } from "../cloud-lending.ts";
-import { desktopLendingTurn, desktopPhonesOffered, NOT_THE_OWNER, type DesktopTurn } from "./owner.ts";
+import { adoptExistingRoutines, desktopLendingTurn, desktopPhonesOffered, NOT_THE_OWNER, type DesktopTurn } from "./owner.ts";
 
 const ADMIN = "p_admin", MEMBER = "p_member", ROUTINE = "routine-1", WEBHOOK = "webhook-1";
 const said = (id: string, extra: Record<string, unknown> = {}) => ({ id, role: "user", ...extra });
@@ -109,5 +109,31 @@ describe("where the desktop owner's phones are offered", () => {
     // A request from this machine is a service (a hosted workspace's or a headless server's shell), not the owner.
     expect(desktopPhonesOffered({ sharedMembership: false, loopbackTrust: "service" })).toBe(false);
     expect(desktopPhonesOffered({ sharedMembership: true, loopbackTrust: "service" })).toBe(false);
+  });
+});
+
+describe("routines that were already there when authorship started being recorded", () => {
+  const routines = [{ id: "r1", prompt: "Morning brief" }, { id: "r2", prompt: "Stretch reminder" }];
+  const run = (overrides: Partial<Parameters<typeof adoptExistingRoutines>[0]> = {}) => {
+    const recorded: string[] = []; let persisted = 0;
+    const adopted = adoptExistingRoutines({
+      recordsExisted: false, offered: true, otherPeople: false, routines,
+      record: (routine) => { recorded.push(routine.id); }, persist: () => { persisted += 1; }, ...overrides,
+    });
+    return { adopted, recorded, persisted };
+  };
+
+  it("are the owner's on the first run of a desktop only one person uses, and the record is kept so it never runs again", () => {
+    expect(run()).toEqual({ adopted: 2, recorded: ["r1", "r2"], persisted: 1 });
+  });
+
+  it("an empty desktop still keeps the record, so a routine someone adds later is never adopted by a later start", () => {
+    expect(run({ routines: [] })).toEqual({ adopted: 0, recorded: [], persisted: 1 });
+  });
+
+  it("are never adopted once records exist, where phones are not offered, or while any other person has a session here", () => {
+    expect(run({ recordsExisted: true })).toEqual({ adopted: 0, recorded: [], persisted: 0 });
+    expect(run({ offered: false })).toEqual({ adopted: 0, recorded: [], persisted: 0 });
+    expect(run({ otherPeople: true })).toEqual({ adopted: 0, recorded: [], persisted: 0 });
   });
 });

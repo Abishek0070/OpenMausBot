@@ -1,7 +1,7 @@
 // Per-bot checks for phone tool calls: the phone's grant decides which apps exist, the bot's grant decides read or write.
 import { PHONE_SLUG, ALL_PHONE_APPS, isPhoneToolName, isPhoneWrite, phoneToolCapability, type PhoneApps, type PhoneCapability, type PhonePlatform } from "../../shared/phone-apps.ts";
 import { connectorScopeRefusalText } from "../connector-verdict.ts";
-import { PHONE_PROMPT } from "./instructions.ts";
+import { PHONE_PROMPT, PHONE_WITHHELD_PROMPT } from "./instructions.ts";
 
 export interface PhoneBot {
   id: string;
@@ -66,8 +66,19 @@ export function phoneSystemPrompt(
   if (Object.keys(grants).length === 0 || phones.length === 0) return "";
   const sentences = phones.map((phone) => {
     const apps = (Object.keys(grants) as PhoneCapability[]).filter((cap) => phone.capabilities[cap]).map((cap) => `${capName(cap)}${grants[cap] === "read" ? " (read only)" : ""}`);
-    const kind = phone.platform === "ios" ? "iPhone" : "Android phone";
-    return ` ${phone.name} is an ${kind}; this bot may use: ${apps.length ? apps.join(", ") : "nothing yet"}.`;
+    return ` ${describePhone(phone)}; this bot may use: ${apps.length ? apps.join(", ") : "nothing yet"}.`;
   });
   return PHONE_PROMPT + sentences.join("");
+}
+
+/** "Omkar's iPhone is an iPhone", or "The iPhone" when the phone is named after its kind (iOS 16+ reports "iPhone"). */
+function describePhone(phone: { name: string; platform: PhonePlatform }): string {
+  const kind = phone.platform === "ios" ? "iPhone" : "Android phone";
+  return phone.name.trim().toLowerCase() === kind.toLowerCase() ? `The ${kind}` : `${phone.name} is an ${kind}`;
+}
+
+/** The note for a turn whose conversation may not use the phone: it exists, how to reach it, and which tools are not it. */
+export function phoneWithheldPrompt(bot: PhoneBot, phones: ReadonlyArray<{ name: string; platform: PhonePlatform }>): string {
+  if (Object.keys(phoneAppsFor(bot)).length === 0 || phones.length === 0) return "";
+  return PHONE_WITHHELD_PROMPT + ` Paired: ${phones.map((phone) => phone.name).join(", ")}.`;
 }

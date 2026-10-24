@@ -37,6 +37,20 @@ export function desktopPhonesOffered(server: { sharedMembership: boolean; loopba
   return !server.sharedMembership && server.loopbackTrust !== "service";
 }
 
+/** Routines written before this desktop kept authorship records have none, so the owner's own brief or reminder would
+ * count as someone else's words in every conversation it reports into. On the first start with records, where one person
+ * uses this server and no other person holds a session here, those routines can only be the owner's: record them once.
+ * The record is kept even when there is nothing to adopt, so a routine added later is never adopted by a later start. */
+export function adoptExistingRoutines<R extends { id: string }>(input: {
+  recordsExisted: boolean; offered: boolean; otherPeople: boolean; routines: readonly R[];
+  record(routine: R): void; persist(): void;
+}): number {
+  if (input.recordsExisted || !input.offered || input.otherPeople) return 0;
+  for (const routine of input.routines) input.record(routine);
+  input.persist();
+  return input.routines.length;
+}
+
 /** The routine a report or run card speaks for; an outside event's run names its trigger, which is no routine. */
 const routineOf = (line: DesktopLine): string | undefined =>
   line.automation?.routineId ?? (line.kind === "routine.run" ? line.routineRun?.routineId : undefined);

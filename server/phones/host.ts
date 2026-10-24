@@ -8,7 +8,7 @@ import { harnessMcpTokenEnv } from "../harness-mcp-token.ts";
 import type { OutboundHold } from "../outbound-hold.ts";
 import { AGENTS_NODE_FLAG, SPAWNED_PROXIES } from "../proxy-paths.ts";
 import type { BotRecord } from "../store.ts";
-import { capName, phoneAccess, phoneAppsFor, phoneSystemPrompt, type PhoneAccess, type PhoneBot } from "./access.ts";
+import { capName, phoneAccess, phoneAppsFor, phoneSystemPrompt, phoneWithheldPrompt, type PhoneAccess, type PhoneBot } from "./access.ts";
 import { PHONE_NO_PHONE_TEXT } from "./instructions.ts";
 import { PHONE_JOB_TIMEOUT_MS, PHONE_SEND_TIMEOUT_MS, type PhoneJobs } from "./jobs.ts";
 import type { PhoneRecord, PhoneRegistry } from "./registry.ts";
@@ -39,6 +39,8 @@ export interface PhoneHost {
   mounts(bot: PhoneBot, owner: string | null): boolean;
   integration(bot: PhoneBot, owner: string | null, mint: () => string, harnessUrl: string): { command: string; args: string[]; env: Record<string, string> } | null;
   prompt(bot: PhoneBot, owner: string | null): string;
+  /** For a turn that may not use the phone although the owner's phone would serve this bot: say so, so it does not guess. */
+  withheld(bot: PhoneBot, owner: string | null): string;
   handle(body: unknown, capability: TurnCapability, assertActive: () => void): Promise<PhoneToolsList | PhoneToolResult>;
   /** The PHONE_* names for the per-bot tool grants picker (/api/connectors/tools); null when no phone is registered. */
   toolListing(): { phone: Array<{ name: string; description: string }> } | null;
@@ -84,6 +86,7 @@ export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
       };
     },
     prompt: (bot, owner) => (owner === null ? "" : phoneSystemPrompt(bot, phonesOf(owner).map(({ registration }) => registration))),
+    withheld: (bot, owner) => (owner !== null && mounts(bot, owner) ? phoneWithheldPrompt(bot, phonesOf(owner).map(({ registration }) => registration)) : ""),
     toolListing: () => (registry.list(null, () => false).length === 0 ? null : { phone: PHONE_TOOLS.map(({ name, description }) => ({ name, description })) }),
     async handle(body, capability, assertActive) {
       const active = () => deps.active(capability);
