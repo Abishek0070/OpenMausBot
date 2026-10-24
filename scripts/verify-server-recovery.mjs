@@ -109,7 +109,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
           PATH: dirname(runtime), HOME: home, USERPROFILE: home,
           XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home, XDG_DATA_HOME: home,
           APPDATA: home, LOCALAPPDATA: home, TMPDIR: home, TEMP: home, TMP: home,
-          OMB_DATA_DIR: dataDir, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(webhookPort),
+          OMB_DATA_DIR: dataDir, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(webhookPort), OMB_FREE_FALLBACK: "0",
           OMB_STATIC_DIR: join(output, "ui"), OMB_DESKTOP_PARENT: "1",
           ...lease.utilityServerLeaseEnvironment(),
           FAKE_CLAUDE_MODE: "hang", FAKE_CLAUDE_PROMPTS: join(home, "prompts.jsonl"),

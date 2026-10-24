@@ -64,7 +64,7 @@ app.whenReady().then(async () => {
   const env = {
     HOME: home, USERPROFILE: home, OMB_DATA_DIR: home, PATH: "",
     ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-    OMB_PORT: String(harnessPort), OMB_WEBHOOK_PORT: String(webhookPort),
+    OMB_PORT: String(harnessPort), OMB_WEBHOOK_PORT: String(webhookPort), OMB_FREE_FALLBACK: "0",
     OMB_COMPANION_PORT: String(phonePort), OMB_CONTROL_PORT: String(controlPort),
     FAKE_CLAUDE_MODE: "happy",
   };

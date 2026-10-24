@@ -97,7 +97,7 @@ app.whenReady().then(async () => {
     env: {
       HOME: home, USERPROFILE: home, OMB_DATA_DIR: home, PATH: "",
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-      OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(webhookPort),
+      OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(webhookPort), OMB_FREE_FALLBACK: "0",
       OMB_TEST_INTERNAL_CAPABILITY_KEY: testCapabilityKey,
       FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_DUMP: dump,
       FAKE_ACP_MODE: "permission", FAKE_ACP_AUTH_METHOD: "oauth-personal",

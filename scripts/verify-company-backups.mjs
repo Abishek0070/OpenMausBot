@@ -425,7 +425,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
       XDG_CACHE_HOME: join(home, ".cache"), XDG_DATA_HOME: join(home, ".local/share"), APPDATA: join(home, "AppData/Roaming"), LOCALAPPDATA: join(home, "AppData/Local"),
       TEMP: temporary, TMP: temporary, TMPDIR: temporary, HERMES_HOME: join(home, ".hermes"), OMB_DATA_DIR: fixture.info.dataDir,
       OMB_PORT: new URL(fixture.info.url).port, OMB_WEBHOOK_PORT: String(Number(new URL(fixture.info.url).port) + 1),
-      FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_DUMP: fixture.fixtureDumpPath };
+      FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_DUMP: fixture.fixtureDumpPath, OMB_FREE_FALLBACK: "0" };
     for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"]) if (process.env[key]) env[key] = process.env[key];
     const log = openSync(fixture.info.logPath, "a", 0o600);
     runtime = spawn(process.execPath, ["--experimental-strip-types", join(root, "server/index.ts")], { cwd: root, env, stdio: ["ignore", log, log] }); closeSync(log);

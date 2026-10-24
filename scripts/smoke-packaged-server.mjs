@@ -76,6 +76,8 @@ const fixtureEnv = {
   XDG_DATA_HOME: join(home, ".local", "share"),
   OMB_DATA_DIR: join(home, ".openmausbot"),
   OMB_PORT: String(port),
+  // A fresh data folder with no AI: the free backup would otherwise download OpenCode in the release workflow.
+  OMB_FREE_FALLBACK: "0",
   OMB_WEBHOOK_PORT: String(webhookPort),
   // Not a genuine key: enough to make the server look for its enterprise layer.
   OMB_LICENSE_KEY: "omb1.not.real",

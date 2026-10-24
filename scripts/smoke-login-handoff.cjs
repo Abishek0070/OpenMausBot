@@ -48,6 +48,8 @@ app.whenReady().then(async () => {
   } }));
   harness = utilityProcess.fork(join(root, "dist-server/index.js"), [], { cwd: root, stdio: "pipe", env: {
     HOME: home, USERPROFILE: home, OMB_DATA_DIR: home, PATH: "", OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(await freePort()),
+    // No AI here: the free backup would otherwise download OpenCode.
+    OMB_FREE_FALLBACK: "0",
     OMB_DESKTOP_PARENT: "1", ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
   } });
   harness.stdout.on("data", (chunk) => { logs += chunk; });
