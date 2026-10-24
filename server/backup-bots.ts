@@ -26,7 +26,11 @@ export interface BackupBotsDeps {
   company?(instanceId: string): boolean;
   /** Where the noted bots are kept; none keeps them in memory. */
   file?: string;
+  after?(ms: number, run: () => void): { cancel(): void };
 }
+
+/** A bot still replying is tried again this often, so its move never waits on someone reading the engines. */
+const BUSY_RETRY_MS = 5_000;
 
 const same = (a: ModelSelection, b: ModelSelection) => a.instanceId === b.instanceId && a.model === b.model;
 const exactly = (a: ModelSelection, b: ModelSelection) => same(a, b) && a.effort === b.effort && a.variant === b.variant;
@@ -52,6 +56,12 @@ export function createBackupBots(deps: BackupBotsDeps) {
   const seen = new Map<string, string>();
   let backupDefault: ModelSelection | null = null;
   let listening = false;
+  let retry: { cancel(): void } | null = null;
+  const after = deps.after ?? ((ms: number, run: () => void) => {
+    const timer = setTimeout(run, ms);
+    timer.unref?.();
+    return { cancel: () => clearTimeout(timer) };
+  });
 
   const save = () => {
     if (!deps.file) return;
@@ -94,36 +104,44 @@ export function createBackupBots(deps: BackupBotsDeps) {
     });
   };
 
-  return {
-    /** The engines the latest read found and the default chosen from them (tested-ai's settle). */
-    settle(instances: readonly SelectableInstance[], selection: ModelSelection): void {
-      listen();
-      const to = instances.find((candidate) => candidate.instanceId === selection.instanceId);
-      if (!to || !selection.model) return;
-      if (freeFallback(to)) {
-        backupDefault = structuredClone(selection);
-        return;
-      }
-      backupDefault = null;
-      if (deps.company?.(to.instanceId) === true || deps.tested(to) !== "passed") return;
-      const store = deps.store();
-      let changed = false;
-      for (const [botId, was] of Object.entries(noted)) {
-        const bot = store.bot(botId);
-        if (!bot || !exactly(bot.modelSelection, was)) {
-          delete noted[botId];
-          changed = true;
-          continue;
-        }
-        if (store.tasks(bot.id).some((task) => deps.threadBusy(bot.id, task.threadId))) continue;
+  /** The engines the latest read found and the default chosen from them (tested-ai's settle). */
+  const settle = (instances: readonly SelectableInstance[], selection: ModelSelection): void => {
+    retry?.cancel();
+    retry = null;
+    listen();
+    const to = instances.find((candidate) => candidate.instanceId === selection.instanceId);
+    if (!to || !selection.model) return;
+    if (freeFallback(to)) {
+      backupDefault = structuredClone(selection);
+      return;
+    }
+    backupDefault = null;
+    if (deps.company?.(to.instanceId) === true || deps.tested(to) !== "passed") return;
+    const store = deps.store();
+    let changed = false;
+    for (const [botId, was] of Object.entries(noted)) {
+      const bot = store.bot(botId);
+      if (!bot || !exactly(bot.modelSelection, was)) {
         delete noted[botId];
         changed = true;
-        store.applyModelDefault(bot.id, structuredClone(deps.forBot(selection)));
-        store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: `Now using ${deps.name(to.instanceId)}.`, ok: true } });
+        continue;
       }
-      if (changed) save();
-    },
+      if (store.tasks(bot.id).some((task) => deps.threadBusy(bot.id, task.threadId))) {
+        retry ??= after(BUSY_RETRY_MS, () => {
+          retry = null;
+          settle(instances, selection);
+        });
+        continue;
+      }
+      delete noted[botId];
+      changed = true;
+      store.applyModelDefault(bot.id, structuredClone(deps.forBot(selection)));
+      store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: `Now using ${deps.name(to.instanceId)}.`, ok: true } });
+    }
+    if (changed) save();
   };
+
+  return { settle };
 }
 
 export type BackupBots = ReturnType<typeof createBackupBots>;

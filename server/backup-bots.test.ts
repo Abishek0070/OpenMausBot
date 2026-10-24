@@ -157,17 +157,28 @@ describe("bots leave the free backup once the person's own AI answers", () => {
     expect(store.lines).toEqual([]);
   });
 
-  it("waits until a bot's reply is done", () => {
-    const bots = make();
+  it("waits until a bot's reply is done, then moves it without waiting for another read of the engines", () => {
+    const timers: Array<{ ms: number; run: () => void; cancelled: boolean }> = [];
+    const bots = make({ after: (ms, run) => {
+      const timer = { ms, run, cancelled: false };
+      timers.push(timer);
+      return { cancel: () => { timer.cancelled = true; } };
+    } });
     onBackup(bots);
     store.create("helper", BACKUP);
     busy.add("helper/helper-main");
     states.claude = "passed";
     bots.settle([claude, backup], CLAUDE);
     expect(store.bot("helper")!.modelSelection).toEqual(BACKUP);
+    // Still replying when the retry comes: it tries again later.
+    expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(1);
+    timers.at(-1)!.run();
+    expect(store.bot("helper")!.modelSelection).toEqual(BACKUP);
     busy.clear();
-    bots.settle([claude, backup], CLAUDE);
+    timers.filter((timer) => !timer.cancelled).at(-1)!.run();
     expect(store.bot("helper")!.modelSelection).toEqual({ ...CLAUDE, effort: "high" });
+    expect(nowUsing("helper")).toEqual(["Now using Claude."]);
+    expect(timers.every((timer) => timer.ms === 5_000)).toBe(true);
   });
 
   it.each<[string, () => [SelectableInstance[], ModelSelection]]>([
