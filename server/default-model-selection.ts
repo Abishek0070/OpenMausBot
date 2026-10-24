@@ -80,8 +80,9 @@ export function selectDefaultModelSelection(
   const available = instances.filter((instance) => instance.enabled !== false && instance.snapshot.state === "available" && context.refusal?.(instance) === undefined && defaultModel(instance));
   const ready = available.filter((instance) => readyToRun(instance, context));
   const company = context.company;
+  // OpenCode's free backup is the app's stand-in, not the person's own engine: it never outranks the company's AI.
   const personal = company && instances.some((instance) => company(instance.instanceId))
-    ? best(ready.filter((instance) => !company(instance.instanceId)), context)
+    ? best(ready.filter((instance) => !company(instance.instanceId) && !instance.snapshot.freeFallback), context)
     : undefined;
   const pick = personal ?? best(ready, context) ?? best(available, context);
   return { instanceId: pick?.instanceId ?? "", model: pick ? defaultModel(pick) : "" };

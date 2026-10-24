@@ -219,6 +219,18 @@ describe("new bot default model selection while enrolled in an organisation", ()
       .toEqual({ instanceId: "codex", model: "codex-default" });
   });
 
+  it("never lets OpenCode's free backup outrank the company's AI: it is the app's stand-in, not the person's own engine", () => {
+    const backup = {
+      instanceId: "opencodeGo", driverKind: "opencodeGo",
+      snapshot: { state: "available", authenticated: true, freeFallback: true } satisfies ProviderSnapshot,
+      models: { default: "opencode/glm-5.3-flash-free", options: [{ id: "opencode/glm-5.3-flash-free", label: "GLM" }] },
+    };
+    expect(selectDefaultModelSelection([companyClaude, backup], undefined, { company }))
+      .toEqual({ instanceId: "company.fixture.anthropic", model: "company-claude" });
+    expect(selectDefaultModelSelection([backup, companyClaude], undefined, { company, answered: () => true }))
+      .toEqual({ instanceId: "company.fixture.anthropic", model: "company-claude" });
+  });
+
   it("falls back to today's choice when nothing can run yet", () => {
     const companyMissingCli = { ...companyClaude, snapshot: { state: "unavailable", reason: "claude CLI not found" } satisfies ProviderSnapshot };
     expect(selectDefaultModelSelection([signedOut, companyMissingCli], undefined, { company }))
