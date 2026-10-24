@@ -14,6 +14,7 @@ const HARNESSES = [
   "scripts/smoke-phone-relay-auth.cjs",
   "scripts/verify-company-backups.mjs",
   "scripts/verify-server-recovery.mjs",
+  "scripts/verify-workspace-backup.ts",
 ];
 
 describe("scripts that boot a server for a check", () => {

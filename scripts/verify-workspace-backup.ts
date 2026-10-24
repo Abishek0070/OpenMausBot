@@ -34,7 +34,7 @@ async function restartFixture(fixture: VerificationServer): Promise<ChildProcess
     TEMP: temp, TMP: temp, TMPDIR: temp, HERMES_HOME: join(home, ".hermes"),
     OMB_DATA_DIR: dataDir, OMB_PORT: new URL(fixture.info.url).port,
     OMB_WEBHOOK_PORT: String(Number(new URL(fixture.info.url).port) + 1),
-    FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_DUMP: fixture.fixtureDumpPath,
+    FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_DUMP: fixture.fixtureDumpPath, OMB_FREE_FALLBACK: "0",
     PATH: dirname(process.execPath),
   });
   const log = openSync(fixture.info.logPath, "a", 0o600);

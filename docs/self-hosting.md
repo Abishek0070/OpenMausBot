@@ -933,8 +933,10 @@ hosted workspace, a Cloud home, a server people sign in to, a branded build
 or an organization-managed computer, or next to an OpenCode the person
 installed; failed attempts wait 10 minutes, an hour, then a day
 (`<data dir>/providers/free-fallback.json`). The app's copy is moved to the
-version this release pins while a bot uses it. To turn all of this off,
-start the server with `OMB_FREE_FALLBACK=0`.
+version this release pins while a bot uses it. An OpenCode the app installed
+ignores keys in the server's environment and logins made in a terminal; to
+use it with your own account, give it a key in Settings. To turn all of this
+off, start the server with `OMB_FREE_FALLBACK=0`.
 
 ### The decision log
 
