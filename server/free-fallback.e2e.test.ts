@@ -4,7 +4,7 @@
 // restart finds the app's copy and downloads nothing. A Claude that is only untested, or a saved default, installs nothing.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -127,16 +127,32 @@ it.skipIf(process.platform === "win32")("installs OpenCode once Claude missed tw
   expect((await again.starter()).modelSelection.instanceId).toBe("opencodeGo");
 }, 150_000);
 
-it.skipIf(process.platform === "win32")("installs at start when no AI is ready at all", async () => {
+it.skipIf(process.platform === "win32")("installs at start when no AI is ready at all, and moves the first bot off it once the person's Claude answers", async () => {
   const home = freshHome();
   const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+  // Claude isn't installed yet; once it is, its test message answers.
   config.instances.claude.config.cli = join(home, "no-claude-here");
+  delete config.instances.claude.environment.FAKE_CLAUDE_CHECK;
   writeFileSync(join(home, "config.json"), JSON.stringify(config));
   const server = await boot(home);
   await expect.poll(server.tests, { timeout: 60_000, interval: 250 }).toMatchObject({ claude: null, opencodeGo: "passed" });
   expect(server.downloads()).toBe(1);
   await expect.poll(async () => (await server.starter()).modelSelection, { timeout: 10_000 }).toMatchObject({ instanceId: "opencodeGo", model: NO_RETENTION });
-}, 90_000);
+  // The person writes to the first bot, which answers on the backup: it no longer follows the default on its own.
+  const first = (await server.api("GET", "/api/bots?messages=0")).bots.find((bot: { chiefOfStaff?: boolean }) => bot.chiefOfStaff) as { id: string };
+  await server.api("POST", `/api/bots/${first.id}/messages`, { text: "Hello there." });
+  const lines = async () => ((await server.api("GET", "/api/bots?messages=50")).bots.find((bot: { id: string }) => bot.id === first.id) as {
+    messages: Array<{ role: string; kind?: string; text?: string; tool?: { name?: string } }>;
+  }).messages;
+  await expect.poll(async () => (await lines()).some((line) => line.role === "bot" && line.text?.includes("OK")), { timeout: 30_000, interval: 250 }).toBe(true);
+  // The person installs and connects Claude; the welcome checks it.
+  symlinkSync(FAKE_CLAUDE, join(home, "no-claude-here"));
+  await expect.poll(async () => (await server.engines()).claude?.snapshot, { timeout: 15_000, interval: 250 }).toMatchObject({ state: "available" });
+  expect(await server.api("POST", "/api/instances/claude/check", {})).toMatchObject({ ok: true });
+  await expect.poll(async () => (await server.starter()).modelSelection.instanceId, { timeout: 15_000, interval: 250 }).toBe("claude");
+  const moved = (await lines()).filter((line) => line.kind === "activity" && line.tool?.name === "Now using Claude.");
+  expect(moved).toHaveLength(1);
+}, 120_000);
 
 it.skipIf(process.platform === "win32")("installs nothing with a saved default", async () => {
   const server = await boot(freshHome({ defaultModelSelection: { instanceId: "claude", model: "claude-sonnet-5" } }));
