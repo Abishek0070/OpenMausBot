@@ -590,7 +590,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           (!trustPatch.connectorScopes || Object.entries(trustPatch.connectorScopes.apps).some(([slug, scope]) =>
             !existingBot.connectorScopes!.apps[slug] || (scope === "write" && existingBot.connectorScopes!.apps[slug] === "read")))) loosened.push("connectorScopes");
       if (body.phoneApps !== undefined && existingBot) {
-        // Compare effective grants: clearing falls back to everything on a Chief.
+        // Compare effective grants: clearing falls back to every app.
         const before = phoneAppsFor(existingBot);
         const after = phoneAppsFor({ ...existingBot, phoneApps: (patch as Pick<Partial<BotRecord>, "phoneApps">).phoneApps });
         if (Object.entries(after).some(([cap, grant]) => !before[cap as keyof typeof before] || (grant === "write" && before[cap as keyof typeof before] === "read"))) loosened.push("phoneApps");

@@ -117,6 +117,8 @@ export interface BotMessageRouteDeps {
   relayedReaction(threadId: string, messageId: string, person: { email?: string; name?: string }, emoji: string): void;
   /** The conversation an answer to this card belongs to: a run's own, for the copy its automation posted in a chat. */
   answeredIn(threadId: string, requestId: string): string;
+  /** Records a send the person's paired phone made, so the turn it starts knows they are talking from the phone. */
+  notePhoneSend(auth: RequestAuth, sendId: string): void;
 }
 
 /** External interfaces (the Slack worker) opt in. `onBehalfOf`, advertised by /api/health as
@@ -147,7 +149,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
     turnSelection, policyModelRefusal, clearUnattended, drainQueuedSends, answeringCardAs, resolveAndSendTrust, resolveAndSendTeamSetup,
     resolveAndSendRoutine, resolveAndSendProfile, resolveAndSendModel, resolveSkillRequest, sendSkillResolution, answerRequest,
     deliverLateQuestionAnswer, interruptDirectThread, cancelDirectTurnDispatch, revokeInternalCapabilitiesForThread,
-    cancelGroupTurnOperations, closeOpenApprovals, harnessCardOutcome, pressRecords, serverPress, relayedReaction, answeredIn,
+    cancelGroupTurnOperations, closeOpenApprovals, harnessCardOutcome, pressRecords, serverPress, relayedReaction, answeredIn, notePhoneSend,
   } = deps;
   const pinnedClientThread = pinnedClientThreadGuard(store);
   /** widget -> sendId of a press on its way in: a second tap before acceptance must not send a second answer. */
@@ -265,6 +267,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
             return { ok: true as const, threadId, message };
           }
         : undefined;
+      if (sendId) notePhoneSend(auth, sendId);
       if (pressKey) pressesInFlight.set(pressKey, sendId);
       try {
         const receipt = await acceptDirectSend({

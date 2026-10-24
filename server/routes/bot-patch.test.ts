@@ -287,15 +287,28 @@ describe("PATCH /api/bots/:id phoneApps", () => {
     expect(narrowed.status).toBe(200);
   });
 
-  it("treats clearing a narrower grant on a Chief as loosening", async () => {
+  it("treats clearing a narrower grant as loosening on any bot, since the default is every app", async () => {
     const { store, bot, patch } = fixture();
-    store.patchBot(bot.id, { chiefOfStaff: true, phoneApps: { calendar: "read" } });
+    store.patchBot(bot.id, { phoneApps: { calendar: "read" } });
     store.patchBot(bot.id, { busy: true });
 
     const cleared = await patch(bot.id, { phoneApps: null });
+    store.patchBot(bot.id, { chiefOfStaff: true });
+    const clearedOnChief = await patch(bot.id, { phoneApps: null });
 
     expect(cleared.status).toBe(409);
+    expect(clearedOnChief.status).toBe(409);
     expect(store.bot(bot.id)?.phoneApps).toEqual({ calendar: "read" });
+  });
+
+  it("treats switching every app off from the default as tightening", async () => {
+    const { store, bot, patch } = fixture();
+    store.patchBot(bot.id, { busy: true });
+
+    const off = await patch(bot.id, { phoneApps: {} });
+
+    expect(off.status).toBe(200);
+    expect(store.bot(bot.id)?.phoneApps).toEqual({});
   });
 
   it("refuses a client session and a paired device", async () => {

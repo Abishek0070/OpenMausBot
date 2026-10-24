@@ -18,14 +18,17 @@ describe("phone apps card decisions", () => {
   it("lists six rows and marks none on the phone when no phone is registered", () => {
     const rows = phoneAppRows({}, []);
     expect(rows.map((r) => r.cap)).toEqual(["calendar", "reminders", "contacts", "location", "home", "messages"]);
-    expect(rows.every((r) => !r.onPhone && r.grant === null)).toBe(true);
+    expect(rows.every((r) => !r.onPhone && r.grant === "write")).toBe(true);
+    expect(phoneAppRows({ phoneApps: {} }, []).every((r) => r.grant === null)).toBe(true);
   });
 
-  it("defaults the Chief to every grant and a plain bot to none", () => {
-    expect(Object.keys(effectivePhoneApps({ chiefOfStaff: true }))).toHaveLength(6);
-    expect(effectivePhoneApps({ chiefOfStaff: true }).home).toBe("write");
-    expect(effectivePhoneApps({})).toEqual({});
-    expect(effectivePhoneApps({ chiefOfStaff: true, phoneApps: { calendar: "read" } })).toEqual({ calendar: "read" });
+  it("defaults every bot to every grant, the Chief or not; an explicit list wins", () => {
+    const chief = { chiefOfStaff: true, phoneApps: undefined };
+    expect(Object.keys(effectivePhoneApps({}))).toHaveLength(6);
+    expect(effectivePhoneApps({}).home).toBe("write");
+    expect(effectivePhoneApps(chief)).toEqual(effectivePhoneApps({}));
+    expect(effectivePhoneApps({ phoneApps: {} })).toEqual({});
+    expect(effectivePhoneApps({ phoneApps: { calendar: "read" } })).toEqual({ calendar: "read" });
   });
 
   it("flags rows the phone allows", () => {
@@ -35,12 +38,12 @@ describe("phone apps card decisions", () => {
   });
 
   it("raises calendar to write keeping the other defaults, and Off deletes the key", () => {
-    const raised = nextPhoneApps({ chiefOfStaff: true, phoneApps: { contacts: "read" } }, "calendar", "write");
+    const raised = nextPhoneApps({ phoneApps: { contacts: "read" } }, "calendar", "write");
     expect(raised).toEqual({ contacts: "read", calendar: "write" });
-    const chief = nextPhoneApps({ chiefOfStaff: true }, "location", null);
-    expect(chief.location).toBeUndefined();
-    expect(chief.calendar).toBe("write");
-    expect("location" in chief).toBe(false);
+    const fromDefault = nextPhoneApps({}, "location", null);
+    expect(fromDefault.location).toBeUndefined();
+    expect(fromDefault.calendar).toBe("write");
+    expect("location" in fromDefault).toBe(false);
   });
 
   it("joins phone names", () => {

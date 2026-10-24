@@ -35,13 +35,13 @@ export interface PhoneAppRow {
 
 const PHONES_POLL_MS = 15_000;
 
-/** Mirrors the server: an unset grant list means everything for the Chief, nothing for other bots. */
-export function effectivePhoneApps(bot: { chiefOfStaff?: boolean; phoneApps?: PhoneApps }): PhoneApps {
-  return bot.phoneApps ?? (bot.chiefOfStaff ? ALL_PHONE_APPS : {});
+/** Mirrors the server: an unset grant list means every app, for every bot. */
+export function effectivePhoneApps(bot: { phoneApps?: PhoneApps }): PhoneApps {
+  return bot.phoneApps ?? ALL_PHONE_APPS;
 }
 
 export function nextPhoneApps(
-  bot: { chiefOfStaff?: boolean; phoneApps?: PhoneApps },
+  bot: { phoneApps?: PhoneApps },
   cap: PhoneCapability,
   value: PhoneGrant | null,
 ): PhoneApps {
@@ -52,7 +52,7 @@ export function nextPhoneApps(
 }
 
 export function phoneAppRows(
-  bot: { chiefOfStaff?: boolean; phoneApps?: PhoneApps },
+  bot: { phoneApps?: PhoneApps },
   phones: PublicPhone[],
 ): PhoneAppRow[] {
   const apps = effectivePhoneApps(bot);

@@ -52,7 +52,8 @@ async function fixture() {
     started: Array<{ text: string; opts: StartOpts }>;
     relayed: Array<Parameters<BotMessageRouteDeps["relayedReaction"]>>;
     serverPresses: Array<{ threadId: string; messageId: string; type: string }>; serverAnswer: "handled" | "refused" | null; records: string | null;
-  } = { accepted: [], hold: null, refuse: null, busy: false, prompts: [], started: [], relayed: [], serverPresses: [], serverAnswer: null, records: null };
+    phoneSends: Array<Parameters<BotMessageRouteDeps["notePhoneSend"]>>;
+  } = { accepted: [], hold: null, refuse: null, busy: false, prompts: [], started: [], relayed: [], serverPresses: [], serverAnswer: null, records: null, phoneSends: [] };
   const startTurn: BotMessageRouteDeps["startTurn"] = async (botId, text, opts = {}) => {
     state.started.push({ text, opts });
     state.prompts.push(promptWithReply(text, opts.replyTo));
@@ -115,6 +116,7 @@ async function fixture() {
     registry: { get: () => ({ instanceId: "claude", driverKind: "claudeAgent" }) },
     policyModelRefusal: () => undefined,
     relayedReaction: (...args: Parameters<BotMessageRouteDeps["relayedReaction"]>) => { state.relayed.push(args); },
+    notePhoneSend: (...args: Parameters<BotMessageRouteDeps["notePhoneSend"]>) => { state.phoneSends.push(args); },
     pressRecords: () => state.records,
     serverPress: (_bot: unknown, thread: string, messageId: string, action: { type: string }) => {
       state.serverPresses.push({ threadId: thread, messageId, type: action.type });
@@ -483,5 +485,27 @@ describe("POST /api/bots/:id/messages/guarded with a reaction another app relaye
     expect((await post(relay(threadId, asked.id, leaf, { text: "👍" }), "/guarded")).status).toBe(400);
     expect(state.started).toEqual([]);
     expect(state.relayed).toEqual([]);
+  });
+});
+
+describe("POST /api/bots/:id/messages tells the server who sent it", () => {
+  it("hands the send id and the request's auth to notePhoneSend before the send is accepted, on the plain and guarded routes", async () => {
+    const { store, bot, threadId, state, post } = await fixture();
+    store.patchBot(bot.id, { approvalMode: "ask", autoApprove: false });
+    expect((await post({ threadId, text: "No id on this one" })).status).toBe(202);
+    expect(state.phoneSends).toEqual([]);
+
+    expect((await post({ threadId, sendId: SEND, text: "Remind me at five" })).status).toBe(202);
+    const guarded = await post({ threadId, sendId: OTHER_SEND, text: "And at six", expectedActiveLeafId: store.activeLeaf(threadId), expectedApprovalMode: "ask" }, "/guarded");
+    expect(guarded.status, JSON.stringify(guarded.body)).toBe(202);
+
+    expect(state.phoneSends).toEqual([[{ kind: "loopback", scopes: ["admin"] }, SEND], [{ kind: "loopback", scopes: ["admin"] }, OTHER_SEND]]);
+    expect(state.accepted.map((input) => input.sendId)).toEqual([undefined, SEND, OTHER_SEND]);
+  });
+
+  it("notes nothing for a send it refuses before acceptance", async () => {
+    const { state, post } = await fixture();
+    expect((await post({ threadId: "someone-elses-thread", sendId: SEND, text: "Hi" })).status).toBe(409);
+    expect(state.phoneSends).toEqual([]);
   });
 });

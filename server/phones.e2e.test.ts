@@ -1,7 +1,7 @@
 // A real server with the fake engine left hanging, so a turn stays live: a phone pairs as a session and registers its
 // apps, the Chief's turn mounts the device tools, a tool call becomes a phone job the phone polls, leases and answers,
-// and the phone hears of the job over SSE. A bot without a grant sees no phone tools, and a read-and-draft run gets no
-// phone at all.
+// and the phone hears of the job over SSE. A bot whose phone apps are switched off sees no phone tools, a read-and-draft
+// run gets no phone at all, and a turn hears whether the person wrote from the phone or the computer.
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { launchVerificationServer, verificationServerEnvironment, type VerificationServer } from "../scripts/control-omb.ts";
 import { PHONE_MCP_SERVER } from "../shared/phone-apps.ts";
 import { harnessMcpTokenEnv } from "./harness-mcp-token.ts";
+import { PHONE_PLACE_PROMPT } from "./phones/instructions.ts";
 import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts";
 import { READ_AND_DRAFT_REFUSAL } from "./read-and-draft.ts";
 import { waitForExit } from "./testing/cleanup.ts";
@@ -152,6 +153,7 @@ it("a registered phone's tools reach the bot and a job round-trips", async () =>
 
 it("a bot without a grant sees no phone tools", async () => {
   const scout = (await api("POST", "/api/bots", { name: "Scout" })).body.bot;
+  expect((await api("PATCH", `/api/bots/${scout.id}`, { phoneApps: {} })).status).toBe(200);
   const launch = await turn({ id: scout.id, threadId: scout.threadId }, "What is on my calendar today?");
   expect(launch.mcpConfig.mcpServers[PHONE_MCP_SERVER]).toBeUndefined();
   const token = await mint(scout.id, scout.threadId);
@@ -160,6 +162,23 @@ it("a bot without a grant sees no phone tools", async () => {
   const refused = (await rpc(token, "tools/call", { name: "PHONE_LIST_EVENTS", arguments: { from: "2026-10-23T00:00:00+05:30", to: "2026-10-24T00:00:00+05:30" } })).body.result;
   expect(refused.isError).toBe(true);
   expect(refused.content[0].text).toBe("OpenMausBot did not run this: Scout has not been given access to Phone Calendar. Ask the user to allow it under the bot's Access settings, and do not retry.");
+}, 60_000);
+
+it("any bot left on the default hears where the person is talking from: the paired phone's send, or the computer", async () => {
+  const sendFrom = (bot: { id: string; threadId: string }, text: string, sendId: string, token?: string) => launched(text, async () => {
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { threadId: bot.threadId, text, sendId }, token)).status).toBe(202);
+  });
+  const atDesk = (await api("POST", "/api/bots", { name: "Desk helper" })).body.bot;
+  const desk = await sendFrom(atDesk, "Remind me to call Ada at five.", "desk-send-000000000001");
+  expect(desk.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
+  expect(desk.systemPrompt).toContain(`${PHONE_NAME} is an iPhone; this bot may use: Calendar.`);
+  expect(desk.systemPrompt).toContain(PHONE_PLACE_PROMPT.computer);
+  expect(desk.systemPrompt).not.toContain(PHONE_PLACE_PROMPT.phone);
+  const onPhone = (await api("POST", "/api/bots", { name: "Phone helper" })).body.bot;
+  const fromPhone = await sendFrom(onPhone, "Remind me to call Grace at six.", "phone-send-00000000001", pairing.token);
+  expect(fromPhone.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
+  expect(fromPhone.systemPrompt).toContain(PHONE_PLACE_PROMPT.phone);
+  expect(fromPhone.systemPrompt).not.toContain(PHONE_PLACE_PROMPT.computer);
 }, 60_000);
 
 it("a confined run has no device integration", async () => {

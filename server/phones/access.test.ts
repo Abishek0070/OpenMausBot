@@ -1,16 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import { phoneAccess, phoneSystemPrompt, phoneWithheldPrompt, type PhoneBot } from "./access.ts";
+import { phoneAccess, phoneAppsFor, phoneSystemPrompt, phoneWithheldPrompt, type PhoneBot } from "./access.ts";
+import { PHONE_PLACE_PROMPT } from "./instructions.ts";
 
-const chief: PhoneBot = { id: "c", name: "Chief of Staff", chiefOfStaff: true };
+const chief = { id: "c", name: "Chief of Staff", chiefOfStaff: true };
 const scout: PhoneBot = { id: "s", name: "Scout" };
+const none: PhoneBot = { id: "n", name: "Nobody", phoneApps: {} };
 const reader: PhoneBot = { id: "r", name: "Reader", phoneApps: { calendar: "read" } };
 const onPhone = { calendar: "full", contacts: "limited" };
+const iphone = [{ name: "Omkar's iPhone", platform: "ios" as const, capabilities: onPhone }];
 
 describe("phoneAccess", () => {
-  it("the Chief gets every app the phone allows, others nothing", () => {
+  it("every bot gets every app the phone allows by default; an explicit grant wins", () => {
     expect(phoneAccess(chief, onPhone, "PHONE_CREATE_EVENT").ok).toBe(true);
-    expect(phoneAccess(scout, onPhone, "PHONE_LIST_EVENTS")).toMatchObject({ ok: false, rows: [{ rule: "scope:phone:calendar:app", decision: "auto-denied" }] });
+    expect(phoneAccess(scout, onPhone, "PHONE_CREATE_EVENT").ok).toBe(true);
+    expect(phoneAppsFor(scout)).toEqual(phoneAppsFor(chief));
+    expect(phoneAccess(none, onPhone, "PHONE_LIST_EVENTS")).toMatchObject({ ok: false, rows: [{ rule: "scope:phone:calendar:app", decision: "auto-denied" }] });
+    expect(phoneAccess({ ...chief, phoneApps: {} }, onPhone, "PHONE_LIST_EVENTS").ok).toBe(false);
   });
   it("the phone's grant decides existence", () => {
     expect(phoneAccess(chief, onPhone, "PHONE_LIST_REMINDERS")).toMatchObject({ ok: false, rows: [{ rule: "phone:reminders:not-allowed-on-phone" }] });
@@ -21,19 +27,34 @@ describe("phoneAccess", () => {
     expect(verdict).toMatchObject({ ok: false, rows: [{ rule: "scope:phone:calendar:write" }] });
     expect(phoneAccess(reader, onPhone, "PHONE_LIST_EVENTS").ok).toBe(true);
   });
-  it("the prompt names the phone and its apps", () => {
-    expect(phoneSystemPrompt(chief, [{ name: "Omkar's iPhone", platform: "ios", capabilities: onPhone }])).toContain("Omkar's iPhone");
-    expect(phoneSystemPrompt(scout, [{ name: "Omkar's iPhone", platform: "ios", capabilities: onPhone }])).toBe("");
+  it("the prompt names the phone and its apps, the same for the Chief and any other bot", () => {
+    expect(phoneSystemPrompt(chief, iphone, "computer")).toContain("Omkar's iPhone is an iPhone; this bot may use: Calendar, Contacts.");
+    expect(phoneSystemPrompt(scout, iphone, "computer")).toBe(phoneSystemPrompt(chief, iphone, "computer"));
+    expect(phoneSystemPrompt(none, iphone, "computer")).toBe("");
+  });
+
+  it("says where the person is talking from", () => {
+    const fromPhone = phoneSystemPrompt(scout, iphone, "phone");
+    expect(fromPhone).toContain(PHONE_PLACE_PROMPT.phone);
+    expect(fromPhone).toMatch(/talking to you from their phone right now/);
+    expect(fromPhone).not.toContain(PHONE_PLACE_PROMPT.computer);
+    const atComputer = phoneSystemPrompt(scout, iphone, "computer");
+    expect(atComputer).toContain(PHONE_PLACE_PROMPT.computer);
+    expect(atComputer).toMatch(/at their computer right now/);
+    expect(atComputer).toMatch(/set it up here, or on your phone\?/);
+    expect(atComputer).not.toContain(PHONE_PLACE_PROMPT.phone);
+    expect(phoneSystemPrompt(none, iphone, "phone")).toBe("");
   });
 
   it("a phone named after its kind is not described as itself", () => {
-    const text = phoneSystemPrompt(chief, [{ name: "iPhone", platform: "ios", capabilities: onPhone }]);
+    const text = phoneSystemPrompt(chief, [{ name: "iPhone", platform: "ios", capabilities: onPhone }], "computer");
     expect(text).not.toContain("iPhone is an iPhone");
     expect(text).toContain("The iPhone");
   });
 
   it("says the USB phone tools are a different phone", () => {
-    expect(phoneSystemPrompt(chief, [{ name: "Omkar's iPhone", platform: "ios", capabilities: onPhone }])).toMatch(/USB/);
+    expect(phoneSystemPrompt(chief, iphone, "phone")).toMatch(/USB/);
+    expect(phoneSystemPrompt(chief, iphone, "computer")).toMatch(/USB/);
   });
 
   it("when this conversation may not use the phone, the bot hears that it exists and how to reach it, not nothing", () => {
@@ -41,7 +62,7 @@ describe("phoneAccess", () => {
     expect(text).toContain("Omkar's iPhone");
     expect(text).toMatch(/new conversation/);
     expect(text).toMatch(/USB/);
-    expect(phoneWithheldPrompt(scout, [{ name: "Omkar's iPhone", platform: "ios" }])).toBe("");
+    expect(phoneWithheldPrompt(none, [{ name: "Omkar's iPhone", platform: "ios" }])).toBe("");
     expect(phoneWithheldPrompt(chief, [])).toBe("");
   });
 });

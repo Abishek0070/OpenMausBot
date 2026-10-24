@@ -505,12 +505,22 @@ it differs from the sections above, this list wins; B and C build against it.
   peer-asked, relayed and webhook-handed work never does. Routines created
   before this change get no phone until the owner re-saves them.
 - **Tools.** 23 `PHONE_*` tools through MCP kind `device`; the grant is
-  `bot.phoneApps` (the Chief defaults to everything the phone allows, other
-  bots to nothing); held tools are those `shared/outbound.ts` classes as
+  `bot.phoneApps` (unset, every bot gets everything the phone allows); held
+  tools are those `shared/outbound.ts` classes as
   outbound: `PHONE_SEND_MESSAGE`, `PHONE_SEND_WHATSAPP`, `PHONE_RESPOND_TO_INVITE`.
   The phone used most recently that allows the tool's app is chosen when the
   bot names none. Timeouts: 45 s read/write jobs, 120 s held jobs; results
   over 256 KB are refused as `too_large`.
+- **Every bot by default.** With `phoneApps` unset any bot, not only the Chief,
+  may use what the phone allows; an explicit `phoneApps` per bot still wins
+  (`{}` switches it off), and the owner rule is unchanged.
+- **Where the person is talking from.** A send made by a registered phone (its
+  `sendId`, noted by `/api/bots/:id/messages`) marks the direct turn it starts
+  as from the phone: its prompt says to do reminders, events, contacts, location
+  and texts on the phone. Every other direct turn, room turn and the prompt
+  preview say the person is at the computer: do things the usual way, use the
+  phone only when asked for it, and when the phone could also do it and no place
+  was named, ask once: here, or on your phone?
 - **Fixture.** `server/testing/fixtures/phone-jobs.json` pins every shape
   above; copy it by hand into `ios/Tests/CompanionCoreTests/Fixtures/` (the
   capture script captures live and does not copy files).

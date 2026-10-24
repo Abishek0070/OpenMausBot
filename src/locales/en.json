@@ -5593,7 +5593,7 @@
   "botAccess.phone.title": "Phone apps",
   "botAccess.phone.subtitle": "What this bot may do on {phone}",
   "botAccess.phone.notOnPhone": "Not allowed on the phone",
-  "botAccess.phone.default": "Using the default: the Chief gets everything the phone allows, other bots nothing.",
+  "botAccess.phone.default": "Using the default: every bot can use what the phone allows, and asks you before using it from the computer.",
   "botAccess.phone.cap.calendar": "Calendar",
   "botAccess.phone.cap.reminders": "Reminders",
   "botAccess.phone.cap.contacts": "Contacts",

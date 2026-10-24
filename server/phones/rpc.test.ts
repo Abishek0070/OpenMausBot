@@ -16,7 +16,7 @@ import { AGENTS_NODE_FLAG, SPAWNED_PROXIES } from "../proxy-paths.ts";
 import type { BotRecord } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { createPhoneHost } from "./host.ts";
-import { PHONE_INSTRUCTIONS, PHONE_NO_PHONE_TEXT } from "./instructions.ts";
+import { PHONE_INSTRUCTIONS, PHONE_NO_PHONE_TEXT, PHONE_PLACE_PROMPT } from "./instructions.ts";
 import { PHONE_JOB_TIMEOUT_MS, PHONE_SEND_TIMEOUT_MS, PhoneJobs, type PhoneJobDelivery, type PhoneJobOutcome } from "./jobs.ts";
 import { PhoneRegistry, type PhoneRegistration } from "./registry.ts";
 import { phoneRpc, type PhoneRpcDeps, type PhoneToolsList } from "./rpc.ts";
@@ -101,12 +101,14 @@ describe("phone MCP host", () => {
     expect(names.every((name) => name.startsWith("PHONE_"))).toBe(true);
     expect(listed.instructions).toBe(PHONE_INSTRUCTIONS);
     expect(h.checks()).toBe(1);
-    // A bot with no grant sees nothing and mounts nothing.
-    const scout = harness({ bot: () => bot({ name: "Scout" }) });
+    // A bot whose grant was switched off sees nothing and mounts nothing; one left on the default is like the Chief.
+    const off = bot({ name: "Scout", phoneApps: {} });
+    const scout = harness({ bot: () => off });
     scout.registry.register(IPHONE, OWNER, registration("Omkar's iPhone", { calendar: "full" }));
     expect((await scout.handle({ method: "tools/list" }) as PhoneToolsList).tools).toEqual([]);
-    expect(scout.host.mounts(bot({ name: "Scout" }), OWNER)).toBe(false);
-    expect(scout.host.integration(bot({ name: "Scout" }), OWNER, () => "tok", "http://127.0.0.1:1")).toBeNull();
+    expect(scout.host.mounts(off, OWNER)).toBe(false);
+    expect(scout.host.integration(off, OWNER, () => "tok", "http://127.0.0.1:1")).toBeNull();
+    expect(scout.host.mounts(bot({ name: "Scout" }), OWNER)).toBe(true);
     // The mount, the prompt and the tools picker for the paired phone.
     expect(h.host.mounts(chief, OWNER)).toBe(true);
     expect(h.host.mounts(chief, "someone-else")).toBe(true);
@@ -117,6 +119,8 @@ describe("phone MCP host", () => {
     });
     expect(h.host.prompt(chief, OWNER)).toContain("Omkar's iPhone is an iPhone; this bot may use: Calendar.");
     expect(h.host.prompt(chief, OWNER)).not.toContain("Guest Pixel");
+    expect(h.host.prompt(chief, OWNER)).toContain(PHONE_PLACE_PROMPT.computer);
+    expect(h.host.prompt(chief, OWNER, "phone")).toContain(PHONE_PLACE_PROMPT.phone);
     expect(h.host.toolListing()?.phone.map((tool) => tool.name)).toEqual([...PHONE_TOOL_NAMES]);
     const rows = await h.rows();
     expect(rows.filter((row) => row.decision === "auto-approved").map((row) => row.tool)).toEqual(names);
