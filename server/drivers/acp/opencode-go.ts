@@ -587,6 +587,16 @@ function backupCatalog(catalog: ModelCatalog): ModelCatalog {
   return { ...catalog, options, default: keepingNothing(options.map((option) => option.id)) ?? "" };
 }
 
+/** A Zen model that may keep what it is sent: not one that keeps nothing, and not known to be paid (Zen's paid models keep
+ * nothing). A price OpenCode didn't report counts as free. */
+const mayKeep = (id: string) => id.startsWith("opencode/") && !keepsNothing(id) && !paidModels.has(id);
+
+/** Any copy the app installed starts on a model that keeps nothing when one is offered, else on the usual pick unless that
+ * may keep what it is sent, else on the first offered that doesn't. */
+function appCopyPick(offered: readonly string[], pick: string): string {
+  return keepingNothing(offered) ?? (pick && !mayKeep(pick) ? pick : offered.find((id) => !mayKeep(id)) ?? "");
+}
+
 const objectOr = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
@@ -827,6 +837,11 @@ const support = (loadCatalog: OpenCodeCatalogLoader, reads: OpenCodeReads): AcpS
     if (launch && backupCopy(launch.env, launch.config.cli)) {
       return keepsNothing(catalogDefault) && offered.includes(catalogDefault) ? catalogDefault : keepingNothing(offered) ?? null;
     }
+    // Any other copy the app installed never falls back to a free model that may keep what it is sent.
+    if (launch && appCopy(launch.config.cli)) {
+      if (catalogDefault && offered.includes(catalogDefault) && !mayKeep(catalogDefault)) return catalogDefault;
+      return appCopyPick(offered, preferredOpenCodeModel(offered, catalogFromOpenCodeSession(sessionConfig)?.current)) || null;
+    }
     if (catalogDefault && offered.includes(catalogDefault)) return catalogDefault;
     return preferredOpenCodeModel(offered, catalogFromOpenCodeSession(sessionConfig)?.current) || null;
   },
@@ -834,14 +849,22 @@ const support = (loadCatalog: OpenCodeCatalogLoader, reads: OpenCodeReads): AcpS
   // (from the backup's catalog, or fallbackModel); a background call (a test message, memory upkeep) asks for none, so it
   // is switched to the model that keeps nothing first, or not sent at all.
   configureSession: async ({ request, sessionId, env, config, turn, configOptions }) => {
-    if (!backupCopy(env, config.cli)) return;
+    const backup = backupCopy(env, config.cli);
+    if (!backup && !appCopy(config.cli)) return;
     if (turn.model) {
-      if (OPENCODE_OWN_MODEL.test(turn.model) && !keepsNothing(turn.model)) throw new Error(BACKUP_MAY_KEEP);
+      if (backup && OPENCODE_OWN_MODEL.test(turn.model) && !keepsNothing(turn.model)) throw new Error(BACKUP_MAY_KEEP);
       return;
     }
-    const target = keepingNothing(offeredModels({ configOptions }, "model"));
-    if (!target) throw new Error(BACKUP_NOT_PRIVATE);
-    if (configOptions.find((option) => option.id === "model")?.currentValue === target) return;
+    const offered = offeredModels({ configOptions }, "model");
+    const current = configOptions.find((option) => option.id === "model")?.currentValue;
+    // Signed in through the app, the copy is the person's own: only moved off a free model that may keep what it's sent.
+    if (!backup && !(typeof current === "string" && mayKeep(current))) return;
+    const target = backup ? keepingNothing(offered) : appCopyPick(offered, "") || undefined;
+    if (!target) {
+      if (backup) throw new Error(BACKUP_NOT_PRIVATE);
+      return;
+    }
+    if (current === target) return;
     const switched = await request("session/set_config_option", { sessionId, configId: "model", value: target });
     if (catalogFromOpenCodeSession(switched)?.current !== target) throw new Error(`OpenCode did not switch to ${target}`);
   },
@@ -887,7 +910,10 @@ const support = (loadCatalog: OpenCodeCatalogLoader, reads: OpenCodeReads): AcpS
   describeAccountError: describeOpenCodeAccountError,
   resolveModels: async (environment, config, instanceId) => {
     const discovered = await loadCatalog(environment, config.cli);
-    if (!backupCopy(environment, config.cli)) return mergeLocalInject(discovered, environment);
+    if (!appCopy(config.cli)) return mergeLocalInject(discovered, environment);
+    if (!backupCopy(environment, config.cli)) {
+      return mergeLocalInject({ ...discovered, default: appCopyPick(discovered.options.map((option) => option.id), discovered.default) }, environment);
+    }
     const catalog = backupCatalog(discovered);
     reads.backupModel.set(instanceId, catalog.default || NO_RETENTION_FREE_MODELS[0]);
     return mergeLocalInject(catalog, environment);

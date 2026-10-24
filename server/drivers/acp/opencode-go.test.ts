@@ -1321,6 +1321,8 @@ describe("the free backup: the app's own copy of OpenCode with nothing the perso
   const FREE = ["opencode/mimo-v2.6-flash-free", "opencode/big-pickle", "opencode/glm-5.3-flash-free", "opencode/deepseek-v4.1-flash-free"];
   const RETAINING = ["opencode/mimo-v2.6-flash-free", "opencode/big-pickle"];
   const GLM = "opencode/glm-5.3-flash-free";
+  // A model of the person's own provider, through a key they gave the app.
+  const PAID = "anthropic/claude-sonnet-5";
   const CHECK = "This is a connection check. Reply with the single word OK.";
 
   interface CopyOptions {
@@ -1458,10 +1460,15 @@ describe("the free backup: the app's own copy of OpenCode with nothing the perso
   it.each<[string, Record<string, string>]>([
     ["an OpenCode key", { OPENCODE_API_KEY: "zen-key" }],
     ["a provider key", { ANTHROPIC_API_KEY: "provider-key" }],
-  ])("becomes the person's own OpenCode, on its own pick, with %s they gave the app", async (_label, environment) => {
+  ])("becomes the person's own OpenCode with %s they gave the app, still never starting on a free model that may keep it", async (_label, environment) => {
     await withCopy({ appCopy: true, environment }, async (instance) => {
-      expect(instance.models.default).toBe("opencode/mimo-v2.6-flash-free");
+      expect(instance.models.default).toBe(GLM);
+      expect(instance.models.options.map((option) => option.id)).toEqual(FREE);
       expect(await instance.snapshot()).not.toHaveProperty("freeFallback");
+    });
+    // With none that keeps nothing, it starts on a model of the person's own rather than a free one that may keep it.
+    await withCopy({ appCopy: true, environment, offered: [...RETAINING, PAID] }, async (instance) => {
+      expect(instance.models.default).toBe(PAID);
     });
   });
 
@@ -1507,13 +1514,31 @@ describe("the free backup: the app's own copy of OpenCode with nothing the perso
     });
   });
 
-  it.skipIf(process.platform === "win32").each<[string, Partial<CopyOptions>]>([
-    ["an OpenCode the person installed", { appCopy: false }],
-    ["the app's copy with an OpenCode key the person gave the app", { appCopy: true, environment: { OPENCODE_API_KEY: "zen-key" } }],
-  ])("leaves the background calls of %s on OpenCode's own pick", async (_label, options) => {
-    await withCopy({ appCopy: false, ...options }, async (instance, dump) => {
+  it.skipIf(process.platform === "win32")("leaves the background calls of an OpenCode the person installed on OpenCode's own pick", async () => {
+    await withCopy({ appCopy: false }, async (instance, dump) => {
       expect(await instance.generateMemoryText!(CHECK)).toBe("OK");
       expect(prompted(dump)).toEqual(["opencode/mimo-v2.6-flash-free"]);
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("moves the background calls of the app's copy signed in through the app off a free model that may keep them", async () => {
+    await withCopy({ appCopy: true, environment: { OPENCODE_API_KEY: "zen-key" } }, async (instance, dump) => {
+      expect(await instance.generateMemoryText!(CHECK)).toBe("OK");
+      expect(prompted(dump)).toEqual([GLM]);
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("falls back the app's copy signed in through the app to a model that doesn't keep what it is sent", async () => {
+    // Discovery saw GLM; the running OpenCode no longer offers it, only a free model that may keep it and a paid one.
+    await withCopy({ appCopy: true, environment: { OPENCODE_API_KEY: "zen-key" }, offered: [...FREE, PAID], running: ["opencode/mimo-v2.6-flash-free", PAID] }, async (instance, dump) => {
+      const recorder = recordEvents(instance.adapter);
+      try {
+        await instance.adapter.sendTurn({ threadId: "t-signed-in", botId: "bot-7", text: "hi", model: "opencode/retired-free", approvalMode: "full" });
+        expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
+      } finally {
+        recorder.stop();
+      }
+      expect(prompted(dump)).toEqual([PAID]);
     });
   });
 
