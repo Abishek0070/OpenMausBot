@@ -188,7 +188,7 @@ export interface AcpSupport {
   selectModel?: AcpModelSelection;
   /** With `selectModel`: the model a turn runs when it asked for none or for one this session does
    * not offer; null keeps the strict behaviour. */
-  fallbackModel?(sessionConfig: unknown, catalogDefault: string): string | null;
+  fallbackModel?(sessionConfig: unknown, catalogDefault: string, launch?: { env: Record<string, string | undefined>; config: AcpConfig }): string | null;
   /** Env var the runtime reads its new-session default model from, set at spawn so session/new runs
    * it. The runtime takes any id unchecked, so it is set only for a model this account offered. Not
    * part of the spawn contract. */
@@ -1407,7 +1407,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                   && !offered.includes(wanted) && models.options.some((option) => option.id === wanted || option.id === turn.model));
                 if (support.fallbackModel && offered.length && !skipSubscriptionAuthForLocalInject(turn.model)
                     && !staleProcess && (!wanted || !offered.includes(wanted))) {
-                  const fallback = support.fallbackModel(session.sessionConfigResult, models.default);
+                  const fallback = support.fallbackModel(session.sessionConfigResult, models.default, { env: spawnEnv, config: turnConfig });
                   if (fallback && fallback !== wanted && offered.includes(fallback)) {
                     const notice = wanted ? `${wanted}\n${fallback}` : null;
                     if (notice && session.fallbackNotice !== notice) {
