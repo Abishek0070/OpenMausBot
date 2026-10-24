@@ -23,6 +23,7 @@ import {
   standaloneEngineDir,
   standalonePlatformKey,
   standaloneRunEnv,
+  standaloneStaleCopy,
   type CodesignRunner,
 } from "./engine-standalone.ts";
 import { augmentedPath, findCliCandidates, resetPathCache, resetPathCacheForTests } from "./env-path.ts";
@@ -660,6 +661,29 @@ describe.skipIf(process.platform === "win32")("installing a standalone engine", 
       resetStandaloneStateForTests();
       await install(release);
       expect(leftovers()).toEqual(["1.1.0", VERSION, "bin", "current.json"]);
+    });
+
+    it("says which older version is installed once the pin has moved on, without vouching for its program", async () => {
+      const release = await served("raw");
+      expect(standaloneStaleCopy(release, base)).toBeNull();
+      makeCurrent("1.0.0", seedVersion("1.0.0", 1));
+      // Off PATH (no earlier-pin hash lists it), and still known to be there and older.
+      registerStandaloneBinDirs(base, [release]);
+      expect(pathDirs()).not.toContain(binDir());
+      expect(standaloneStaleCopy(release, base)).toEqual({ version: "1.0.0" });
+      // Through a link it says nothing.
+      const moved = join(scratch, "elsewhere");
+      renameSync(standaloneEngineDir(ENGINE, base), moved);
+      symlinkSync(moved, standaloneEngineDir(ENGINE, base));
+      expect(standaloneStaleCopy(release, base)).toBeNull();
+    });
+
+    it.each([
+      ["the pinned version", VERSION],
+      ["a newer version than the pin", "9.0.0"],
+    ])("calls %s current, not stale", async (_label, version) => {
+      makeCurrent(version, seedVersion(version, 1));
+      expect(standaloneStaleCopy(await served("raw"), base)).toBeNull();
     });
 
     it("keeps a copy from an earlier pin on PATH only while the code lists its program", async () => {

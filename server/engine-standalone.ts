@@ -21,6 +21,7 @@ import * as tar from "tar";
 import { writeFileAtomic } from "./atomic.ts";
 import { cliProbeEnvironment } from "./cli-probe.ts";
 import { DATA_DIR, stripControlPlaneEnv } from "./config.ts";
+import { parseVersionTriple, versionAtLeast } from "./drivers/acp/version-probe.ts";
 import { standaloneEnginesRoot } from "./engine-roots.ts";
 import type { StandaloneAsset, StandaloneRelease } from "./contracts.ts";
 import { findCliCandidates, registerFallbackPathDir, resetPathCache } from "./env-path.ts";
@@ -283,6 +284,21 @@ function verifiedCurrent(engineDir: string, release: StandaloneRelease): Standal
     return null;
   }
   return { version: pointer.version, executablePath, binDir };
+}
+
+/** The app's own copy when it was installed at a version older than this app's pin: after a pin bump its program is off
+ * PATH unless the code lists it (previousPrograms), but it is still the app's to replace. Reads the pointer and the install
+ * record only, never through a link, and vouches for nothing: installing the pin is what checks the new program. */
+export function standaloneStaleCopy(release: StandaloneRelease, baseDir = DATA_DIR): { version: string } | null {
+  if (!ENGINE_NAME.test(release.engine) || !realDirectory(standaloneRoot(baseDir))) return null;
+  const engineDir = standaloneEngineDir(release.engine, baseDir);
+  if (!realDirectory(engineDir)) return null;
+  const pointer = readJsonFile(join(engineDir, CURRENT)) as Partial<CurrentPointer> | null;
+  if (!pointer || typeof pointer.version !== "string" || !usableVersionName(pointer.version)) return null;
+  const record = readRecord(join(engineDir, pointer.version));
+  if (!record || record.engine !== release.engine || record.version !== pointer.version) return null;
+  const installed = parseVersionTriple(record.version), pinned = parseVersionTriple(release.version);
+  return installed && pinned && !versionAtLeast(installed, pinned) ? { version: record.version } : null;
 }
 
 /** At boot: the bin/ folder of each engine this app pins, once its program is checked, goes on PATH after everything else. */
