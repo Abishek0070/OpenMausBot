@@ -1,4 +1,6 @@
 import { canAccessTeam, peerAllowed } from "../peer-roster.ts"; import { chiefLevel } from "../chief-level.ts";
+import type { ModelCatalog } from "../contracts.ts";
+import { withoutModelsThatMayKeep } from "../drivers/acp/opencode-free-models.ts";
 import type { BotRecord } from "../store.ts";
 import { libraryTeamRoles } from "../team-library.ts";
 import { PASS, type RouteHandler } from "./table.ts";
@@ -7,7 +9,7 @@ interface CatalogInstance {
   instanceId: string;
   driverKind: string;
   displayName: string;
-  snapshot: { state: string };
+  snapshot: { state: string; freeFallback?: boolean };
   models: unknown;
   capabilities?: { effortLevels?: readonly string[] };
 }
@@ -50,7 +52,9 @@ export function createInternalChiefTeamRoutes(deps: {
       bots: deps.bots().filter((bot) => !bot.hidden && canAccessTeam(current, bot.section) && (bot.id === current.id || peerAllowed(current, bot)))
         .map((bot) => ({ id: bot.id, name: bot.name, title: bot.title, section: bot.section ?? "", modelSelection: bot.modelSelection, chiefOfStaff: Boolean(bot.chiefOfStaff) })),
       instances: instances.map((instance) => ({ instanceId: instance.instanceId, driverKind: instance.driverKind, displayName: instance.displayName,
-        state: instance.snapshot.state, models: instance.models, effortLevels: instance.capabilities?.effortLevels ?? [] })),
+        state: instance.snapshot.state, effortLevels: instance.capabilities?.effortLevels ?? [],
+        // Nothing the Chief sets up runs on a free model that may keep what it is sent.
+        models: instance.snapshot.freeFallback ? withoutModelsThatMayKeep(instance.models as ModelCatalog) : instance.models })),
       scope: "Bot model defaults apply to groups and new threads; existing threads retain their models. Requested team setup applies immediately, and the person can undo it. Existing unauthorized teams remain outside this Chief's scope.",
     });
   };

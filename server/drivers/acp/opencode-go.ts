@@ -14,6 +14,7 @@ import { isAppStandaloneCopy } from "../../engine-standalone.ts";
 import { OPENCODE_STANDALONE } from "./opencode-release.ts";
 import { createAcpDriver, type AccountErrorCode, type AcpConfig, type AcpSupport } from "./core.ts";
 import { offeredModels } from "./config-options.ts";
+import { keepingNothing, keepsNothing, NO_RETENTION_FREE_MODELS, OPENCODE_OWN_MODEL } from "./opencode-free-models.ts";
 import type { ModelCatalog, ProviderDriver, ProviderErrorCode } from "../../contracts.ts";
 import { titleCaseModelId } from "../../contracts.ts";
 import { execCli, killCliTree, spawnCli } from "../../procs.ts";
@@ -551,8 +552,6 @@ function ownOpenCodeAccess(env: Record<string, string | undefined>): boolean {
   return Boolean(env.OPENCODE_API_KEY) || hasStoredOpenCodeAuth(env) || OPENCODE_PROVIDER_ENV.some((key) => Boolean(env[key]?.trim()));
 }
 
-/** OpenCode's own providers: Zen (some models free without a login) and Go (a subscription). */
-const OPENCODE_OWN_MODEL = /^opencode(?:-go)?\//u;
 
 /** Ready only through Zen's free no-login models: no access of the person's own and no other provider's model. A local
  * model the app found (`custom`) is not the person signing OpenCode in to anything. An empty catalog is no fallback: it
@@ -562,9 +561,6 @@ export function openCodeFreeFallback(ownAccess: boolean, models: ModelCatalog): 
     && models.options.every((option) => option.custom === true || OPENCODE_OWN_MODEL.test(option.id));
 }
 
-/** Zen's free models whose provider keeps no prompt and trains on none (opencode.ai/docs/zen, 2026-10-24), best first.
- * Big Pickle and MiMo may use prompts to improve their models; Beam keeps them for 30 days. */
-export const NO_RETENTION_FREE_MODELS = ["opencode/glm-5.3-flash-free", "opencode/deepseek-v4.1-flash-free"] as const;
 
 /** An OpenCode key or provider key the person gave the app (Settings): what makes the app's copy their own OpenCode. */
 function signedInThroughApp(environment: Readonly<Record<string, string | undefined>>): boolean {
@@ -583,8 +579,6 @@ function backupCopy(env: Readonly<Record<string, string | undefined>>, cli: stri
 export const BACKUP_NOT_PRIVATE = "OpenCode isn't offering a free model that keeps nothing you send right now, so the app doesn't use it.";
 const BACKUP_MAY_KEEP = "This free OpenCode model may keep what you send, so the app doesn't use it. Choose another model for this bot.";
 
-const keepsNothing = (id: string) => (NO_RETENTION_FREE_MODELS as readonly string[]).includes(id);
-const keepingNothing = (offered: readonly string[]) => NO_RETENTION_FREE_MODELS.find((id) => offered.includes(id));
 
 /** The backup offers only what keeps nothing: Zen's no-retention models and the person's local ones. With none of the
  * first it has no default, and its status says it isn't ready. */

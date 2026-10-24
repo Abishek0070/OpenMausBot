@@ -21,14 +21,17 @@ const bot = (id: string, extra: Partial<BotRecord> = {}): BotRecord => ({
 
 const TEAMS: LibraryTeamRoles[] = [{ name: "Inbox Follow-up", summary: "Recover quiet sales threads.", roles: [{ name: "Scout", title: "Researcher" }] }];
 
-async function serve(caller: BotRecord, library: () => Promise<LibraryTeamRoles[]>, team: { teams?: string[]; bots?: BotRecord[] } = {}) {
+type Instance = { instanceId: string; driverKind: string; displayName: string; snapshot: { state: string; freeFallback?: boolean };
+  models: { default: string; options: Array<{ id: string; label: string; custom?: boolean }> }; capabilities?: { effortLevels?: string[] } };
+
+async function serve(caller: BotRecord, library: () => Promise<LibraryTeamRoles[]>, team: { teams?: string[]; bots?: BotRecord[]; instances?: Instance[] } = {}) {
   const state = { caller: caller as BotRecord | null, active: true };
   const routes = [createInternalChiefTeamRoutes({
     bot: () => state.caller,
     requireActive: () => { if (!state.active) throw Object.assign(new Error("the internal turn capability has expired"), { status: 401 }); },
     teams: () => team.teams ?? [""],
     bots: () => team.bots ?? [caller],
-    instances: async () => [{ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available" },
+    instances: async () => team.instances ?? [{ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available" },
       models: { default: "sonnet", options: [] }, capabilities: { effortLevels: ["low", "high"] } }],
     library,
   })];
@@ -52,6 +55,21 @@ async function serve(caller: BotRecord, library: () => Promise<LibraryTeamRoles[
 }
 
 describe("what a Chief of Staff reads about its team", () => {
+  it("never offers a free OpenCode model that may keep what it is sent, on an OpenCode ready only through Zen's free models", async () => {
+    const option = (id: string, extra: { custom?: boolean } = {}) => ({ id, label: id, ...extra });
+    const zen = [option("opencode/mimo-v2.6-flash-free"), option("opencode/big-pickle"), option("opencode/glm-5.3-flash-free"), option("ollama/qwen3", { custom: true })];
+    const { get } = await serve(bot("chief", { chiefOfStaff: true }), async () => TEAMS, { instances: [
+      { instanceId: "opencodeGo", driverKind: "opencodeGo", displayName: "OpenCode", snapshot: { state: "available", freeFallback: true },
+        models: { default: "opencode/mimo-v2.6-flash-free", options: zen } },
+      // Signed in, OpenCode's models are the person's to choose.
+      { instanceId: "opencodeSignedIn", driverKind: "opencodeGo", displayName: "OpenCode", snapshot: { state: "available" },
+        models: { default: "opencode/big-pickle", options: zen } },
+    ] });
+    const instances = (await get("/api/internal/team-setup-catalog")).body.instances as Array<{ instanceId: string; models: { default: string; options: Array<{ id: string }> } }>;
+    expect(instances[0]!.models).toEqual({ default: "opencode/glm-5.3-flash-free", options: [option("opencode/glm-5.3-flash-free"), option("ollama/qwen3", { custom: true })] });
+    expect(instances[1]!.models.options.map((entry) => entry.id)).toEqual(zen.map((entry) => entry.id));
+  });
+
   it("gives an active Chief the library's teams and roles, read only", async () => {
     const library = vi.fn(async () => TEAMS);
     const { get } = await serve(bot("chief", { chiefOfStaff: true }), library);
