@@ -1,6 +1,7 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelSelection, ProviderSnapshot } from "./contracts.ts";
 import type { SelectableInstance } from "./default-model-selection.ts";
@@ -8,11 +9,13 @@ import { OPENCODE_STANDALONE } from "./drivers/acp/opencode-release.ts";
 import { enginesBinDir } from "./engine-install.ts";
 import { standaloneEngineDir } from "./engine-standalone.ts";
 import { registerFallbackPathDir, registerPathDir, resetPathCacheForTests } from "./env-path.ts";
-import { createFreeFallback, freeFallbackInstalls, type FreeFallbackDeps, type FreeFallbackPlace } from "./free-fallback.ts";
+import { confirmWaitMs, createFreeFallback, freeFallbackInstalls, type FreeFallbackDeps, type FreeFallbackPlace } from "./free-fallback.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+/** Nothing can answer on two reads this far apart before anything is installed. */
+const CONFIRM = 90_000;
 const APP_BIN = "/data/tools/standalone/opencode/bin/opencode";
 const OWN_BIN = "/Users/someone/.opencode/bin/opencode";
 
@@ -24,18 +27,10 @@ const missingOpenCode = (): SelectableInstance => ({
   instanceId: "opencodeGo", driverKind: "opencodeGo",
   snapshot: { state: "unavailable", reason: "`opencode` isn't installed, or isn't on this app's PATH." }, models: { default: "", options: [] },
 });
-const runningOpenCode = (version: string, snapshot: Partial<ProviderSnapshot> = {}): SelectableInstance => ({
-  ...ready("opencodeGo", "opencodeGo", { version, freeFallback: true, ...snapshot }),
+const runningOpenCode = (snapshot: Partial<ProviderSnapshot> = {}): SelectableInstance => ({
+  ...ready("opencodeGo", "opencodeGo", { version: OPENCODE_STANDALONE.version, freeFallback: true, ...snapshot }),
   models: { default: "opencode/glm-5.3-flash-free", options: [{ id: "opencode/glm-5.3-flash-free", label: "Zen · GLM-5.3-Flash Free" }] },
 });
-const older = (version: string) => {
-  const [major, minor, patch] = version.split(".").map(Number) as [number, number, number];
-  return patch > 0 ? `${major}.${minor}.${patch - 1}` : minor > 0 ? `${major}.${minor - 1}.99` : `${major - 1}.99.99`;
-};
-const newer = (version: string) => {
-  const [major, minor, patch] = version.split(".").map(Number) as [number, number, number];
-  return `${major}.${minor}.${patch + 1}`;
-};
 
 describe("OpenCode's free backup, installed without a word when nothing else can answer", () => {
   let instances: SelectableInstance[];
@@ -45,25 +40,34 @@ describe("OpenCode's free backup, installed without a word when nothing else can
   let place: FreeFallbackPlace;
   let onPath: string[];
   let clis: Record<string, string>;
+  let stale: { version: string } | null;
+  let backupBots: Set<string>;
   let clock: number;
   let timers: Array<{ at: number; run: () => void; cancelled: boolean }>;
-  let installOutcome: () => Promise<boolean>;
-  let registry: { installRuntime: ReturnType<typeof vi.fn>; refreshModels: ReturnType<typeof vi.fn>; cliTarget: (id: string) => { driverKind: string; cli: string | null } | null };
+  let installOutcome: () => Promise<boolean | { useCli: string }>;
+  let registry: {
+    installRuntime: ReturnType<typeof vi.fn>; refreshModels: ReturnType<typeof vi.fn>; forgetSnapshots: ReturnType<typeof vi.fn>;
+    cliTarget: (id: string) => { driverKind: string; cli: string | null } | null;
+  };
   let changed: ReturnType<typeof vi.fn>;
   let logged: string[];
+  let data: string;
 
   /** What a real install does: the app's copy goes on PATH after everything else and OpenCode starts. */
   const installsTheAppCopy = async () => {
     onPath = [...onPath, APP_BIN];
-    instances = instances.map((instance) => instance.driverKind === "opencodeGo" ? runningOpenCode(OPENCODE_STANDALONE.version) : instance);
+    stale = null;
+    instances = instances.map((instance) => instance.driverKind === "opencodeGo" ? runningOpenCode() : instance);
     return true;
   };
   const make = (extra: Partial<FreeFallbackDeps> = {}) => createFreeFallback({
     registry: registry as unknown as FreeFallbackDeps["registry"],
-    context: { answered: (instance) => answered[instance.instanceId], company: (instanceId) => instanceId === "trial-credit" },
+    context: { answered: (instance) => answered[instance.instanceId], company: (instanceId) => instanceId === "company-claude" },
     saved: () => [saved, profile],
     place: () => place,
     changed: changed as unknown as FreeFallbackDeps["changed"],
+    botsOn: (instanceId) => backupBots.has(instanceId),
+    staleCopy: () => stale,
     enabled: true,
     buildHere: true,
     copies: (cli) => cli.includes("/") ? [cli] : onPath,
@@ -77,6 +81,12 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     log: (line) => logged.push(line),
     ...extra,
   });
+  /** What the server does: a read now, and the read the wait asks for once it ends. */
+  const twoReads = async (fallback: ReturnType<typeof make>) => {
+    await fallback.settle(instances);
+    clock += CONFIRM;
+    return fallback.settle(instances);
+  };
   const advance = (ms: number) => {
     clock += ms;
     for (const timer of timers.splice(0)) {
@@ -94,32 +104,85 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     place = {};
     onPath = [];
     clis = {};
+    stale = null;
+    backupBots = new Set();
     clock = 1_000_000;
     timers = [];
     installOutcome = installsTheAppCopy;
     registry = {
       installRuntime: vi.fn(() => installOutcome()),
       refreshModels: vi.fn(async () => true),
+      forgetSnapshots: vi.fn(),
       cliTarget: (id) => ({ driverKind: id === "opencodeGo" ? "opencodeGo" : "other", cli: clis[id] ?? (id === "opencodeGo" ? "opencode" : null) }),
     };
     changed = vi.fn();
     logged = [];
+    data = mkdtempSync(join(tmpdir(), "omb-free-fallback-"));
+  });
+  afterEach(async () => {
+    await removeTempDir(data);
   });
 
-  it("installs OpenCode when no AI is ready and no copy of OpenCode exists, then reads its models and the engines again", async () => {
+  it("installs OpenCode once no AI could answer on two reads 90 seconds apart, then reads its models and the engines again", async () => {
     const fallback = make();
+    expect(await fallback.settle(instances)).toBeUndefined();
+    expect(registry.installRuntime).not.toHaveBeenCalled();
+    // The wait ends: every engine is probed afresh (a CLI slow on a cold start gets a second chance) and read again.
+    advance(CONFIRM - 1);
+    expect(registry.forgetSnapshots).not.toHaveBeenCalled();
+    advance(1);
+    expect(registry.forgetSnapshots).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
     await fallback.settle(instances);
     expect(registry.installRuntime).toHaveBeenCalledExactlyOnceWith("opencodeGo");
     expect(registry.refreshModels).toHaveBeenCalledExactlyOnceWith("opencodeGo");
-    expect(changed).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledTimes(2);
     // Only a line in the server log says so.
     expect(logged.join("\n")).toMatch(/OpenCode/);
+  });
+
+  it("installs nothing when an AI turns up on the second read, a slow one included", async () => {
+    const fallback = make();
+    await fallback.settle(instances);
+    clock += CONFIRM;
+    instances = [ready("claude", "claudeAgent"), missingOpenCode()];
+    expect(await fallback.settle(instances)).toBeUndefined();
+    // It went away again: the 90 seconds start over.
+    instances = [ready("claude", "claudeAgent", { state: "unavailable", authenticated: undefined }), missingOpenCode()];
+    await fallback.settle(instances);
+    clock += CONFIRM - 1;
+    await fallback.settle(instances);
+    expect(registry.installRuntime).not.toHaveBeenCalled();
+    clock += 1;
+    await fallback.settle(instances);
+    expect(registry.installRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("decides nothing until the company runtime has started, then reads the engines", async () => {
+    let start!: () => void;
+    const fallback = make({ ready: new Promise<void>((resolve) => { start = resolve; }) });
+    await twoReads(fallback);
+    expect(registry.installRuntime).not.toHaveBeenCalled();
+    expect(timers).toEqual([]);
+    start();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await twoReads(fallback);
+    expect(registry.installRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("installs nothing when the company connection arrives during the wait", async () => {
+    const fallback = make();
+    await fallback.settle(instances);
+    place = { organisationManaged: true };
+    clock += CONFIRM;
+    expect(await fallback.settle(instances)).toBeUndefined();
+    expect(registry.installRuntime).not.toHaveBeenCalled();
   });
 
   it("installs once every ready AI of the person's own missed its test message twice", async () => {
     instances = [ready("claude", "claudeAgent"), ready("codex", "codex"), missingOpenCode()];
     answered = { claude: false, codex: false };
-    await make().settle(instances);
+    await twoReads(make());
     expect(registry.installRuntime).toHaveBeenCalledOnce();
   });
 
@@ -129,18 +192,18 @@ describe("OpenCode's free backup, installed without a word when nothing else can
   ])("installs nothing while an AI of the person's own is ready and %s", async (_label, result) => {
     instances = [ready("claude", "claudeAgent"), ready("codex", "codex"), missingOpenCode()];
     answered = { claude: false, codex: result };
-    expect(await make().settle(instances)).toBeUndefined();
+    expect(await twoReads(make())).toBeUndefined();
     expect(registry.installRuntime).not.toHaveBeenCalled();
   });
 
-  it("does not count the trial credit's models, a signed-out AI or one with no model as able to answer", async () => {
+  it("does not count company models, a signed-out AI or one with no model as able to answer", async () => {
     instances = [
-      ready("trial-credit", "openai-compat"),
+      ready("company-claude", "claudeAgent"),
       ready("claude", "claudeAgent", { authenticated: false }),
       { ...ready("grok", "grokAgent"), models: { default: "", options: [] } },
       missingOpenCode(),
     ];
-    await make().settle(instances);
+    await twoReads(make());
     expect(registry.installRuntime).toHaveBeenCalledOnce();
   });
 
@@ -148,8 +211,8 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     ["a saved default model", () => { saved = { instanceId: "claude", model: "claude-sonnet-5" }; }],
     ["a saved New Bot model", () => { profile = { instanceId: "claude", model: "claude-sonnet-5" }; }],
     ["a hosted workspace", () => { place = { hostedWorkspace: true }; }],
-    ["a Cloud home with trial credit", () => { place = { trialCredit: true }; }],
-    ["a Team Cloud member", () => { place = { teamCloud: true }; }],
+    ["any Cloud home (personal or team, with trial credit or not)", () => { place = { cloudHome: true }; }],
+    ["a server people sign in to", () => { place = { sharedSignIn: true }; }],
     ["a branded build", () => { place = { branded: true }; }],
     ["an organisation-managed computer", () => { place = { organisationManaged: true }; }],
     ["the person's own OpenCode on PATH", () => { onPath = [OWN_BIN]; }],
@@ -159,18 +222,18 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     ["no OpenCode in the engine list", () => { instances = instances.filter((instance) => instance.driverKind !== "opencodeGo"); }],
   ])("installs nothing with %s", async (_label, arrange) => {
     arrange();
-    expect(await make().settle(instances)).toBeUndefined();
+    expect(await twoReads(make())).toBeUndefined();
     expect(registry.installRuntime).not.toHaveBeenCalled();
   });
 
   it("installs again when OpenCode was pointed at the app's own copy (Settings' install does that) and that copy is gone", async () => {
     clis = { opencodeGo: APP_BIN };
-    await make().settle(instances);
+    await twoReads(make());
     expect(registry.installRuntime).toHaveBeenCalledExactlyOnceWith("opencodeGo");
   });
 
   it("installs nothing on a computer OpenCode has no build of its own for (never npm in the background)", async () => {
-    expect(await make({ buildHere: false }).settle(instances)).toBeUndefined();
+    expect(await twoReads(make({ buildHere: false }))).toBeUndefined();
     expect(registry.installRuntime).not.toHaveBeenCalled();
   });
 
@@ -178,7 +241,10 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     let finish!: (ok: boolean) => void;
     installOutcome = () => new Promise<boolean>((resolve) => { finish = resolve; });
     const fallback = make();
+    await fallback.settle(instances);
+    clock += CONFIRM;
     const first = fallback.settle(instances);
+    expect(first).toBeInstanceOf(Promise);
     expect(fallback.settle(instances)).toBeUndefined();
     // A slow download outlasts any wait: still the one install.
     clock += 2 * 24 * HOUR;
@@ -191,7 +257,7 @@ describe("OpenCode's free backup, installed without a word when nothing else can
   it("waits 10 minutes, then an hour, then a day between failed installs, never a tight loop", async () => {
     installOutcome = async () => { throw new Error("OpenCode couldn't be downloaded. Check the internet connection and try again."); };
     const fallback = make();
-    await fallback.settle(instances);
+    await twoReads(fallback);
     expect(registry.installRuntime).toHaveBeenCalledTimes(1);
     expect(registry.refreshModels).not.toHaveBeenCalled();
     expect(logged.join("\n")).toMatch(/couldn't be downloaded/);
@@ -209,18 +275,42 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     expect(await attemptsAfter(24 * HOUR)).toEqual([4, 5]);
   });
 
+  it("keeps its wait across a restart, so a relaunch does not try again at once", async () => {
+    installOutcome = async () => { throw new Error("offline"); };
+    const file = join(data, "providers", "free-fallback.json");
+    await twoReads(make({ file }));
+    expect(registry.installRuntime).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ attempts: 1, lastAttemptAt: clock });
+    // The app restarts five minutes later.
+    clock += 5 * MINUTE;
+    const again = make({ file });
+    await twoReads(again);
+    expect(registry.installRuntime).toHaveBeenCalledTimes(1);
+    clock += 5 * MINUTE;
+    await again.settle(instances);
+    expect(registry.installRuntime).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads a damaged or missing record as no wait at all", async () => {
+    const file = join(data, "providers", "free-fallback.json");
+    mkdirSync(join(data, "providers"), { recursive: true });
+    writeFileSync(file, "{not json");
+    await twoReads(make({ file }));
+    expect(registry.installRuntime).toHaveBeenCalledOnce();
+  });
+
   it("reads the engines again when a wait ends, so a retry needs no visitor", async () => {
     installOutcome = async () => false;
     const fallback = make();
-    await fallback.settle(instances);
-    expect(changed).toHaveBeenCalledTimes(1);
+    await twoReads(fallback);
+    const reads = changed.mock.calls.length;
     // The read the install asked for finds it still missing: a wait starts, and its end reads the engines again.
     await fallback.settle(instances);
     advance(10 * MINUTE - 1);
     await Promise.resolve();
-    expect(changed).toHaveBeenCalledTimes(1);
+    expect(changed).toHaveBeenCalledTimes(reads);
     advance(1);
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(reads + 1));
     await fallback.settle(instances);
     expect(registry.installRuntime).toHaveBeenCalledTimes(2);
   });
@@ -228,7 +318,7 @@ describe("OpenCode's free backup, installed without a word when nothing else can
   it("backs off too when an install says it worked but no copy turned up", async () => {
     installOutcome = async () => true;
     const fallback = make();
-    await fallback.settle(instances);
+    await twoReads(fallback);
     await fallback.settle(instances);
     clock += 5 * MINUTE;
     await fallback.settle(instances);
@@ -242,56 +332,69 @@ describe("OpenCode's free backup, installed without a word when nothing else can
       return installsTheAppCopy();
     };
     const fallback = make();
-    await fallback.settle(instances);
+    await twoReads(fallback);
     clock += 10 * MINUTE;
     fail = false;
     await fallback.settle(instances);
     await fallback.settle(instances);
     expect(registry.installRuntime).toHaveBeenCalledTimes(2);
-    // The app's copy disappears (the person cleared the data folder's tools): the next install runs at once.
+    // The app's copy disappears (the person cleared the data folder's tools): it is installed again, after the usual wait.
     onPath = [];
     instances = instances.map((instance) => instance.driverKind === "opencodeGo" ? missingOpenCode() : instance);
-    await fallback.settle(instances);
+    await twoReads(fallback);
     expect(registry.installRuntime).toHaveBeenCalledTimes(3);
   });
 
+  it("never throws into the engine read that called it", async () => {
+    const fallback = make({ place: () => { throw new Error("brand.json unreadable"); } });
+    expect(() => fallback.settle(instances)).not.toThrow();
+    expect(logged.join("\n")).toMatch(/brand\.json unreadable/);
+  });
+
   it("does nothing at all when turned off", async () => {
-    expect(await make({ enabled: false }).settle(instances)).toBeUndefined();
-    instances = instances.map((instance) => instance.driverKind === "opencodeGo" ? runningOpenCode(older(OPENCODE_STANDALONE.version)) : instance);
-    onPath = [APP_BIN];
-    expect(await make({ enabled: false }).settle(instances)).toBeUndefined();
+    expect(await twoReads(make({ enabled: false }))).toBeUndefined();
+    stale = { version: "1.0.0" };
+    backupBots.add("opencodeGo");
+    expect(await twoReads(make({ enabled: false }))).toBeUndefined();
     expect(registry.installRuntime).not.toHaveBeenCalled();
   });
 
   describe("keeping the app's copy current", () => {
-    it("installs the version this app pins when the app's copy is older, whatever else answers", async () => {
-      onPath = [APP_BIN];
-      instances = [ready("claude", "claudeAgent"), runningOpenCode(older(OPENCODE_STANDALONE.version))];
+    beforeEach(() => {
+      // An earlier pin's copy: off PATH, since the code lists no hash for it.
+      stale = { version: "1.0.0" };
+      instances = [ready("claude", "claudeAgent"), missingOpenCode()];
       answered = { claude: true };
-      saved = { instanceId: "claude", model: "claude-model" };
-      await make().settle(instances);
-      expect(registry.installRuntime).toHaveBeenCalledExactlyOnceWith("opencodeGo");
     });
 
-    it("also when OpenCode runs the app's copy by its full path", async () => {
-      clis = { opencodeGo: APP_BIN };
-      instances = [runningOpenCode(older(OPENCODE_STANDALONE.version))];
-      await make().settle(instances);
+    it("installs the pinned version while any bot is on the backup, even when another AI answers", async () => {
+      backupBots.add("opencodeGo");
+      saved = { instanceId: "claude", model: "claude-model" };
+      await twoReads(make());
+      expect(registry.installRuntime).toHaveBeenCalledExactlyOnceWith("opencodeGo");
+      expect(logged.join("\n")).toMatch(/Updating the app's copy of OpenCode/);
+    });
+
+    it("installs the pinned version when nothing else can answer, with no bot on it yet", async () => {
+      instances = [missingOpenCode()];
+      await twoReads(make());
       expect(registry.installRuntime).toHaveBeenCalledOnce();
     });
 
     it.each<[string, () => void]>([
-      ["the app's copy is the pinned version", () => { onPath = [APP_BIN]; instances = [runningOpenCode(OPENCODE_STANDALONE.version)]; }],
-      ["the app's copy is newer than the pin", () => { onPath = [APP_BIN]; instances = [runningOpenCode(newer(OPENCODE_STANDALONE.version))]; }],
-      ["its version is unknown", () => { onPath = [APP_BIN]; instances = [runningOpenCode("")]; }],
-      ["the person's own older OpenCode runs", () => { onPath = [OWN_BIN, APP_BIN]; instances = [runningOpenCode(older(OPENCODE_STANDALONE.version))]; }],
-      ["OpenCode runs a program of the person's choosing", () => {
-        clis = { opencodeGo: "/opt/tools/opencode-dev" };
-        instances = [runningOpenCode(older(OPENCODE_STANDALONE.version))];
+      ["no bot is on the backup and another AI answers", () => {}],
+      ["the computer is organisation-managed", () => { backupBots.add("opencodeGo"); place = { organisationManaged: true }; }],
+      ["the person's own OpenCode runs", () => { backupBots.add("opencodeGo"); onPath = [OWN_BIN]; }],
+      ["OpenCode runs a program of the person's choosing", () => { backupBots.add("opencodeGo"); clis = { opencodeGo: "/opt/tools/opencode-dev" }; }],
+      ["OpenCode is turned off", () => {
+        backupBots.add("opencodeGo");
+        instances = instances.map((instance) => instance.driverKind === "opencodeGo" ? { ...instance, enabled: false } : instance);
       }],
-    ])("changes nothing when %s", async (_label, arrange) => {
+      ["there is no build for this computer", () => { backupBots.add("opencodeGo"); }],
+      ["the app's copy is on the pinned version", () => { backupBots.add("opencodeGo"); stale = null; onPath = [APP_BIN]; }],
+    ])("changes nothing when %s", async (label, arrange) => {
       arrange();
-      expect(await make().settle(instances)).toBeUndefined();
+      expect(await twoReads(make(label.includes("no build") ? { buildHere: false } : {}))).toBeUndefined();
       expect(registry.installRuntime).not.toHaveBeenCalled();
     });
 
@@ -307,8 +410,8 @@ describe("OpenCode's free backup, installed without a word when nothing else can
       registerPathDir(enginesBinDir());
       registerFallbackPathDir(join(standaloneEngineDir("opencode"), "bin"));
       try {
-        instances = [runningOpenCode(older(OPENCODE_STANDALONE.version))];
-        await make({ copies: undefined, appCopy: undefined }).settle(instances);
+        backupBots.add("opencodeGo");
+        await twoReads(make({ copies: undefined, appCopy: undefined }));
         expect(registry.installRuntime).toHaveBeenCalledExactlyOnceWith("opencodeGo");
       } finally {
         process.env.PATH = original;
@@ -318,19 +421,11 @@ describe("OpenCode's free backup, installed without a word when nothing else can
       }
     });
 
-    it("updates nothing on a computer this app pins no OpenCode build for (never npm in the background)", async () => {
-      onPath = [APP_BIN];
-      instances = [runningOpenCode(older(OPENCODE_STANDALONE.version))];
-      expect(await make({ buildHere: false }).settle(instances)).toBeUndefined();
-      expect(registry.installRuntime).not.toHaveBeenCalled();
-    });
-
     it("backs off when the new version does not take", async () => {
-      onPath = [APP_BIN];
-      instances = [runningOpenCode(older(OPENCODE_STANDALONE.version))];
+      backupBots.add("opencodeGo");
       installOutcome = async () => true;
       const fallback = make();
-      await fallback.settle(instances);
+      await twoReads(fallback);
       await fallback.settle(instances);
       clock += 9 * MINUTE;
       await fallback.settle(instances);
@@ -359,5 +454,13 @@ describe("whether the free backup may install on its own", () => {
 
   it("is off in this test run by default", () => {
     expect(freeFallbackInstalls()).toBe(false);
+  });
+
+  it("waits 90 seconds between the two reads; only a sealed test fixture may shorten that, never below a second", () => {
+    expect(confirmWaitMs({})).toBe(90_000);
+    expect(confirmWaitMs({ OMB_FREE_FALLBACK_CONFIRM_MS: "2000" })).toBe(90_000);
+    expect(confirmWaitMs({ OMB_TEST_SEALED_PATH: "1", OMB_FREE_FALLBACK_CONFIRM_MS: "2000" })).toBe(2_000);
+    expect(confirmWaitMs({ OMB_TEST_SEALED_PATH: "1", OMB_FREE_FALLBACK_CONFIRM_MS: "5" })).toBe(1_000);
+    expect(confirmWaitMs({ OMB_TEST_SEALED_PATH: "1", OMB_FREE_FALLBACK_CONFIRM_MS: "soon" })).toBe(90_000);
   });
 });

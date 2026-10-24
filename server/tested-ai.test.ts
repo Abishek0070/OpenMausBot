@@ -433,6 +433,20 @@ describe("testing an AI with one tiny message before a new bot's default trusts 
     expect(seen.length).toBe(handed);
   });
 
+  it("hands on the default it chose too, and a hook that throws never breaks the read", async () => {
+    const chosen: ModelSelection[] = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      tested = make({ settled: (_found, selection) => { chosen.push(selection); throw new Error("hook failed"); } });
+      expect(refresh()).toEqual(on("claude"));
+      expect(chosen).toEqual([on("claude")]);
+      expect(warn.mock.calls.flat().join("\n")).toMatch(/hook failed/);
+      await settled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("counts a test that hangs past its time as a miss, and holds nothing open", async () => {
     vi.useFakeTimers();
     tested = make({ timeoutMs: 30_000, after: undefined });

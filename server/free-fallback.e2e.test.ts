@@ -64,7 +64,9 @@ async function boot(home: string) {
   const child = spawn(process.execPath, ["--experimental-strip-types", "--import", PRELOAD, join(ROOT, "server/index.ts")], {
     cwd: ROOT,
     // Background test messages and the free backup are both off in test fixtures unless asked for.
-    env: { ...verificationServerEnvironment(process.env, home, port), OMB_AI_CHECKS: "1", OMB_FREE_FALLBACK: "1", FAKE_OPENCODE_BUILD: join(home, "fake-build.json") },
+    env: { ...verificationServerEnvironment(process.env, home, port), OMB_AI_CHECKS: "1", OMB_FREE_FALLBACK: "1",
+      // The two reads that must both find no AI able to answer: 2 seconds apart here instead of 90.
+      OMB_FREE_FALLBACK_CONFIRM_MS: "2000", FAKE_OPENCODE_BUILD: join(home, "fake-build.json") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.push(child);

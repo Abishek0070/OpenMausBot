@@ -39,8 +39,9 @@ export interface TestedAiDeps {
   identity?(instanceId: string): string;
   /** Where the results and the follower are kept; none keeps them in memory. */
   file?: string;
-  /** The engines the latest read found, once its tests are started: what else follows from them (server/free-fallback.ts). */
-  settled?(instances: readonly SelectableInstance[]): void;
+  /** The engines the latest read found and the default chosen from them, once its tests are started: what else follows
+   * from them (server/free-fallback.ts). A throw here is logged; the read goes on. */
+  settled?(instances: readonly SelectableInstance[], selection: ModelSelection): void;
   /** Whether tests start on their own (backgroundAiChecks); a check asked for always runs. */
   background?: boolean;
   timeoutMs?: number;
@@ -308,7 +309,11 @@ export function createTestedAi(deps: TestedAiDeps) {
       lastSelection = selection;
       lastInstances = instances;
       sweep();
-      deps.settled?.(instances);
+      try {
+        deps.settled?.(instances, selection);
+      } catch (error) {
+        warn("what follows from the engines just read", error);
+      }
       if (followOwed) {
         followOwed = false;
         follow();
