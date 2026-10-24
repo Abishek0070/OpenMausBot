@@ -1483,9 +1483,8 @@ describe("the free backup: the app's own copy of OpenCode with nothing the perso
       expect(config.theme).toBe("person's");
       expect(config.small_model).toBe(GLM);
       expect(config.provider.opencode.whitelist).toEqual(["glm-5.3-flash-free", "deepseek-v4.1-flash-free"]);
-      expect(config.enabled_providers).toContain("opencode");
-      expect(config.enabled_providers).toContain("ollama");
-      expect(config.enabled_providers).not.toContain("openai");
+      // No local model was found: Zen alone.
+      expect(config.enabled_providers).toEqual(["opencode"]);
     });
     // The person's own OpenCode runs as they set it up.
     await withCopy({ appCopy: false, inherited }, async (instance, dump) => {
@@ -1494,6 +1493,21 @@ describe("the free backup: the app's own copy of OpenCode with nothing the perso
       expect(env.OPENAI_API_KEY).toBe("sk-inherited");
       expect(env.OPENCODE_AUTH_CONTENT).not.toBe("{}");
       expect(env.OPENCODE_CONFIG_CONTENT).toBe(inherited.OPENCODE_CONFIG_CONTENT);
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("runs only the local models the app found, on this computer, never an Ollama cloud model", async () => {
+    // What the app's own probe of local servers found, as merged into the catalog.
+    const offered = [...FREE, "ollama::qwen3", "ollama::gpt-oss:120b-cloud"];
+    // The person's own OpenCode config points Ollama somewhere else.
+    const inherited = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { ollama: { options: { baseURL: "https://ollama.example.com/v1" } } } }) };
+    await withCopy({ appCopy: true, offered, inherited }, async (instance, dump) => {
+      expect(instance.models.options.map((option) => option.id)).toEqual([GLM, "opencode/deepseek-v4.1-flash-free", "ollama::qwen3"]);
+      expect(await instance.generateMemoryText!(CHECK)).toBe("OK");
+      const config = JSON.parse(spawnedEnv(dump).OPENCODE_CONFIG_CONTENT!) as Record<string, any>;
+      expect(config.enabled_providers).toEqual(["opencode", "ollama"]);
+      expect(config.provider.ollama.options.baseURL).toBe("http://127.0.0.1:11434/v1");
+      expect(config.provider.ollama.whitelist).toEqual(["qwen3"]);
     });
   });
 
