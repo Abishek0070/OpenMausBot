@@ -23,9 +23,10 @@ export const OPENCODE_STANDALONE: StandaloneRelease = {
   // The app installs its own copy's updates; OpenCode's self-updater would replace that copy behind its back.
   runEnv: { OPENCODE_DISABLE_AUTOUPDATE: "1" },
   // Program hashes of earlier pins whose installed copies stay usable after this pin moves on; none yet.
-  // Bumping the pin: move every platform's current `executableSha256` into this list under its platform key, then pin
-  // the new version. A listed copy keeps running from PATH while the app installs the new one in the background
-  // (server/free-fallback.ts reads it with standaloneStaleCopy); an unlisted one is off PATH until that install finishes.
+  // Bumping the pin: add the current version and every platform's `executableSha256` to OPENCODE_PIN_HISTORY below, put
+  // those hashes in this list under their platform keys, then pin the new version (opencode-release.test.ts checks it).
+  // A listed copy keeps running from PATH while the app installs the new one in the background (server/free-fallback.ts
+  // reads it with standaloneStaleCopy); an unlisted one is off PATH until that install finishes.
   previousPrograms: {},
   assets: {
     "darwin-arm64": { url: `${RELEASE}/opencode-darwin-arm64.zip`, archive: "zip", executable: "opencode", approxBytes: 64_291_659, sha256: "c400a2f8c8ab7e99478a7f4dd1a466b57bf33888e520d85c55780a5464c4b689", executableSha256: "417af53923f3d529759ab85ce3e8dd09116f742efcd332de591d2da6ebae696b" },
@@ -38,3 +39,16 @@ export const OPENCODE_STANDALONE: StandaloneRelease = {
     "win32-arm64": { url: `${RELEASE}/opencode-windows-arm64.zip`, archive: "zip", executable: "opencode.exe", approxBytes: 75_791_921, sha256: "36e696fd1d275b469ab02a1ccc00d161bfdcc0a4ffa93c2b7a4e57399f3ff347", executableSha256: "92c6c5f6f656e60d6809c029a911ecb578204085945dd2f6e2639981ecab8749" },
   },
 };
+
+/** Every earlier OpenCode pin and its program hash per platform, oldest first; empty until the first bump. */
+export const OPENCODE_PIN_HISTORY: ReadonlyArray<{ version: string; programs: Partial<Record<string, string>> }> = [];
+
+/** Each earlier pin's program, per platform this release builds for, that `previousPrograms` doesn't list. */
+export function unlistedEarlierPrograms(release: StandaloneRelease, history: typeof OPENCODE_PIN_HISTORY): string[] {
+  const listed = (release.previousPrograms ?? {}) as Partial<Record<string, readonly string[]>>;
+  return history.flatMap((earlier) => Object.keys(release.assets).flatMap((platform) => {
+    const program = earlier.programs[platform];
+    if (!program) return [`${earlier.version} ${platform} (no hash recorded)`];
+    return listed[platform]?.includes(program) ? [] : [`${earlier.version} ${platform}`];
+  }));
+}
