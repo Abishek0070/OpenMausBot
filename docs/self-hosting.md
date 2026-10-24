@@ -919,8 +919,9 @@ OpenCode's free backup (below), no other bot ever moves. To stop the
 background test messages, start the server with `OMB_AI_CHECKS=0`.
 
 When no engine of the person's own can answer (none is ready, or every ready
-one missed twice) on two reads of the engines at least 90 seconds apart, and
-there is no OpenCode on the machine at all, the server installs OpenCode's
+one missed twice) on two reads of the engines at least 90 seconds apart (or on
+the first read when no AI program is installed at all and the desktop isn't
+enrolled with a company), and there is no OpenCode on the machine at all, the server installs OpenCode's
 own build (no Node.js) into `<data dir>/tools/standalone/opencode/` in the
 background, so the first bot can still reply. That copy runs only Zen's free
 models that keep nothing they are sent (GLM-5.3-Flash Free, else DeepSeek
