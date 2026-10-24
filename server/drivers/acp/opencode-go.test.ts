@@ -139,7 +139,9 @@ describe("OpenCode catalog", () => {
       config: driver.defaultConfig(),
     });
 
-    expect(instance.models.default).toBe("opencode/big-pickle");
+    // No login here, so Big Pickle (a free model that may keep what it is sent) is listed but never the default.
+    expect(instance.models.options.map((option) => option.id)).toEqual(["opencode/big-pickle"]);
+    expect(instance.models.default).toBe("");
     expect(instance.models.options.some((option) => option.custom)).toBe(false);
     await instance.refreshModels?.();
     expect(instance.models.options.some((option) => option.id === "opencode-go/extra-two" && !option.custom)).toBe(true);
@@ -1440,10 +1442,23 @@ describe("the free backup: the app's own copy of OpenCode with nothing the perso
     }
   });
 
-  it("leaves the model of an OpenCode the person installed alone", async () => {
+  it("starts an OpenCode the person installed with no login on the model that keeps nothing, still listing all of its models", async () => {
     await withCopy({ appCopy: false }, async (instance) => {
-      expect(instance.models.default).toBe("opencode/mimo-v2.6-flash-free");
+      expect(instance.models.default).toBe(GLM);
       expect(instance.models.options.map((option) => option.id)).toEqual(FREE);
+    });
+    // With none that keeps nothing, it has no default: never a new bot's AI on its own.
+    await withCopy({ appCopy: false, offered: RETAINING }, async (instance) => {
+      expect(instance.models.default).toBe("");
+    });
+  });
+
+  it.each<[string, Partial<CopyOptions>]>([
+    ["a login", { login: { opencode: { type: "oauth", access: "acc-token", refresh: "ref-token" } } }],
+    ["a key in the server's environment", { inherited: { DEEPSEEK_API_KEY: "sk-own" } }],
+  ])("leaves an OpenCode the person installed and signed in with %s on its own pick", async (_label, options) => {
+    await withCopy({ appCopy: false, ...options }, async (instance) => {
+      expect(instance.models.default).toBe("opencode/mimo-v2.6-flash-free");
     });
   });
 
@@ -1469,6 +1484,10 @@ describe("the free backup: the app's own copy of OpenCode with nothing the perso
     // With none that keeps nothing, it starts on a model of the person's own rather than a free one that may keep it.
     await withCopy({ appCopy: true, environment, offered: [...RETAINING, PAID] }, async (instance) => {
       expect(instance.models.default).toBe(PAID);
+    });
+    // And with only free models that may keep it, on none: no default, so never a new bot's AI on its own.
+    await withCopy({ appCopy: true, environment, offered: RETAINING }, async (instance) => {
+      expect(instance.models.default).toBe("");
     });
   });
 
@@ -1528,10 +1547,56 @@ describe("the free backup: the app's own copy of OpenCode with nothing the perso
     });
   });
 
-  it.skipIf(process.platform === "win32")("leaves the background calls of an OpenCode the person installed on OpenCode's own pick", async () => {
+  it.skipIf(process.platform === "win32")("sends the background calls of an OpenCode the person installed with no login to the model that keeps nothing", async () => {
     await withCopy({ appCopy: false }, async (instance, dump) => {
       expect(await instance.generateMemoryText!(CHECK)).toBe("OK");
+      expect(prompted(dump)).toEqual([GLM]);
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("leaves the background calls of an OpenCode the person installed and signed in to on its own pick", async () => {
+    await withCopy({ appCopy: false, login: { opencode: { type: "oauth", access: "acc-token", refresh: "ref-token" } } }, async (instance, dump) => {
+      expect(await instance.generateMemoryText!(CHECK)).toBe("OK");
       expect(prompted(dump)).toEqual(["opencode/mimo-v2.6-flash-free"]);
+    });
+  });
+
+  it.skipIf(process.platform === "win32").each<[string, Partial<CopyOptions>]>([
+    ["an OpenCode the person installed with no login", { appCopy: false }],
+    ["the app's copy signed in through the app, whose key adds no model", { appCopy: true, environment: { OPENCODE_API_KEY: "zen-key" } }],
+  ])("refuses a background call on %s when only free models that may keep it are offered", async (_label, options) => {
+    await withCopy({ appCopy: false, offered: RETAINING, ...options }, async (instance, dump) => {
+      await expect(instance.generateMemoryText!(CHECK)).rejects.toThrow(/keeps nothing you send/);
+      expect(prompted(dump)).toEqual([]);
+    });
+  });
+
+  it.skipIf(process.platform === "win32").each<[string, Partial<CopyOptions>]>([
+    ["an OpenCode the person installed with no login", { appCopy: false }],
+    ["the app's copy signed in through the app", { appCopy: true, environment: { OPENCODE_API_KEY: "zen-key" } }],
+  ])("still runs a model the person picked themselves on %s", async (_label, options) => {
+    await withCopy({ appCopy: false, offered: RETAINING, ...options }, async (instance, dump) => {
+      const recorder = recordEvents(instance.adapter);
+      try {
+        await instance.adapter.sendTurn({ threadId: "t-picked", botId: "bot-7", text: "hi", model: "opencode/big-pickle", approvalMode: "full" });
+        expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
+      } finally {
+        recorder.stop();
+      }
+      expect(prompted(dump)).toEqual(["opencode/big-pickle"]);
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("never falls back to a free model that may keep it on an OpenCode the person installed with no login", async () => {
+    await withCopy({ appCopy: false, running: RETAINING }, async (instance, dump) => {
+      const recorder = recordEvents(instance.adapter);
+      try {
+        await instance.adapter.sendTurn({ threadId: "t-own-gone", botId: "bot-7", text: "hi", model: "opencode/retired-free", approvalMode: "full" });
+        expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: false });
+      } finally {
+        recorder.stop();
+      }
+      expect(prompted(dump)).toEqual([]);
     });
   });
 

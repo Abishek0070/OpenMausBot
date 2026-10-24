@@ -3,7 +3,7 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 
 import type { EngineAccess, ModelCatalog, ModelSelection, ProviderSnapshot } from "./contracts.ts";
-import { readyToRun, selectDefaultModelSelection, withInstanceConfig, withNewBotEffort, type SelectableInstance } from "./default-model-selection.ts";
+import { defaultModel, readyToRun, selectDefaultModelSelection, withInstanceConfig, withNewBotEffort, type SelectableInstance } from "./default-model-selection.ts";
 import { ManagedDesktopPolicy } from "./managed-policy.ts";
 
 const codex = {
@@ -24,6 +24,15 @@ const claude = {
 };
 
 describe("new bot default model selection", () => {
+  it("never makes an OpenCode whose catalog names no default a new bot's AI, while other engines fall back to their first model", () => {
+    // OpenCode names no default when it offers only free models that may keep what they are sent (opencode-go.ts).
+    const opencode = { instanceId: "opencodeGo", driverKind: "opencodeGo", snapshot: { state: "available", authenticated: true } satisfies ProviderSnapshot,
+      models: { default: "", options: [{ id: "opencode/big-pickle", label: "Big Pickle" }] } };
+    expect(selectDefaultModelSelection([opencode])).toEqual({ instanceId: "", model: "" });
+    expect(selectDefaultModelSelection([{ ...codex, models: { default: "", options: codex.models.options } }])).toEqual({ instanceId: "codex", model: "codex-default" });
+    expect(defaultModel(opencode)).toBe("");
+  });
+
   it("accepts a configured API-key provider", () => {
     const instance = { ...codex, instanceId: "mistral", driverKind: "mistral", access: "api" as const };
     const preferred = { instanceId: "mistral", model: "selected-model" };

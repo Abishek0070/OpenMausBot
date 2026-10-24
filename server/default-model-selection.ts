@@ -45,9 +45,11 @@ export function readyToRun(instance: SelectableInstance, context: DefaultSelecti
   return instance.enabled !== false && instance.snapshot.state === "available" && context.refusal?.(instance) === undefined && !signedOut(instance);
 }
 
-const defaultModel = (instance: SelectableInstance) => instance.models.default.trim()
+/** The model a new bot gets on this engine: its catalog's default, else its first model. OpenCode names no default on
+ * purpose when it offers only free models that may keep what they are sent (drivers/acp/opencode-go.ts): it then has none. */
+export const defaultModel = (instance: SelectableInstance) => instance.models.default.trim()
   ? instance.models.default
-  : instance.models.options.find((model) => model.id.trim())?.id ?? "";
+  : instance.driverKind === "opencodeGo" ? "" : instance.models.options.find((model) => model.id.trim())?.id ?? "";
 
 /** A saved choice is intentional: an unavailable provider sends new bots to setup, never silently to another provider. On
  * an enrolled desktop a working personal engine beats a Company one, so billing stays the person's choice. */

@@ -433,6 +433,12 @@ describe("testing an AI with one tiny message before a new bot's default trusts 
     expect(seen.length).toBe(handed);
   });
 
+  it("sends no test message to an OpenCode that names no default, since no new bot would get it", async () => {
+    instances = [{ ...ready("opencodeGo", "opencodeGo"), models: { default: "", options: [{ id: "opencode/big-pickle", label: "Big Pickle" }] } }];
+    await boot();
+    expect(sent("opencodeGo")).toBe(0);
+  });
+
   it("hands on the default it chose too, and a hook that throws never breaks the read", async () => {
     const chosen: ModelSelection[] = [];
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

@@ -17,7 +17,7 @@ import { dirname } from "node:path";
 import { aiSignInKey, rankAis, type AiTestState } from "../shared/ai-ranking.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { ModelSelection, ProviderSnapshot } from "./contracts.ts";
-import { readyToRun, signedOut, type DefaultSelectionContext, type SelectableInstance } from "./default-model-selection.ts";
+import { defaultModel, readyToRun, signedOut, type DefaultSelectionContext, type SelectableInstance } from "./default-model-selection.ts";
 import { checkEngine, type CheckableEngine, type EngineCheck } from "./engine-check.ts";
 import type { Store } from "./store.ts";
 
@@ -83,8 +83,8 @@ type Saved = { results: Record<string, Result>; follower?: Follower };
 const same = (a: ModelSelection, b: ModelSelection) => a.instanceId === b.instanceId && a.model === b.model;
 const exactly = (a: ModelSelection, b: ModelSelection) => same(a, b) && a.effort === b.effort && a.variant === b.variant;
 const empty = (selection: ModelSelection | undefined) => !selection?.instanceId && !selection?.model;
-const hasModel = (instance: SelectableInstance) =>
-  Boolean(instance.models.default.trim() || instance.models.options.some((option) => option.id.trim()));
+/** It has a model a new bot would get: an engine with none is never tested. */
+const hasModel = (instance: SelectableInstance) => Boolean(defaultModel(instance));
 
 function load(file: string | undefined, now: number): Saved {
   if (!file) return { results: {} };
