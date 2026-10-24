@@ -1363,6 +1363,38 @@ describe("the free backup's model on the app's own copy of OpenCode", () => {
     expect(await startsOn({ appCopy: true, offered: ["opencode/mimo-v2.6-flash-free", "opencode/big-pickle"] })).toBe("opencode/mimo-v2.6-flash-free");
   });
 
+  it.skipIf(process.platform === "win32")("counts the app's own build as the backup even beside an older npm copy in the app's folder", async () => {
+    // The npm copy ranks last when OpenCode runs, so the app's own build is what runs.
+    const original = process.env.PATH;
+    const scratch = mkdtempSync(join(tmpdir(), "omb-opencode-backup-npm-"));
+    const put = (folder: string) => {
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, "opencode"), `#!/bin/sh\nexec '${FAKE_CLI}' "$@"\n`, { mode: 0o755 });
+    };
+    put(enginesBinDir());
+    put(join(standaloneEngineDir("opencode"), "bin"));
+    resetPathCacheForTests();
+    registerPathDir(enginesBinDir());
+    registerFallbackPathDir(join(standaloneEngineDir("opencode"), "bin"));
+    resetOpenCodeModelCache();
+    const instance = await createOpenCodeDriver(async () => catalog(...FREE)).create({
+      instanceId: "opencode-backup-npm", displayName: "OpenCode", enabled: true, config: { cli: "opencode", fullAuto: false },
+      environment: { HOME: scratch, USERPROFILE: scratch, XDG_DATA_HOME: join(scratch, "data"), ...noKeys },
+    });
+    try {
+      await instance.refreshModels?.();
+      expect(instance.models.default).toBe("opencode/glm-5.3-flash-free");
+    } finally {
+      await instance.dispose();
+      process.env.PATH = original;
+      resetPathCacheForTests();
+      await removeTempDir(enginesBinDir());
+      await removeTempDir(standaloneEngineDir("opencode"));
+      await removeTempDir(scratch);
+      resetOpenCodeModelCache();
+    }
+  });
+
   it("leaves the model of an OpenCode the person installed alone", async () => {
     expect(await startsOn({ appCopy: false })).toBe("opencode/mimo-v2.6-flash-free");
   });

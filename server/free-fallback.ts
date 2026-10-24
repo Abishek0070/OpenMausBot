@@ -13,6 +13,7 @@ import type { ModelSelection } from "./contracts.ts";
 import { readyToRun, type DefaultSelectionContext, type SelectableInstance } from "./default-model-selection.ts";
 import { OPENCODE_STANDALONE } from "./drivers/acp/opencode-release.ts";
 import { parseVersionTriple, versionAtLeast } from "./drivers/acp/version-probe.ts";
+import { standaloneLookupPath } from "./engine-install.ts";
 import { isAppStandaloneCopy, standaloneAssetFor } from "./engine-standalone.ts";
 import { findCliCandidates } from "./env-path.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
@@ -47,7 +48,7 @@ export interface FreeFallbackDeps {
   buildHere?: boolean;
   /** Every copy of a command on the app's PATH, first one wins (findCliCandidates). */
   copies?(cli: string): string[];
-  /** Whether a command runs the app's own copy (isAppStandaloneCopy). */
+  /** Whether a command runs the app's own copy, found the way OpenCode's processes find it (isAppStandaloneCopy). */
   appCopy?(cli: string): boolean;
   now?(): number;
   after?(ms: number, run: () => void): { cancel(): void };
@@ -73,7 +74,7 @@ export function createFreeFallback(deps: FreeFallbackDeps) {
   const enabled = deps.enabled ?? freeFallbackInstalls();
   const buildHere = deps.buildHere ?? standaloneAssetFor(OPENCODE_STANDALONE) !== null;
   const copies = deps.copies ?? findCliCandidates;
-  const appCopy = deps.appCopy ?? ((cli: string) => isAppStandaloneCopy(cli));
+  const appCopy = deps.appCopy ?? ((cli: string) => isAppStandaloneCopy(cli, undefined, standaloneLookupPath()));
   const now = deps.now ?? Date.now;
   const after = deps.after ?? ((ms: number, run: () => void) => {
     const timer = setTimeout(run, ms);
@@ -104,8 +105,9 @@ export function createFreeFallback(deps: FreeFallbackDeps) {
     }
     const target = openCodes.find((instance) => instance.enabled !== false);
     if (!target || !buildHere) return null;
-    // A program the person chose, or any copy already on the app's PATH (theirs or the app's), is left alone.
-    if (openCodes.some((instance) => cliOf(instance.instanceId) !== COMMAND)) return null;
+    // A program the person chose, or any copy already on the app's PATH (theirs or the app's), is left alone. The app's
+    // own copy by its full path (Settings' install points OpenCode there past a broken copy) is not the person's choice.
+    if (openCodes.some((instance) => cliOf(instance.instanceId) !== COMMAND && !appCopy(cliOf(instance.instanceId)))) return null;
     if (copies(COMMAND).length) return null;
     const place = deps.place();
     if (place.hostedWorkspace || place.trialCredit || place.teamCloud || place.branded || place.organisationManaged) return null;

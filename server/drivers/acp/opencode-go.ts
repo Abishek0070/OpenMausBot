@@ -9,7 +9,7 @@ import { cloudHomeConfigured } from "../../cloud-home.ts";
 import { DATA_DIR, OPENCODE_PROVIDER_ENV } from "../../config.ts";
 import { hostedWorkspaceConfigured } from "../../enterprise.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
-import { applyStandaloneSpawnEnv } from "../../engine-install.ts";
+import { applyStandaloneSpawnEnv, standaloneLookupPath } from "../../engine-install.ts";
 import { isAppStandaloneCopy } from "../../engine-standalone.ts";
 import { OPENCODE_STANDALONE } from "./opencode-release.ts";
 import { createAcpDriver, type AccountErrorCode, type AcpConfig, type AcpSupport } from "./core.ts";
@@ -566,9 +566,10 @@ export function openCodeFreeFallback(ownAccess: boolean, models: ModelCatalog): 
  * Big Pickle and MiMo may use prompts to improve their models; Beam keeps them for 30 days. */
 export const NO_RETENTION_FREE_MODELS = ["opencode/glm-5.3-flash-free", "opencode/deepseek-v4.1-flash-free"] as const;
 
-/** The app's own copy with nothing of the person's in it: the free backup (server/free-fallback.ts). */
+/** The app's own copy, found the way OpenCode's processes find it, with nothing of the person's in it: the free backup
+ * (server/free-fallback.ts). */
 function backupCopy(environment: Record<string, string | undefined>, cli: string): boolean {
-  return !ownOpenCodeAccess(environment) && isAppStandaloneCopy(cli);
+  return !ownOpenCodeAccess(environment) && isAppStandaloneCopy(cli, DATA_DIR, standaloneLookupPath());
 }
 
 const keepingNothing = (offered: readonly string[]) => NO_RETENTION_FREE_MODELS.find((id) => offered.includes(id));

@@ -1,9 +1,15 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelSelection, ProviderSnapshot } from "./contracts.ts";
 import type { SelectableInstance } from "./default-model-selection.ts";
 import { OPENCODE_STANDALONE } from "./drivers/acp/opencode-release.ts";
+import { enginesBinDir } from "./engine-install.ts";
+import { standaloneEngineDir } from "./engine-standalone.ts";
+import { registerFallbackPathDir, registerPathDir, resetPathCacheForTests } from "./env-path.ts";
 import { createFreeFallback, freeFallbackInstalls, type FreeFallbackDeps, type FreeFallbackPlace } from "./free-fallback.ts";
+import { removeTempDir } from "./testing/cleanup.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -157,6 +163,12 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     expect(registry.installRuntime).not.toHaveBeenCalled();
   });
 
+  it("installs again when OpenCode was pointed at the app's own copy (Settings' install does that) and that copy is gone", async () => {
+    clis = { opencodeGo: APP_BIN };
+    await make().settle(instances);
+    expect(registry.installRuntime).toHaveBeenCalledExactlyOnceWith("opencodeGo");
+  });
+
   it("installs nothing on a computer OpenCode has no build of its own for (never npm in the background)", async () => {
     expect(await make({ buildHere: false }).settle(instances)).toBeUndefined();
     expect(registry.installRuntime).not.toHaveBeenCalled();
@@ -281,6 +293,29 @@ describe("OpenCode's free backup, installed without a word when nothing else can
       arrange();
       expect(await make().settle(instances)).toBeUndefined();
       expect(registry.installRuntime).not.toHaveBeenCalled();
+    });
+
+    it.skipIf(process.platform === "win32")("finds the app's copy the way OpenCode runs it, ahead of an older npm copy in the app's folder", async () => {
+      const original = process.env.PATH;
+      const put = (folder: string) => {
+        mkdirSync(folder, { recursive: true });
+        writeFileSync(join(folder, "opencode"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      };
+      put(enginesBinDir());
+      put(join(standaloneEngineDir("opencode"), "bin"));
+      resetPathCacheForTests();
+      registerPathDir(enginesBinDir());
+      registerFallbackPathDir(join(standaloneEngineDir("opencode"), "bin"));
+      try {
+        instances = [runningOpenCode(older(OPENCODE_STANDALONE.version))];
+        await make({ copies: undefined, appCopy: undefined }).settle(instances);
+        expect(registry.installRuntime).toHaveBeenCalledExactlyOnceWith("opencodeGo");
+      } finally {
+        process.env.PATH = original;
+        resetPathCacheForTests();
+        await removeTempDir(enginesBinDir());
+        await removeTempDir(standaloneEngineDir("opencode"));
+      }
     });
 
     it("backs off when the new version does not take", async () => {
