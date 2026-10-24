@@ -96,6 +96,8 @@ export function createFreeFallback(deps: FreeFallbackDeps) {
     && !freeFallback(instance) && deps.context.answered?.(instance) !== false);
 
   const needed = (instances: readonly SelectableInstance[]): Need | null => {
+    // Only OpenCode's own build is ever installed here, never npm.
+    if (!buildHere) return null;
     const openCodes = instances.filter((instance) => instance.driverKind === DRIVER);
     // The app's copy in use and older than this app's pin: the pinned version replaces it.
     for (const instance of openCodes) {
@@ -104,7 +106,7 @@ export function createFreeFallback(deps: FreeFallbackDeps) {
       if (version && pinned && !versionAtLeast(version, pinned)) return { instanceId: instance.instanceId, kind: "update" };
     }
     const target = openCodes.find((instance) => instance.enabled !== false);
-    if (!target || !buildHere) return null;
+    if (!target) return null;
     // A program the person chose, or any copy already on the app's PATH (theirs or the app's), is left alone. The app's
     // own copy by its full path (Settings' install points OpenCode there past a broken copy) is not the person's choice.
     if (openCodes.some((instance) => cliOf(instance.instanceId) !== COMMAND && !appCopy(cliOf(instance.instanceId)))) return null;

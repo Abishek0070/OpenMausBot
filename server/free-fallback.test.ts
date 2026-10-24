@@ -318,6 +318,13 @@ describe("OpenCode's free backup, installed without a word when nothing else can
       }
     });
 
+    it("updates nothing on a computer this app pins no OpenCode build for (never npm in the background)", async () => {
+      onPath = [APP_BIN];
+      instances = [runningOpenCode(older(OPENCODE_STANDALONE.version))];
+      expect(await make({ buildHere: false }).settle(instances)).toBeUndefined();
+      expect(registry.installRuntime).not.toHaveBeenCalled();
+    });
+
     it("backs off when the new version does not take", async () => {
       onPath = [APP_BIN];
       instances = [runningOpenCode(older(OPENCODE_STANDALONE.version))];
