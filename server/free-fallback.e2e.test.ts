@@ -58,7 +58,7 @@ function freshHome(extra: Record<string, unknown> = {}): string {
   return home;
 }
 
-async function boot(home: string) {
+async function boot(home: string, extraEnv: Record<string, string> = {}) {
   const port = await freePortBlock([0, 1]);
   const base = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ["--experimental-strip-types", "--import", PRELOAD, join(ROOT, "server/index.ts")], {
@@ -66,7 +66,7 @@ async function boot(home: string) {
     // Background test messages and the free backup are both off in test fixtures unless asked for.
     env: { ...verificationServerEnvironment(process.env, home, port), OMB_AI_CHECKS: "1", OMB_FREE_FALLBACK: "1",
       // The two reads that must both find no AI able to answer: 2 seconds apart here instead of 90.
-      OMB_FREE_FALLBACK_CONFIRM_MS: "2000", FAKE_OPENCODE_BUILD: join(home, "fake-build.json") },
+      OMB_FREE_FALLBACK_CONFIRM_MS: "2000", FAKE_OPENCODE_BUILD: join(home, "fake-build.json"), ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.push(child);
@@ -134,8 +134,9 @@ it.skipIf(process.platform === "win32")("installs at start when no AI is ready a
   config.instances.claude.config.cli = join(home, "no-claude-here");
   delete config.instances.claude.environment.FAKE_CLAUDE_CHECK;
   writeFileSync(join(home, "config.json"), JSON.stringify(config));
-  const server = await boot(home);
-  await expect.poll(server.tests, { timeout: 60_000, interval: 250 }).toMatchObject({ claude: null, opencodeGo: "passed" });
+  // No AI program at all and no sign of a company: installed on the first read, so a 60-second wait would show.
+  const server = await boot(home, { OMB_FREE_FALLBACK_CONFIRM_MS: "60000" });
+  await expect.poll(server.tests, { timeout: 20_000, interval: 250 }).toMatchObject({ claude: null, opencodeGo: "passed" });
   expect(server.downloads()).toBe(1);
   await expect.poll(async () => (await server.starter()).modelSelection, { timeout: 10_000 }).toMatchObject({ instanceId: "opencodeGo", model: NO_RETENTION });
   // The person writes to the first bot, which answers on the backup: it no longer follows the default on its own.
@@ -161,6 +162,18 @@ it.skipIf(process.platform === "win32")("installs at start when no AI is ready a
   await expect.poll(async () => (await selections())[helper.id], { timeout: 15_000, interval: 250 }).toBe("claude");
   expect((await selections())[picked.id]).toBe("opencodeGo");
 }, 120_000);
+
+it.skipIf(process.platform === "win32")("waits on a desktop enrolled with a company, even with no AI program", async () => {
+  const home = freshHome();
+  const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+  config.instances.claude.config.cli = join(home, "no-claude-here");
+  writeFileSync(join(home, "config.json"), JSON.stringify(config));
+  const server = await boot(home, { OMB_FREE_FALLBACK_CONFIRM_MS: "8000", OMB_DESKTOP_ENROLLED: "1" });
+  await new Promise((resolve) => setTimeout(resolve, 4_000));
+  expect(server.downloads()).toBe(0);
+  await expect.poll(server.tests, { timeout: 30_000, interval: 250 }).toMatchObject({ opencodeGo: "passed" });
+  expect(server.downloads()).toBe(1);
+}, 60_000);
 
 it.skipIf(process.platform === "win32")("installs nothing with a saved default", async () => {
   const server = await boot(freshHome({ defaultModelSelection: { instanceId: "claude", model: "claude-sonnet-5" } }));

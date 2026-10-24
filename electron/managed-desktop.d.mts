@@ -26,3 +26,5 @@ export interface ManagedDesktopBridge {
   onState(callback: (state: ManagedDesktopState) => void): () => void;
 }
 export function managedPortalOrigin(value: string): string;
+export const COMPANY_CONNECTION_FILE: string;
+export function companyDesktopEnvironment(userDataDir: string): { OMB_DESKTOP_ENROLLED: "0" | "1" };

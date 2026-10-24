@@ -88,7 +88,7 @@ import { buildApplicationMenu } from "./menu.mjs";
 import { createComputerSharing, isHomeFolder, validateSharedFolders } from "./computer-sharing.mjs";
 import { acquireDataDirLease } from "./data-dir-lease.mjs";
 import { switchLocalEnvironment } from "./environment-switch.mjs";
-import { createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore } from "./managed-desktop.mjs";
+import { companyDesktopEnvironment, createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore } from "./managed-desktop.mjs";
 import { CHECKOUT_SOURCES, cloudMenuSublabel, cloudTarget, createCloudAccountClient, createCloudAccountStore } from "./cloud-account.mjs";
 import { installCloudPlanIpc } from "./cloud-plan-ipc.mjs";
 import { cloudLinkOpensSheet, colorDotIcons, createCloudLook, createCloudReadyNotice, installCloudBuy, lookFile } from "./cloud-buy.mjs";
@@ -1197,7 +1197,7 @@ async function startServerOn(port, dataDir = runningDataDir ?? startupEnvironmen
     OMB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
     OMB_PORT: String(port),
     OMB_APP_VERSION: app.getVersion(),
-    OMB_USER_DATA: app.getPath("userData"),
+    OMB_USER_DATA: app.getPath("userData"), ...companyDesktopEnvironment(app.getPath("userData")),
     ...(secureCredentials.composioApiKey
       ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
       : {}),

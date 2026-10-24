@@ -56,6 +56,13 @@ test("main forks what the helper picks and hands only the server the cache direc
   assert.doesNotMatch(body, /path\.join\(process\.resourcesPath, "server", "index\.js"\)/);
 });
 
+test("every server child is told whether this desktop is enrolled with a company, before the connection is relayed", () => {
+  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const start = main.indexOf("async function startServerOn(port,");
+  const body = main.slice(start, main.indexOf("utilityProcess.fork(entry", start));
+  assert.match(body, /\.\.\.companyDesktopEnvironment\(app\.getPath\("userData"\)\)/);
+});
+
 test("every server child of one launch gets that launch's id, never one from the shell", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(main, /\nconst desktopLaunchId = randomUUID\(\);\n/);

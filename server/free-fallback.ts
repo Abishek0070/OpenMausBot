@@ -1,6 +1,7 @@
 // OpenCode's free backup, installed without a word. When no AI of the person's own can answer (none is ready, or every
-// ready one missed its test message twice) on two reads of the engines at least 90 seconds apart, and there is no OpenCode
-// on this computer at all, the app installs its own copy of OpenCode's build (no Node.js) in the background so the first
+// ready one missed its test message twice) on two reads of the engines at least 90 seconds apart (on the first read when no
+// AI program is installed at all and nothing says this is a company's computer), and there is no OpenCode on this computer
+// at all, the app installs its own copy of OpenCode's build (no Node.js) in the background so the first
 // bot can still reply through a free model that keeps nothing (drivers/acp/opencode-go.ts). Nothing here picks a default:
 // the new copy is read, gets its test message and ranks last like any free backup (server/tested-ai.ts,
 // shared/ai-ranking.ts), so it becomes the default only when nothing else answered.
@@ -10,7 +11,7 @@
 // started. A copy the app installed is kept on its pinned version while a bot uses it or nothing else can answer
 // (the installer swaps versions in place), never on a managed computer. Nothing is ever removed: once a real AI answers,
 // the backup just ranks last.
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { freeFallback } from "../shared/ai-ranking.ts";
@@ -28,6 +29,11 @@ const COMMAND = "opencode";
 /** Nothing can answer on two reads this far apart, every engine probed afresh for the second: a CLI slow on a cold start,
  * or a company connection that arrives after start-up, is seen before anything is installed. */
 const CONFIRM_MS = 90_000;
+
+/** OMB_DESKTOP_ENROLLED=1: the desktop app found its company connection when it started this server. */
+export function companyDesktopHint(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.OMB_DESKTOP_ENROLLED === "1";
+}
 
 /** 90 seconds; a sealed test fixture (env-path.ts) may shorten it with OMB_FREE_FALLBACK_CONFIRM_MS, never below a second. */
 export function confirmWaitMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -73,6 +79,10 @@ export interface FreeFallbackDeps {
   appCopy?(cli: string): boolean;
   /** The app's own copy left on an older pin (standaloneStaleCopy). */
   staleCopy?(): { version: string } | null;
+  /** Whether an AI program's command is installed here (findCliCandidates, files that exist). */
+  installed?(cli: string): boolean;
+  /** This desktop is enrolled with a company (companyDesktopHint unless given). */
+  companyHint?: boolean;
   now?(): number;
   after?(ms: number, run: () => void): { cancel(): void };
   log?(line: string): void;
@@ -111,6 +121,8 @@ export function createFreeFallback(deps: FreeFallbackDeps) {
   const copies = deps.copies ?? findCliCandidates;
   const appCopy = deps.appCopy ?? ((cli: string) => isAppStandaloneCopy(cli, undefined, standaloneLookupPath()));
   const staleCopy = deps.staleCopy ?? (() => standaloneStaleCopy(OPENCODE_STANDALONE));
+  const installed = deps.installed ?? ((cli: string) => findCliCandidates(cli).some((path) => existsSync(path)));
+  const companyHint = deps.companyHint ?? companyDesktopHint();
   const now = deps.now ?? Date.now;
   const after = deps.after ?? ((ms: number, run: () => void) => {
     const timer = setTimeout(run, ms);
@@ -151,6 +163,13 @@ export function createFreeFallback(deps: FreeFallbackDeps) {
   const ownMayAnswer = (instances: readonly SelectableInstance[]) => instances.some((instance) =>
     readyToRun(instance, deps.context) && hasModel(instance) && deps.context.company?.(instance.instanceId) !== true
     && !freeFallback(instance) && deps.context.answered?.(instance) !== false);
+
+  /** Any AI program installed here other than OpenCode, signed in or not: one may only be slow to start. */
+  const anyProgram = (instances: readonly SelectableInstance[]) => instances.some((instance) => {
+    if (instance.driverKind === DRIVER) return false;
+    const cli = deps.registry.cliTarget(instance.instanceId)?.cli;
+    return Boolean(cli) && installed(cli!);
+  });
 
   /** Where the app may put a backup in at all, and no AI of the person's can answer. */
   const backupWanted = (instances: readonly SelectableInstance[]) => {
@@ -229,7 +248,9 @@ export function createFreeFallback(deps: FreeFallbackDeps) {
       return undefined;
     }
     if (seen?.kind !== need.kind) seen = { kind: need.kind, at: now() };
-    if (now() < seen.at + confirmMs) {
+    // With no AI program that could be slow to start and no sign of a company, the first reply shouldn't wait 90 seconds.
+    const atOnce = need.kind === "install" && !companyHint && !anyProgram(instances);
+    if (!atOnce && now() < seen.at + confirmMs) {
       sleepUntil(seen.at + confirmMs, true);
       return undefined;
     }

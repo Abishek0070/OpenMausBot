@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import path from "node:path";
 import { parseOrganizationBranding } from "./organization-branding.mjs";
 import { libraryCapability, libraryRouteLimits, parseLibraryPointer } from "./org-library.mjs";
@@ -90,6 +90,15 @@ const unreadable = message => Object.assign(new Error(message), { code: "unreada
 export const retryDelay = attempt => [15_000, 30_000, 60_000][Math.min(attempt, 3) - 1];
 
 /** OS-encrypted; company tokens never go into config.json, backups, renderer storage, environment variables or CLI homes. */
+/** The sealed company connection record in the app's user data folder. */
+export const COMPANY_CONNECTION_FILE = "company-connection.bin";
+
+/** For the bot runtime at spawn: whether this desktop is enrolled with a company. Only the record's presence counts,
+ * nothing is read or decrypted, so the runtime knows before the connection itself is relayed (server/free-fallback.ts). */
+export function companyDesktopEnvironment(userDataDir) {
+  return { OMB_DESKTOP_ENROLLED: existsSync(path.join(userDataDir, COMPANY_CONNECTION_FILE)) ? "1" : "0" };
+}
+
 export function createManagedDesktopStore({ file, encryption }) {
   let tail = Promise.resolve();
   const available = async () => {

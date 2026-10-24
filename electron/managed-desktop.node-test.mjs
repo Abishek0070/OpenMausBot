@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
-import { createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore, managedPortalOrigin, unreadableRecord } from "./managed-desktop.mjs";
+import { COMPANY_CONNECTION_FILE, companyDesktopEnvironment, createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore, managedPortalOrigin, unreadableRecord } from "./managed-desktop.mjs";
 
 const origin = "https://company.example.test";
 const token = `omd_${"a".repeat(43)}`;
@@ -556,4 +556,13 @@ test("reports when the saved enrollment has been read", async t => {
   await settle(); assert.equal(restored, false);
   await f.client.start(); await settle();
   assert.equal(restored, true); assert.equal(f.policies[0].remoteAccess, false, "the saved policy applied before the Admin answered");
+});
+
+test("tells the bot runtime whether this desktop is enrolled with a company, from its connection file alone", async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omb-enrolled-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  assert.deepEqual(companyDesktopEnvironment(dir), { OMB_DESKTOP_ENROLLED: "0" });
+  // Present, even sealed for this computer's keychain only, is enough: nothing is read or decrypted.
+  await fs.writeFile(path.join(dir, COMPANY_CONNECTION_FILE), "sealed");
+  assert.deepEqual(companyDesktopEnvironment(dir), { OMB_DESKTOP_ENROLLED: "1" });
 });

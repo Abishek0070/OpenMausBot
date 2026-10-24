@@ -9,7 +9,7 @@ import { OPENCODE_STANDALONE } from "./drivers/acp/opencode-release.ts";
 import { enginesBinDir } from "./engine-install.ts";
 import { standaloneEngineDir } from "./engine-standalone.ts";
 import { registerFallbackPathDir, registerPathDir, resetPathCacheForTests } from "./env-path.ts";
-import { confirmWaitMs, createFreeFallback, freeFallbackInstalls, type FreeFallbackDeps, type FreeFallbackPlace } from "./free-fallback.ts";
+import { companyDesktopHint, confirmWaitMs, createFreeFallback, freeFallbackInstalls, type FreeFallbackDeps, type FreeFallbackPlace } from "./free-fallback.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
 const MINUTE = 60_000;
@@ -42,6 +42,8 @@ describe("OpenCode's free backup, installed without a word when nothing else can
   let clis: Record<string, string>;
   let stale: { version: string } | null;
   let backupBots: Set<string>;
+  /** AI programs installed on this computer, by command: Claude is installed but not signed in, unless a test says so. */
+  let programs: Set<string>;
   let clock: number;
   let timers: Array<{ at: number; run: () => void; cancelled: boolean }>;
   let installOutcome: () => Promise<boolean | { useCli: string }>;
@@ -67,6 +69,8 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     place: () => place,
     changed: changed as unknown as FreeFallbackDeps["changed"],
     botsOn: (instanceId) => backupBots.has(instanceId),
+    installed: (cli) => programs.has(cli),
+    companyHint: false,
     staleCopy: () => stale,
     enabled: true,
     buildHere: true,
@@ -106,6 +110,7 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     clis = {};
     stale = null;
     backupBots = new Set();
+    programs = new Set(["claude"]);
     clock = 1_000_000;
     timers = [];
     installOutcome = installsTheAppCopy;
@@ -113,7 +118,8 @@ describe("OpenCode's free backup, installed without a word when nothing else can
       installRuntime: vi.fn(() => installOutcome()),
       refreshModels: vi.fn(async () => true),
       forgetSnapshots: vi.fn(),
-      cliTarget: (id) => ({ driverKind: id === "opencodeGo" ? "opencodeGo" : "other", cli: clis[id] ?? (id === "opencodeGo" ? "opencode" : null) }),
+      // Each engine's command is named after it here; an API-key engine has none.
+      cliTarget: (id) => ({ driverKind: id === "opencodeGo" ? "opencodeGo" : "other", cli: clis[id] ?? (id === "opencodeGo" ? "opencode" : id === "api" ? null : id) }),
     };
     changed = vi.fn();
     logged = [];
@@ -139,6 +145,39 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     expect(changed).toHaveBeenCalledTimes(2);
     // Only a line in the server log says so.
     expect(logged.join("\n")).toMatch(/OpenCode/);
+  });
+
+  it("installs on the first read, with no wait, when no AI program is on this computer and nothing says it is a company's", async () => {
+    programs = new Set();
+    instances = [ready("api", "openai-compat", { authenticated: false }), ...instances];
+    const fallback = make();
+    await fallback.settle(instances);
+    expect(registry.installRuntime).toHaveBeenCalledExactlyOnceWith("opencodeGo");
+    expect(logged.join("\n")).toMatch(/No AI can answer yet/);
+  });
+
+  it.each<[string, () => Partial<FreeFallbackDeps>]>([
+    ["an AI program is installed, even one that isn't signed in (it may only be slow to start)", () => ({})],
+    ["this desktop is enrolled with a company", () => { programs = new Set(); return { companyHint: true }; }],
+  ])("keeps the 90-second wait when %s", async (_label, arrange) => {
+    const fallback = make(arrange());
+    await fallback.settle(instances);
+    expect(registry.installRuntime).not.toHaveBeenCalled();
+    clock += CONFIRM;
+    await fallback.settle(instances);
+    expect(registry.installRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the wait for an update of the app's copy", async () => {
+    programs = new Set();
+    stale = { version: "1.0.0" };
+    backupBots.add("opencodeGo");
+    const fallback = make();
+    await fallback.settle(instances);
+    expect(registry.installRuntime).not.toHaveBeenCalled();
+    clock += CONFIRM;
+    await fallback.settle(instances);
+    expect(registry.installRuntime).toHaveBeenCalledOnce();
   });
 
   it("installs nothing when an AI turns up on the second read, a slow one included", async () => {
@@ -454,6 +493,12 @@ describe("whether the free backup may install on its own", () => {
 
   it("is off in this test run by default", () => {
     expect(freeFallbackInstalls()).toBe(false);
+  });
+
+  it("reads the desktop's company enrolment from OMB_DESKTOP_ENROLLED, which Electron sets", () => {
+    expect(companyDesktopHint({ OMB_DESKTOP_ENROLLED: "1" })).toBe(true);
+    expect(companyDesktopHint({ OMB_DESKTOP_ENROLLED: "0" })).toBe(false);
+    expect(companyDesktopHint({})).toBe(false);
   });
 
   it("waits 90 seconds between the two reads; only a sealed test fixture may shorten that, never below a second", () => {
