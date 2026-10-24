@@ -1554,6 +1554,13 @@ describe("the free backup: the app's own copy of OpenCode with nothing the perso
     });
   });
 
+  it.skipIf(process.platform === "win32")("leaves the background calls of an OpenCode the person installed with no login on its own local model", async () => {
+    await withCopy({ appCopy: false, offered: ["ollama/llama3", ...FREE] }, async (instance, dump) => {
+      expect(await instance.generateMemoryText!(CHECK)).toBe("OK");
+      expect(prompted(dump)).toEqual(["ollama/llama3"]);
+    });
+  });
+
   it.skipIf(process.platform === "win32")("leaves the background calls of an OpenCode the person installed and signed in to on its own pick", async () => {
     await withCopy({ appCopy: false, login: { opencode: { type: "oauth", access: "acc-token", refresh: "ref-token" } } }, async (instance, dump) => {
       expect(await instance.generateMemoryText!(CHECK)).toBe("OK");

@@ -820,8 +820,10 @@ const support = (loadCatalog: OpenCodeCatalogLoader, reads: OpenCodeReads): AcpS
     }
     const offered = offeredModels({ configOptions }, "model");
     const current = configOptions.find((option) => option.id === "model")?.currentValue;
-    // Signed in through the app, the copy is the person's own: only moved off a free model that may keep what it's sent.
-    if (!freeOnly && !(typeof current === "string" && mayKeep(current))) return;
+    // The backup is always switched. A copy of the person's own is moved only off a model that may keep what it's sent:
+    // signed in through the app, when that is known; with no login, also when its model is unknown. A local one stays.
+    const keeps = typeof current === "string" && mayKeep(current);
+    if (!backup && (freeOnly ? typeof current === "string" && !keeps : !keeps)) return;
     const target = freeOnly ? keepingNothing(offered) : appCopyPick(offered, "") || undefined;
     if (!target) throw new Error(BACKUP_NOT_PRIVATE);
     if (current === target) return;
