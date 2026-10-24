@@ -1,5 +1,7 @@
 // Bots leave OpenCode's free backup once the person's own AI answers. While the backup is the new-bot default
-// (server/free-fallback.ts), every bot that gets it from the app (the first bot, bots made with the default) is noted.
+// (server/free-fallback.ts), every bot the app itself gives it is noted, at the points where the app assigns a model:
+// filling in a bot that had none, the first bot following the default (tested-ai), a bot made without a model. A bot the
+// person put on that model themselves is never noted.
 // When the person's own AI later passes its test message and becomes the default, each noted bot whose model is still
 // that backup moves to it once, with one plain line in its chat ("Now using Claude."), even after the person has written
 // to it: unlike tested-ai's following first bot, writing to a bot is no choice of the backup. A bot whose model the
@@ -34,7 +36,6 @@ const BUSY_RETRY_MS = 5_000;
 
 const same = (a: ModelSelection, b: ModelSelection) => a.instanceId === b.instanceId && a.model === b.model;
 const exactly = (a: ModelSelection, b: ModelSelection) => same(a, b) && a.effort === b.effort && a.variant === b.variant;
-const keyOf = (selection: ModelSelection) => JSON.stringify([selection.instanceId, selection.model, selection.effort ?? null, selection.variant ?? null]);
 
 function load(file: string | undefined): Record<string, ModelSelection> {
   if (!file) return {};
@@ -52,8 +53,6 @@ function load(file: string | undefined): Record<string, ModelSelection> {
 
 export function createBackupBots(deps: BackupBotsDeps) {
   const noted = load(deps.file);
-  /** Each bot's model as last seen, so a change event tells a new choice from anything else. */
-  const seen = new Map<string, string>();
   let backupDefault: ModelSelection | null = null;
   let listening = false;
   let retry: { cancel(): void } | null = null;
@@ -73,34 +72,19 @@ export function createBackupBots(deps: BackupBotsDeps) {
     }
   };
 
-  /** A bot given the backup while it is the default is the app's pick; any other change of model ends that. */
+  /** Any later change of a noted bot's model, or its deletion, ends the note. */
   const listen = () => {
     if (listening) return;
     listening = true;
     const store = deps.store();
-    for (const bot of store.bots) seen.set(bot.id, keyOf(bot.modelSelection));
     store.onChange((change) => {
-      if (change.type === "bot.deleted") {
-        seen.delete(change.botId);
-        if (noted[change.botId]) {
-          delete noted[change.botId];
-          save();
-        }
-        return;
-      }
-      if (change.type !== "bot") return;
-      const bot = store.bot(change.botId);
-      if (!bot) return;
-      const key = keyOf(bot.modelSelection);
-      if (seen.get(bot.id) === key) return;
-      seen.set(bot.id, key);
-      if (backupDefault && same(bot.modelSelection, backupDefault)) {
-        noted[bot.id] = structuredClone(bot.modelSelection);
-        save();
-      } else if (noted[bot.id]) {
-        delete noted[bot.id];
-        save();
-      }
+      if (change.type !== "bot" && change.type !== "bot.deleted") return;
+      const was = noted[change.botId];
+      if (!was) return;
+      const bot = change.type === "bot" ? store.bot(change.botId) : undefined;
+      if (bot && exactly(bot.modelSelection, was)) return;
+      delete noted[change.botId];
+      save();
     });
   };
 
@@ -141,7 +125,18 @@ export function createBackupBots(deps: BackupBotsDeps) {
     if (changed) save();
   };
 
-  return { settle };
+  /** The app just gave this bot the default (filling in a bot with no model, the first bot following it, a bot made
+   * without one): while that default is the backup, the bot is noted. Called after the store holds the new model. */
+  const assigned = (botId: string, selection: ModelSelection): void => {
+    listen();
+    if (!backupDefault || !same(selection, backupDefault)) return;
+    const bot = deps.store().bot(botId);
+    if (!bot || !same(bot.modelSelection, backupDefault)) return;
+    noted[botId] = structuredClone(bot.modelSelection);
+    save();
+  };
+
+  return { settle, assigned };
 }
 
 export type BackupBots = ReturnType<typeof createBackupBots>;

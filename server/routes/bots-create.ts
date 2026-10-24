@@ -36,6 +36,8 @@ export interface BotCreateRouteDeps {
   routines(): RoutineManager | null;
   storedAvatarExists(avatarUrl: string): boolean;
   defaultSelection(): Promise<ModelSelection>;
+  /** A bot made without a model got the default from the app (server/backup-bots.ts notes it). */
+  madeWithDefault?(botId: string, selection: ModelSelection): void;
   checkedModelSelection(raw: unknown, current?: { selection: ModelSelection; busy: boolean }, requireAvailableModel?: boolean): ModelSelectionCheck;
   cloudOwnerSession(auth: RequestAuth): boolean;
   wireBot(bot: BotRecord): WireBot;
@@ -237,6 +239,7 @@ export function createBotCreateRoutes(deps: BotCreateRouteDeps): RouteHandler {
         try { routines!.update(routine.id, { enabled: true }); }
         catch { warnings.push(`Bot created; routine ${routine.id} could not be activated.`); }
       }
+      if (body.modelSelection === undefined) deps.madeWithDefault?.(bot.id, store.bot(bot.id)?.modelSelection ?? selection);
       return json(res, 201, {
         ...(warnings.length ? { warnings } : {}),
         bot: {

@@ -39,6 +39,9 @@ export interface TestedAiDeps {
   identity?(instanceId: string): string;
   /** Where the results and the follower are kept; none keeps them in memory. */
   file?: string;
+  /** The app just gave the first bot this model: when it made it, and each time it follows the default
+   * (server/backup-bots.ts notes it). */
+  applied?(botId: string, selection: ModelSelection): void;
   /** The engines the latest read found and the default chosen from them, once its tests are started: what else follows
    * from them (server/free-fallback.ts). A throw here is logged; the read goes on. */
   settled?(instances: readonly SelectableInstance[], selection: ModelSelection): void;
@@ -211,6 +214,7 @@ export function createTestedAi(deps: TestedAiDeps) {
     saved.follower = { botId: bot.id, selection: structuredClone(deps.forBot(target)) };
     save();
     store.applyModelDefault(bot.id, saved.follower.selection);
+    deps.applied?.(bot.id, saved.follower.selection);
   };
 
   /** A fresh test, or the one already under way for this sign-in. Every result reads the default again, then may move the
@@ -330,6 +334,7 @@ export function createTestedAi(deps: TestedAiDeps) {
       if (!bot) return;
       saved.follower = { botId: bot.id, selection: structuredClone(bot.modelSelection) };
       save();
+      if (!empty(bot.modelSelection)) deps.applied?.(bot.id, bot.modelSelection);
     },
     answered,
     state,

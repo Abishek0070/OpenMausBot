@@ -502,6 +502,19 @@ describe("testing an AI with one tiny message before a new bot's default trusts 
     await expect(tested.check({ ...engineFor("grok"), snapshot: async () => instances[0]!.snapshot })).resolves.toEqual({ ok: true });
   });
 
+  it("says what it gave the first bot, when it makes it and each time it follows the default", async () => {
+    const applied = vi.fn();
+    tested = make({ applied });
+    answers.claude = silent;
+    await boot();
+    expect(applied.mock.calls).toEqual([["chief", on("claude")]]);
+    clock += 2 * MINUTE;
+    for (const timer of timers.splice(0)) timer.run();
+    await settled();
+    expect(chief().modelSelection).toEqual({ ...on("grok"), effort: "high" });
+    expect(applied.mock.calls.at(-1)).toEqual(["chief", { ...on("grok"), effort: "high" }]);
+  });
+
   it("lets the first bot follow while the app fills in its model, when nothing could run at first", async () => {
     instances = [];
     await boot();

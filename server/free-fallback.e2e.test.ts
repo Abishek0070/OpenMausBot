@@ -145,6 +145,10 @@ it.skipIf(process.platform === "win32")("installs at start when no AI is ready a
     messages: Array<{ role: string; kind?: string; text?: string; tool?: { name?: string } }>;
   }).messages;
   await expect.poll(async () => (await lines()).some((line) => line.role === "bot" && line.text?.includes("OK")), { timeout: 30_000, interval: 250 }).toBe(true);
+  // Meanwhile one bot is made with whatever the app picks, and one with the free model picked on purpose.
+  const helper = (await server.api("POST", "/api/bots", { name: "Helper" })).bot as { id: string; modelSelection: { instanceId: string } };
+  expect(helper.modelSelection.instanceId).toBe("opencodeGo");
+  const picked = (await server.api("POST", "/api/bots", { name: "Picked", modelSelection: { instanceId: "opencodeGo", model: NO_RETENTION } })).bot as { id: string };
   // The person installs and connects Claude; the welcome checks it.
   symlinkSync(FAKE_CLAUDE, join(home, "no-claude-here"));
   await expect.poll(async () => (await server.engines()).claude?.snapshot, { timeout: 15_000, interval: 250 }).toMatchObject({ state: "available" });
@@ -152,6 +156,10 @@ it.skipIf(process.platform === "win32")("installs at start when no AI is ready a
   await expect.poll(async () => (await server.starter()).modelSelection.instanceId, { timeout: 15_000, interval: 250 }).toBe("claude");
   const moved = (await lines()).filter((line) => line.kind === "activity" && line.tool?.name === "Now using Claude.");
   expect(moved).toHaveLength(1);
+  const selections = async () => Object.fromEntries(((await server.api("GET", "/api/bots?messages=0")).bots as Array<{ id: string; modelSelection: { instanceId: string } }>)
+    .map((bot) => [bot.id, bot.modelSelection.instanceId]));
+  await expect.poll(async () => (await selections())[helper.id], { timeout: 15_000, interval: 250 }).toBe("claude");
+  expect((await selections())[picked.id]).toBe("opencodeGo");
 }, 120_000);
 
 it.skipIf(process.platform === "win32")("installs nothing with a saved default", async () => {

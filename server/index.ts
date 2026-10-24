@@ -2667,7 +2667,7 @@ async function refreshUnsetModelSelections(instances?: readonly SelectableInstan
   const selection = withNewBotEffort(bootSelection, cfg.newBots?.effort,
     registry.get(bootSelection.instanceId)?.adapter.capabilities.effortLevels);
   for (const bot of store.bots) {
-    if (!bot.modelSelection.instanceId && !bot.modelSelection.model) store.applyModelDefault(bot.id, selection);
+    if (!bot.modelSelection.instanceId && !bot.modelSelection.model) { store.applyModelDefault(bot.id, selection); backupBots.assigned(bot.id, selection); }
   }
 }
 
@@ -2938,7 +2938,7 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 }
 let bootSelection = { instanceId: "", model: "" }; // Settled by one tiny test message through each AI it could be (server/tested-ai.ts).
 const testedAi = createTestedAi({ engine: (instanceId) => registry.get(instanceId), store: () => store, threadBusy, context: selectionContext, changed: () => refreshUnsetModelSelections().then(() => broadcast({ kind: "config", ...configStatus() })),
-  saved: () => [cfg.defaultModelSelection, cfg.newBotDefaults?.profile.modelSelection], hosted: () => Boolean(hostedModels), identity: (instanceId) => configIdentity(providerConfigs()[instanceId]), file: join(DATA_DIR, "providers", "ai-checks.json"), forBot: (selection) => withNewBotEffort(selection, cfg.newBots?.effort, registry.get(selection.instanceId)?.adapter.capabilities.effortLevels), settled: (instances, selection) => { void freeFallback.settle(instances); backupBots.settle(instances, selection); } }); const freeFallback = createFreeFallback({ registry, context: selectionContext, saved: () => [cfg.defaultModelSelection, cfg.newBotDefaults?.profile.modelSelection], changed: () => refreshUnsetModelSelections().then(() => broadcast({ kind: "config", ...configStatus() })), ready: companyRuntimeStarted, file: join(DATA_DIR, "providers", "free-fallback.json"), botsOn: (instanceId) => store.bots.some((bot) => bot.modelSelection.instanceId === instanceId), place: () => ({ hostedWorkspace: Boolean(hostedModels) || HOSTED_WORKSPACE, cloudHome: CLOUD_HOME !== null, sharedSignIn: sharedSignIn(signInAllowList()), branded: loadBrand().source === "file", organisationManaged: openCodeOrganisationManaged() }) }); const backupBots = createBackupBots({ store: () => store, threadBusy, tested: (instance) => testedAi.state(instance), company: selectionContext.company, name: (instanceId) => registry.get(instanceId)?.displayName ?? instanceId, file: join(DATA_DIR, "providers", "backup-bots.json"), forBot: (selection) => withNewBotEffort(selection, cfg.newBots?.effort, registry.get(selection.instanceId)?.adapter.capabilities.effortLevels) }); // OpenCode's free backup (server/free-fallback.ts, server/backup-bots.ts)
+  saved: () => [cfg.defaultModelSelection, cfg.newBotDefaults?.profile.modelSelection], hosted: () => Boolean(hostedModels), identity: (instanceId) => configIdentity(providerConfigs()[instanceId]), file: join(DATA_DIR, "providers", "ai-checks.json"), forBot: (selection) => withNewBotEffort(selection, cfg.newBots?.effort, registry.get(selection.instanceId)?.adapter.capabilities.effortLevels), settled: (instances, selection) => { void freeFallback.settle(instances); backupBots.settle(instances, selection); }, applied: (botId, selection) => backupBots.assigned(botId, selection) }); const freeFallback = createFreeFallback({ registry, context: selectionContext, saved: () => [cfg.defaultModelSelection, cfg.newBotDefaults?.profile.modelSelection], changed: () => refreshUnsetModelSelections().then(() => broadcast({ kind: "config", ...configStatus() })), ready: companyRuntimeStarted, file: join(DATA_DIR, "providers", "free-fallback.json"), botsOn: (instanceId) => store.bots.some((bot) => bot.modelSelection.instanceId === instanceId), place: () => ({ hostedWorkspace: Boolean(hostedModels) || HOSTED_WORKSPACE, cloudHome: CLOUD_HOME !== null, sharedSignIn: sharedSignIn(signInAllowList()), branded: loadBrand().source === "file", organisationManaged: openCodeOrganisationManaged() }) }); const backupBots = createBackupBots({ store: () => store, threadBusy, tested: (instance) => testedAi.state(instance), company: selectionContext.company, name: (instanceId) => registry.get(instanceId)?.displayName ?? instanceId, file: join(DATA_DIR, "providers", "backup-bots.json"), forBot: (selection) => withNewBotEffort(selection, cfg.newBots?.effort, registry.get(selection.instanceId)?.adapter.capabilities.effortLevels) }); // OpenCode's free backup (server/free-fallback.ts, server/backup-bots.ts)
 /** The start-up read of every engine: routines and room handoffs wait for it; a turn waits only for its own engine's probe. */
 let enginesRead: Promise<void> | null = null;
 const presetStore = createPresetStore();
@@ -12984,7 +12984,7 @@ ROUTES.push(createBotCreateRoutes({
   maxWorkspaceBots: MAX_WORKSPACE_BOTS, cloudOwnerKey: CLOUD_OWNER_KEY,
   hostedModels, cloudRoutineAuthors,
   routines: () => routines,
-  storedAvatarExists, defaultSelection, checkedModelSelection, cloudOwnerSession, wireBot, team: CLOUD_TEAM && teamOwners.people ? { name: CLOUD_TEAM.name, people: teamOwners.people } : null,
+  storedAvatarExists, defaultSelection, madeWithDefault: (botId, selection) => backupBots.assigned(botId, selection), checkedModelSelection, cloudOwnerSession, wireBot, team: CLOUD_TEAM && teamOwners.people ? { name: CLOUD_TEAM.name, people: teamOwners.people } : null,
 }), createTeamOwnerRoutes({ team: CLOUD_TEAM, people: teamOwners.people, store, sees: (auth, botId) => visibleTo(viewerFor(auth)).bot(botId), publicBot,
   nameOf: (email) => { const name = teamHost.personName(personKey({ id: "", email })); return name === email ? undefined : name; } }));
 ROUTES.push(createBotSettingsRoutes({
@@ -15125,7 +15125,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }
         if (proposed.state === "pending") return json(res, 201, proposed);
         const createdId = "result" in proposed ? proposed.result.bots.find((bot) => bot.action === "created")?.id : undefined;
-        const created = createdId ? store.bot(createdId) : undefined;
+        const created = createdId ? store.bot(createdId) : undefined; if (created && body.modelSelection === undefined) backupBots.assigned(created.id, created.modelSelection);
         if (!created) return json(res, 201, proposed);
         return json(res, 201, {
           ...proposed,

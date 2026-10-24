@@ -75,6 +75,11 @@ describe("bots leave the free backup once the person's own AI answers", () => {
   });
   /** The backup is the default: what server/index.ts hands on while nothing else answers. */
   const onBackup = (bots: ReturnType<typeof make>) => bots.settle([backup], BACKUP);
+  /** A bot the app gives the default: made without a model, or filled in when it had none. */
+  const appMade = (bots: ReturnType<typeof make>, id: string, extra: Partial<Bot> = {}) => {
+    store.create(id, BACKUP, extra);
+    bots.assigned(id, BACKUP);
+  };
   const nowUsing = (botId: string) => store.lines.filter((line) => line.threadId === `${botId}-main`).map((line) => line.message.tool?.name);
 
   beforeEach(() => {
@@ -90,7 +95,7 @@ describe("bots leave the free backup once the person's own AI answers", () => {
   it("moves a bot made while the backup was the default to the person's AI once it passes, with one line in its chat", () => {
     const bots = make();
     onBackup(bots);
-    store.create("helper", BACKUP);
+    appMade(bots, "helper");
     // Claude is connected and its test message is under way: nothing moves yet.
     states.claude = "testing";
     bots.settle([claude, backup], CLAUDE);
@@ -110,16 +115,42 @@ describe("bots leave the free backup once the person's own AI answers", () => {
     onBackup(bots);
     // The app gives the first bot the default once one can run (tested-ai, or the unset-model refresh).
     store.applyModelDefault("chief", BACKUP);
+    bots.assigned("chief", BACKUP);
     states.claude = "passed";
     bots.settle([claude, backup], CLAUDE);
     expect(store.bot("chief")!.modelSelection).toEqual({ ...CLAUDE, effort: "high" });
     expect(nowUsing("chief")).toEqual(["Now using Claude."]);
   });
 
+  it("leaves a bot the person put on the backup's model themselves while it was the default", () => {
+    const bots = make();
+    onBackup(bots);
+    store.create("helper", { instanceId: "grok", model: "grok-5" });
+    store.choose("helper", BACKUP);
+    // And one the person made with that model picked in the New Bot form.
+    store.create("chosen", BACKUP);
+    states.claude = "passed";
+    bots.settle([claude, backup], CLAUDE);
+    expect(store.bot("helper")!.modelSelection).toEqual(BACKUP);
+    expect(store.bot("chosen")!.modelSelection).toEqual(BACKUP);
+    expect(store.lines).toEqual([]);
+  });
+
+  it("notes nothing the app assigns while the backup isn't the default", () => {
+    const bots = make();
+    states.claude = "testing";
+    bots.settle([claude, backup], CLAUDE);
+    store.create("helper", BACKUP);
+    bots.assigned("helper", BACKUP);
+    states.claude = "passed";
+    bots.settle([claude, backup], CLAUDE);
+    expect(store.bot("helper")!.modelSelection).toEqual(BACKUP);
+  });
+
   it("leaves a bot whose model the person chose, and a bot made on another AI", () => {
     const bots = make();
     onBackup(bots);
-    store.create("picked", BACKUP);
+    appMade(bots, "picked");
     store.choose("picked", { instanceId: "grok", model: "grok-5" });
     store.create("elsewhere", { instanceId: "grok", model: "grok-5" });
     states.claude = "passed";
@@ -132,7 +163,7 @@ describe("bots leave the free backup once the person's own AI answers", () => {
   it("leaves a bot the person put back on the backup themselves once it was no longer the default", () => {
     const bots = make();
     onBackup(bots);
-    store.create("helper", BACKUP);
+    appMade(bots, "helper");
     store.choose("helper", { instanceId: "grok", model: "grok-5" });
     // Claude is the default now, still being tested, and the person picks the free model again on purpose.
     states.claude = "testing";
@@ -145,8 +176,9 @@ describe("bots leave the free backup once the person's own AI answers", () => {
   });
 
   it("leaves a bot the person moved off the backup while the app was closed", () => {
-    onBackup(make());
-    store.create("helper", BACKUP);
+    const first = make();
+    onBackup(first);
+    appMade(first, "helper");
     // The app restarts with the bot on another model.
     const reopened = new FakeStore();
     reopened.bots = [{ id: "helper", name: "helper", threadId: "helper-main", modelSelection: { instanceId: "grok", model: "grok-5" }, tasks: [{ threadId: "helper-main" }] }];
@@ -165,7 +197,7 @@ describe("bots leave the free backup once the person's own AI answers", () => {
       return { cancel: () => { timer.cancelled = true; } };
     } });
     onBackup(bots);
-    store.create("helper", BACKUP);
+    appMade(bots, "helper");
     busy.add("helper/helper-main");
     states.claude = "passed";
     bots.settle([claude, backup], CLAUDE);
@@ -193,15 +225,16 @@ describe("bots leave the free backup once the person's own AI answers", () => {
   ])("moves nothing while %s", (_label, arrange) => {
     const bots = make();
     onBackup(bots);
-    store.create("helper", BACKUP);
+    appMade(bots, "helper");
     bots.settle(...arrange());
     expect(store.bot("helper")!.modelSelection).toEqual(BACKUP);
     expect(store.lines).toEqual([]);
   });
 
   it("remembers which bots the app put on the backup across a restart", () => {
-    onBackup(make());
-    store.create("helper", BACKUP);
+    const first = make();
+    onBackup(first);
+    appMade(first, "helper");
     const again = make();
     states.claude = "passed";
     again.settle([claude, backup], CLAUDE);
@@ -211,7 +244,7 @@ describe("bots leave the free backup once the person's own AI answers", () => {
   it("forgets a bot that was deleted", () => {
     const bots = make();
     onBackup(bots);
-    store.create("helper", BACKUP);
+    appMade(bots, "helper");
     store.remove("helper");
     // A new bot that happens to reuse the id is not one the app put on the backup.
     store.bots.push({ id: "helper", name: "helper", threadId: "helper-main", modelSelection: structuredClone(BACKUP), tasks: [{ threadId: "helper-main" }] });
