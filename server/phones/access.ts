@@ -1,7 +1,7 @@
 // Per-bot checks for phone tool calls: the phone's grant decides which apps exist, the bot's grant decides read or write.
 import { PHONE_SLUG, ALL_PHONE_APPS, isPhoneToolName, isPhoneWrite, phoneToolCapability, type PhoneApps, type PhoneCapability, type PhonePlatform } from "../../shared/phone-apps.ts";
 import { connectorScopeRefusalText } from "../connector-verdict.ts";
-import { PHONE_PLACE_PROMPT, PHONE_PROMPT, PHONE_WITHHELD_PROMPT } from "./instructions.ts";
+import { PHONE_PROMPT, PHONE_WITHHELD_PROMPT, type PHONE_PLACE_PROMPT } from "./instructions.ts";
 
 export interface PhoneBot {
   id: string;
@@ -58,11 +58,10 @@ export function phoneAccess(bot: PhoneBot, allowed: Readonly<Partial<Record<Phon
   return { ok: true, rows: [{ tool: name, summary: `allowed ${name}`, decision: "auto-approved", rule: `scope:${PHONE_SLUG}:${cap}` }] };
 }
 
-/** The system prompt part: each phone, its platform, the apps this bot may use on it and where the person is talking from. Empty when there is nothing to use. */
+/** The system prompt part: each phone, its platform and the apps this bot may use on it. Empty when there is nothing to use. */
 export function phoneSystemPrompt(
   bot: PhoneBot,
   phones: ReadonlyArray<{ name: string; platform: PhonePlatform; capabilities: Partial<Record<PhoneCapability, string>> }>,
-  place: PhonePlace,
 ): string {
   const grants = phoneAppsFor(bot);
   if (Object.keys(grants).length === 0 || phones.length === 0) return "";
@@ -70,7 +69,7 @@ export function phoneSystemPrompt(
     const apps = (Object.keys(grants) as PhoneCapability[]).filter((cap) => phone.capabilities[cap]).map((cap) => `${capName(cap)}${grants[cap] === "read" ? " (read only)" : ""}`);
     return ` ${describePhone(phone)}; this bot may use: ${apps.length ? apps.join(", ") : "nothing yet"}.`;
   });
-  return PHONE_PROMPT + sentences.join("") + PHONE_PLACE_PROMPT[place];
+  return PHONE_PROMPT + sentences.join("");
 }
 
 /** "Omkar's iPhone is an iPhone", or "The iPhone" when the phone is named after its kind (iOS 16+ reports "iPhone"). */

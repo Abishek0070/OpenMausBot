@@ -8,8 +8,9 @@ import { harnessMcpTokenEnv } from "../harness-mcp-token.ts";
 import type { OutboundHold } from "../outbound-hold.ts";
 import { AGENTS_NODE_FLAG, SPAWNED_PROXIES } from "../proxy-paths.ts";
 import type { BotRecord } from "../store.ts";
+import type { PromptPart } from "../system-prompt.ts";
 import { capName, phoneAccess, phoneAppsFor, phoneSystemPrompt, phoneWithheldPrompt, type PhoneAccess, type PhoneBot, type PhonePlace } from "./access.ts";
-import { PHONE_NO_PHONE_TEXT } from "./instructions.ts";
+import { PHONE_NO_PHONE_TEXT, PHONE_PLACE_PROMPT } from "./instructions.ts";
 import { PHONE_JOB_TIMEOUT_MS, PHONE_SEND_TIMEOUT_MS, type PhoneJobs } from "./jobs.ts";
 import type { PhoneRecord, PhoneRegistry } from "./registry.ts";
 import { phoneRpc, type PhoneRefusal, type PhoneTarget, type PhoneToolsList } from "./rpc.ts";
@@ -38,7 +39,10 @@ export interface PhoneHost {
   /** The owner has a phone that allows an app this bot was granted. */
   mounts(bot: PhoneBot, owner: string | null): boolean;
   integration(bot: PhoneBot, owner: string | null, mint: () => string, harnessUrl: string): { command: string; args: string[]; env: Record<string, string> } | null;
-  prompt(bot: PhoneBot, owner: string | null, place?: PhonePlace): string;
+  prompt(bot: PhoneBot, owner: string | null): string;
+  /** The phone part and, only beside a non-empty one, where the person is: a section of its own, volatile, so a turn
+   * from the phone after one at the computer does not change the cached system prompt. */
+  parts(bot: PhoneBot, owner: string | null, place: PhonePlace): [PromptPart, PromptPart];
   /** For a turn that may not use the phone although the owner's phone would serve this bot: say so, so it does not guess. */
   withheld(bot: PhoneBot, owner: string | null): string;
   handle(body: unknown, capability: TurnCapability, assertActive: () => void): Promise<PhoneToolsList | PhoneToolResult>;
@@ -75,6 +79,7 @@ export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
     const granted = (Object.keys(grants) as PhoneCapability[]).filter((cap) => grants[cap]);
     return phonesOf(owner).some((phone) => granted.some((cap) => allows(phone, cap)));
   };
+  const prompt = (bot: PhoneBot, owner: string | null) => (owner === null ? "" : phoneSystemPrompt(bot, phonesOf(owner).map(({ registration }) => registration)));
   return {
     mounts,
     integration(bot, owner, mint, harnessUrl) {
@@ -85,7 +90,11 @@ export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
         env: { ...AGENTS_NODE_FLAG, [harnessMcpTokenEnv("device")]: token, OMB_HARNESS_URL: harnessUrl },
       };
     },
-    prompt: (bot, owner, place = "computer") => (owner === null ? "" : phoneSystemPrompt(bot, phonesOf(owner).map(({ registration }) => registration), place)),
+    prompt,
+    parts(bot, owner, place) {
+      const text = prompt(bot, owner);
+      return [{ id: "device", label: "Phone", text }, { id: "device-place", label: "Where the person is", text: text && PHONE_PLACE_PROMPT[place] }];
+    },
     withheld: (bot, owner) => (owner !== null && mounts(bot, owner) ? phoneWithheldPrompt(bot, phonesOf(owner).map(({ registration }) => registration)) : ""),
     toolListing: () => (registry.list(null, () => false).length === 0 ? null : { phone: PHONE_TOOLS.map(({ name, description }) => ({ name, description })) }),
     async handle(body, capability, assertActive) {

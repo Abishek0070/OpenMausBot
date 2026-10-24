@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { phoneAccess, phoneAppsFor, phoneSystemPrompt, phoneWithheldPrompt, type PhoneBot } from "./access.ts";
-import { PHONE_PLACE_PROMPT } from "./instructions.ts";
 
 const chief = { id: "c", name: "Chief of Staff", chiefOfStaff: true };
 const scout: PhoneBot = { id: "s", name: "Scout" };
@@ -28,33 +27,19 @@ describe("phoneAccess", () => {
     expect(phoneAccess(reader, onPhone, "PHONE_LIST_EVENTS").ok).toBe(true);
   });
   it("the prompt names the phone and its apps, the same for the Chief and any other bot", () => {
-    expect(phoneSystemPrompt(chief, iphone, "computer")).toContain("Omkar's iPhone is an iPhone; this bot may use: Calendar, Contacts.");
-    expect(phoneSystemPrompt(scout, iphone, "computer")).toBe(phoneSystemPrompt(chief, iphone, "computer"));
-    expect(phoneSystemPrompt(none, iphone, "computer")).toBe("");
-  });
-
-  it("says where the person is talking from", () => {
-    const fromPhone = phoneSystemPrompt(scout, iphone, "phone");
-    expect(fromPhone).toContain(PHONE_PLACE_PROMPT.phone);
-    expect(fromPhone).toMatch(/talking to you from their phone right now/);
-    expect(fromPhone).not.toContain(PHONE_PLACE_PROMPT.computer);
-    const atComputer = phoneSystemPrompt(scout, iphone, "computer");
-    expect(atComputer).toContain(PHONE_PLACE_PROMPT.computer);
-    expect(atComputer).toMatch(/at their computer right now/);
-    expect(atComputer).toMatch(/set it up here, or on your phone\?/);
-    expect(atComputer).not.toContain(PHONE_PLACE_PROMPT.phone);
-    expect(phoneSystemPrompt(none, iphone, "phone")).toBe("");
+    expect(phoneSystemPrompt(chief, iphone)).toContain("Omkar's iPhone is an iPhone; this bot may use: Calendar, Contacts.");
+    expect(phoneSystemPrompt(scout, iphone)).toBe(phoneSystemPrompt(chief, iphone));
+    expect(phoneSystemPrompt(none, iphone)).toBe("");
   });
 
   it("a phone named after its kind is not described as itself", () => {
-    const text = phoneSystemPrompt(chief, [{ name: "iPhone", platform: "ios", capabilities: onPhone }], "computer");
+    const text = phoneSystemPrompt(chief, [{ name: "iPhone", platform: "ios", capabilities: onPhone }]);
     expect(text).not.toContain("iPhone is an iPhone");
     expect(text).toContain("The iPhone");
   });
 
   it("says the USB phone tools are a different phone", () => {
-    expect(phoneSystemPrompt(chief, iphone, "phone")).toMatch(/USB/);
-    expect(phoneSystemPrompt(chief, iphone, "computer")).toMatch(/USB/);
+    expect(phoneSystemPrompt(chief, iphone)).toMatch(/USB/);
   });
 
   it("when this conversation may not use the phone, the bot hears that it exists and how to reach it, not nothing", () => {

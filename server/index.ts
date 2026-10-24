@@ -101,7 +101,7 @@ import { DATA_INTERNAL_MCP_PATH, dataRpc } from "./data/rpc.ts";
 import { createHighLevelHost } from "./highlevel/host.ts";
 import { HIGHLEVEL_INTERNAL_MCP_PATH } from "./highlevel/rpc.ts";
 import { createHighLevelService } from "./highlevel/service.ts";
-import { createHighLevelRoutes } from "./routes/highlevel.ts"; import { createPhoneHost } from "./phones/host.ts"; import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts"; import { PhoneRegistry } from "./phones/registry.ts"; import { PhoneJobs } from "./phones/jobs.ts"; import { createPhoneRoutes, isLongPollPath, phoneKey } from "./routes/phones.ts"; import { createPhoneSends } from "./phones/sends.ts"; import { adoptExistingRoutines, desktopLendingTurn, desktopPhonesOffered, NOT_THE_OWNER } from "./phones/owner.ts";
+import { createHighLevelRoutes } from "./routes/highlevel.ts"; import { createPhoneHost } from "./phones/host.ts"; import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts"; import { PhoneRegistry } from "./phones/registry.ts"; import { PhoneJobs } from "./phones/jobs.ts"; import { createPhoneRoutes, isLongPollPath, phoneKey } from "./routes/phones.ts"; import { createPhoneSends } from "./phones/sends.ts"; import type { PhonePlace } from "./phones/access.ts"; import { adoptExistingRoutines, desktopLendingTurn, desktopPhonesOffered, NOT_THE_OWNER } from "./phones/owner.ts";
 import { createDataRoutes } from "./data/routes.ts";
 import { DataSheetRegistry } from "./data/sheet.ts";
 import { DataFailure } from "./data/types.ts";
@@ -677,7 +677,7 @@ const sessions = new SessionRegistry({
   },
   portalMembership: hostedWorkspaceConfiguration()?.portalMembership === true,
 });
-const deviceLinks = new DeviceLinks(); const sharedComputers = new SharedComputers(id => sessions.isLive(id), new LentComputers(join(DATA_DIR, "lent-computers.json")), deviceLinks); const phoneRegistry = new PhoneRegistry(join(DATA_DIR, "phones.json")); const phoneSends = createPhoneSends(); const phoneJobs = new PhoneJobs((phone, id) => broadcast({ kind: "device.job", phone, id }, { adminOnly: true }));
+const deviceLinks = new DeviceLinks(); const sharedComputers = new SharedComputers(id => sessions.isLive(id), new LentComputers(join(DATA_DIR, "lent-computers.json")), deviceLinks); const phoneRegistry = new PhoneRegistry(join(DATA_DIR, "phones.json")); const phoneSends = createPhoneSends(); const fromPhone = (auth: RequestAuth): boolean => { const key = phoneKey(auth); return key !== null && phoneRegistry.get(key) !== undefined; }; const phoneJobs = new PhoneJobs((phone, id) => broadcast({ kind: "device.job", phone, id }, { adminOnly: true }));
 // A Cloud home's secrets come over the launcher's pipe, never this process's environment.
 const CLOUD_SECRETS = BOOT_CLOUD_SECRETS;
 const CLOUD_ENV: NodeJS.ProcessEnv = { ...process.env, ...CLOUD_SECRETS };
@@ -2027,7 +2027,7 @@ const directRequestOwners = new Map<string, {
   generation: string; messageId?: string; generations: Set<string>; turnId: string | null; stopped?: boolean;
   automation?: RoutineRunTrigger;
   origin?: WorkOrigin;
-}>(); const turnFromPhone = (threadId: string): boolean => { const id = directRequestOwners.get(threadId)?.messageId; const line = id ? store.messagesFor(threadId).find((m) => m.id === id) : undefined; return phoneSends.has(line?.sendId); };
+}>(); const turnPlace = (threadId: string, personAsked: boolean): PhonePlace => { const request = directRequestOwners.get(threadId); const line = request?.messageId ? store.messagesFor(threadId).find((m) => m.id === request.messageId) : undefined; return phoneSends.has(line?.sendId) ? "phone" : personAsked && !request?.automation && request?.origin?.kind === "user" ? "computer" : "unattended"; };
 type DirectTurnOutcome = HostTurnResult;
 const directFollowupTurns = new ProviderTurnGenerationRegistry<DirectTurnOutcome>();
 const directFollowupSettlers = new Map<string, { threadId: string; settle?: () => void }>();
@@ -3109,7 +3109,7 @@ function previewSystemPrompt(bot: BotRecord) {
     }, { note: previewPlan.note, cloudHome: Boolean(CLOUD_HOME) }) },
     { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(agentsMounted && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER)) : "" },
     { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false && composio.configured(cfg) ? composioSystemPrompt(bot.connectorTools) + describeConnectorScopes(bot.connectorScopes) : "" },
-    { id: "highlevel", label: "HighLevel", text: caps?.highlevelMcp === true && highlevelHost.mounts(bot) ? highlevelHost.prompt(bot) : "" }, { id: "device", label: "Phone", text: caps?.deviceMcp === true && phoneHost.mounts(bot, CLOUD_HOME ? CLOUD_OWNER_KEY : DESKTOP_OWNER) ? phoneHost.prompt(bot, CLOUD_HOME ? CLOUD_OWNER_KEY : DESKTOP_OWNER, "computer") : "" },
+    { id: "highlevel", label: "HighLevel", text: caps?.highlevelMcp === true && highlevelHost.mounts(bot) ? highlevelHost.prompt(bot) : "" }, ...(caps?.deviceMcp === true && phoneHost.mounts(bot, CLOUD_HOME ? CLOUD_OWNER_KEY : DESKTOP_OWNER) ? phoneHost.parts(bot, CLOUD_HOME ? CLOUD_OWNER_KEY : DESKTOP_OWNER, "computer") : []),
     { id: "mcp", label: "MCP servers", text: caps?.customMcp ? customMcpPrompt(Object.keys(engineMcpServers(bot))) : "" }, { id: "to-connect", label: "Connections to make", text: cloudConnections.prompt(bot) },
     { id: "browser", label: "Browser", text: previewPlan.browser ? browserPromptFor(bot, agentsMounted) : "" },
     { id: "coordination", label: "Team", text: agentsMounted && coordination ? ` ${coordination}` : "" },
@@ -8808,7 +8808,7 @@ async function startTurn(
         { id: "mcp", label: "MCP servers", text: customMcpPrompt(Object.keys(integrations.custom ?? {})) }, { id: "to-connect", label: "Connections to make", text: cloudConnections.prompt(liveBot ?? bot) + teamConnections.prompt(threadId, integrations) },
         { id: "browser", label: "Browser", text: integrations.browser ? browserPromptFor(bot, Boolean(integrations.agents)) : "" },
         { id: "data", label: "Data", text: integrations.data ? BUILT_IN_DATA_SYSTEM_PROMPT : "" },
-        { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(liveBot ?? bot) : "" }, { id: "device", label: "Phone", text: integrations.device ? phoneHost.prompt(liveBot ?? bot, phoneTurnOwner({ botId: bot.id, threadId, generation: dispatchClaimId }), turnFromPhone(threadId) ? "phone" : "computer") : instance.adapter.capabilities.deviceMcp === true ? phoneHost.withheld(liveBot ?? bot, CLOUD_HOME ? CLOUD_OWNER_KEY : desktopPhones() ? DESKTOP_OWNER : null) : "" },
+        { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(liveBot ?? bot) : "" }, ...(integrations.device ? phoneHost.parts(liveBot ?? bot, phoneTurnOwner({ botId: bot.id, threadId, generation: dispatchClaimId }), turnPlace(threadId, !(commsDepth > 0 || opts?.automationSource !== undefined || opts?.unattended || opts?.peerAsk || opts?.coordination))) : [{ id: "device", label: "Phone", text: instance.adapter.capabilities.deviceMcp === true ? phoneHost.withheld(liveBot ?? bot, CLOUD_HOME ? CLOUD_OWNER_KEY : desktopPhones() ? DESKTOP_OWNER : null) : "" }]),
         { id: "coordination", label: "Team", text: coordinationPrompt ? ` ${coordinationPrompt}` : "" },
         { id: "assignment", label: "Teammate task", text: coordinationNode?.parentId ? `\n${coordinationSystemInstructions()}` : "" },
         { id: "outstanding", label: "Outstanding teammate work", text: outstandingAssignmentsPrompt(threadId) },
@@ -10639,7 +10639,7 @@ async function runClaimedGroupMemberTurn(
     { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(Boolean(integrations.agents) && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER)) : "" },
     { id: "browser", label: "Browser", text: integrations.browser ? browserPromptFor(bot, Boolean(integrations.agents)) : "" },
     { id: "data", label: "Data", text: integrations.data ? BUILT_IN_DATA_SYSTEM_PROMPT : "" },
-    { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(readyBot) : "" }, { id: "device", label: "Phone", text: integrations.device ? phoneHost.prompt(readyBot, phoneTurnOwner({ botId: readyBot.id, threadId, generation: internalGeneration }), "computer") : instance.adapter.capabilities.deviceMcp === true ? phoneHost.withheld(readyBot, CLOUD_HOME ? CLOUD_OWNER_KEY : desktopPhones() ? DESKTOP_OWNER : null) : "" },
+    { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(readyBot) : "" }, ...(integrations.device ? phoneHost.parts(readyBot, phoneTurnOwner({ botId: readyBot.id, threadId, generation: internalGeneration }), "computer") : [{ id: "device", label: "Phone", text: instance.adapter.capabilities.deviceMcp === true ? phoneHost.withheld(readyBot, CLOUD_HOME ? CLOUD_OWNER_KEY : desktopPhones() ? DESKTOP_OWNER : null) : "" }]),
     { id: "recall", label: "Recall", text: integrations.agents && bot.memoryEnabled !== false ? SESSION_SEARCH_SYSTEM_PROMPT : "" },
     teamAvailabilityPart(outsideRoom),
     { id: "recent", label: "Recent work", text: recentWorkPrompt(recentLines) },
@@ -12975,7 +12975,7 @@ ROUTES.push(createSharedComputerRoutes({ enabled: lendingEnabled, computers: sha
 // `routines` is assigned at boot, so it is read per request.
 ROUTES.push(createBotMessageRoutes({
   store, registry, handoffs, phoneSecretSubmissions, directTurnDispatchClaims, groupSpeakers,
-  routines: () => routines, notePhoneSend: (auth, sendId) => { const key = phoneKey(auth); if (key && phoneRegistry.get(key)) phoneSends.note(sendId); },
+  routines: () => routines, fromPhone, notePhoneSend: (sendId) => phoneSends.note(sendId),
   desktopManaged: DESKTOP_MANAGED, cloudHome: Boolean(CLOUD_HOME), DirectSendRefused,
   acceptDirectSend, directSendRefusal, startTurn, usageTriggerFor, messageSender, cloudGuestSendRefusal, cloudThreadRefusal,
   cardAnswerRefusal, commandRememberRefusal, requestBehavior, requestedTaskBot, botForThread, threadBusy,
@@ -13324,10 +13324,10 @@ function liveCallTitle(botId: string, threadId: string, excerpt: string): Promis
 const liveCalls = new LiveCallController({
   store,
   send: async ({ auth, botId, threadId, text, callId }) => {
-    if (!liveSignedIn(auth)) throw new LiveCallSignedOutError();
+    if (!liveSignedIn(auth)) throw new LiveCallSignedOutError(); const sendId = randomUUID().replaceAll("-", ""); if (fromPhone(auth)) phoneSends.note(sendId);
     const receipt = await acceptDirectSend({
       botId, threadId, text,
-      sendId: randomUUID().replaceAll("-", ""),
+      sendId,
       sender: messageSender(auth),
       trigger: usageTriggerFor(auth),
       via: "call",

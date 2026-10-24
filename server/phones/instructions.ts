@@ -16,12 +16,12 @@ export const PHONE_PROMPT =
   "If the phone is offline, ask the person to open MausBot on it. " +
   "The phone tools named mcp__phone__ are something else: they drive an Android phone plugged into the computer over USB, never the person's own phone above.";
 
-/** Where the person is talking from this turn: their phone, or the computer, where the usual cards and reminders come first. */
-export const PHONE_PLACE_PROMPT: Readonly<Record<"phone" | "computer", string>> = {
-  phone: " The person is talking to you from their phone right now. When they ask for a reminder, an event, a contact, their location or a text, do it on their phone with the PHONE tools.",
-  computer: " The person is at their computer right now, so do things the usual way here — the cards, reminders and routines you would use without a phone. " +
-    "Use the PHONE tools only when they ask for their phone (\"on my phone\", \"text from my phone\"). " +
-    "When they ask for something their phone could also do — a reminder, an event, a contact, a text — and have not said where, ask once before doing it: set it up here, or on your phone?",
+/** Where the person is this turn: on their phone, at the computer (the usual cards and reminders first), or nowhere (a run nobody waits on). */
+export const PHONE_PLACE_PROMPT: Readonly<Record<"phone" | "computer" | "unattended", string>> = {
+  phone: " The person is talking to you from their phone right now. When they ask for a reminder, an event, a contact, their location or a text, do it on the phone with the PHONE tools, as far as the phone allows.",
+  computer: " The person is at their computer right now, so do things the usual way here. Reading their phone (calendar, reminders, contacts, location) is fine when it helps. " +
+    "Before creating or changing something on the phone, or sending a text from it, ask once whether they want it here or on their phone — unless they already said where.",
+  unattended: " Nobody is waiting on this turn. Use the PHONE tools only when the task itself names the phone.",
 };
 
 /** When this conversation may not use the phone (routines, webhooks or other people have written into it). */

@@ -514,13 +514,18 @@ it differs from the sections above, this list wins; B and C build against it.
 - **Every bot by default.** With `phoneApps` unset any bot, not only the Chief,
   may use what the phone allows; an explicit `phoneApps` per bot still wins
   (`{}` switches it off), and the owner rule is unchanged.
-- **Where the person is talking from.** A send made by a registered phone (its
-  `sendId`, noted by `/api/bots/:id/messages`) marks the direct turn it starts
-  as from the phone: its prompt says to do reminders, events, contacts, location
-  and texts on the phone. Every other direct turn, room turn and the prompt
-  preview say the person is at the computer: do things the usual way, use the
-  phone only when asked for it, and when the phone could also do it and no place
-  was named, ask once: here, or on your phone?
+- **Where the person is talking from.** A registered phone's send is noted by
+  its `sendId` (one is minted for a phone send without one, and for each Live
+  call line from the phone); the direct turn it starts is told to do reminders,
+  events, contacts, location and texts on the phone. A person's own direct turn
+  from elsewhere, a room turn and the prompt preview are told the person is at
+  the computer: do things the usual way, read the phone when it helps, and ask
+  once before changing anything on it unless they said where. Turns nobody typed
+  (routine and webhook runs, peer asks, coordination, continuations whose
+  request is unknown) are told nobody is waiting and to use the phone only when
+  the task names it. This sentence is its own volatile section, `device-place`,
+  so the `device` section and the cached system prompt stay the same from turn
+  to turn.
 - **Fixture.** `server/testing/fixtures/phone-jobs.json` pins every shape
   above; copy it by hand into `ios/Tests/CompanionCoreTests/Fixtures/` (the
   capture script captures live and does not copy files).

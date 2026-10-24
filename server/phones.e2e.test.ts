@@ -61,7 +61,8 @@ const mint = async (botId: string, threadId: string) => {
   expect(response.status).toBe(201);
   return (await response.json() as any).token as string;
 };
-type Launch = { prompt: unknown; mcpConfig: { mcpServers: Record<string, { env: Record<string, string> }> } | null; systemPrompt: string | null };
+/** systemPrompt is what the model is instructed with; systemPromptFile only its stable half, the file the engine is launched with. */
+type Launch = { prompt: unknown; mcpConfig: { mcpServers: Record<string, { env: Record<string, string> }> } | null; systemPrompt: string | null; systemPromptFile: string | null };
 /** Starts whatever begins a turn and returns the launch whose prompt carries `marker`: its MCP servers and its system prompt. */
 const launched = async (marker: string, start: () => Promise<void>) => {
   rmSync(fixture.fixtureDumpPath, { force: true });
@@ -165,20 +166,26 @@ it("a bot without a grant sees no phone tools", async () => {
 }, 60_000);
 
 it("any bot left on the default hears where the person is talking from: the paired phone's send, or the computer", async () => {
-  const sendFrom = (bot: { id: string; threadId: string }, text: string, sendId: string, token?: string) => launched(text, async () => {
-    expect((await api("POST", `/api/bots/${bot.id}/messages`, { threadId: bot.threadId, text, sendId }, token)).status).toBe(202);
+  const sendFrom = (bot: { id: string; threadId: string }, text: string, sendId?: string, token?: string) => launched(text, async () => {
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { threadId: bot.threadId, text, ...(sendId ? { sendId } : {}) }, token)).status).toBe(202);
   });
   const atDesk = (await api("POST", "/api/bots", { name: "Desk helper" })).body.bot;
   const desk = await sendFrom(atDesk, "Remind me to call Ada at five.", "desk-send-000000000001");
   expect(desk.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
-  expect(desk.systemPrompt).toContain(`${PHONE_NAME} is an iPhone; this bot may use: Calendar.`);
+  expect(desk.systemPromptFile).toContain(`${PHONE_NAME} is an iPhone; this bot may use: Calendar.`);
   expect(desk.systemPrompt).toContain(PHONE_PLACE_PROMPT.computer);
   expect(desk.systemPrompt).not.toContain(PHONE_PLACE_PROMPT.phone);
+  // A phone's send with no id of its own (a walkie or command send) is still the phone's.
   const onPhone = (await api("POST", "/api/bots", { name: "Phone helper" })).body.bot;
-  const fromPhone = await sendFrom(onPhone, "Remind me to call Grace at six.", "phone-send-00000000001", pairing.token);
+  const fromPhone = await sendFrom(onPhone, "Remind me to call Grace at six.", undefined, pairing.token);
   expect(fromPhone.mcpConfig.mcpServers).toHaveProperty(PHONE_MCP_SERVER);
   expect(fromPhone.systemPrompt).toContain(PHONE_PLACE_PROMPT.phone);
   expect(fromPhone.systemPrompt).not.toContain(PHONE_PLACE_PROMPT.computer);
+  // Where the person is never reaches the stable file, so a phone turn after a computer one keeps the engine's cache.
+  for (const text of Object.values(PHONE_PLACE_PROMPT)) {
+    expect(desk.systemPromptFile).not.toContain(text);
+    expect(fromPhone.systemPromptFile).not.toContain(text);
+  }
 }, 60_000);
 
 it("a confined run has no device integration", async () => {
@@ -199,7 +206,11 @@ it("a confined run has no device integration", async () => {
     return { launch, threadId };
   };
   // The same routine at the bot's own level reaches the phone, so the read-and-draft run below loses it to the fence alone.
-  expect(Object.keys((await run(await routine("Calendar look"), "Calendar look")).launch.mcpConfig.mcpServers)).toContain(PHONE_MCP_SERVER);
+  const look = (await run(await routine("Calendar look"), "Calendar look")).launch;
+  expect(Object.keys(look.mcpConfig.mcpServers)).toContain(PHONE_MCP_SERVER);
+  // Nobody typed it: the run is told so, not that the person is at the computer.
+  expect(look.systemPrompt).toContain(PHONE_PLACE_PROMPT.unattended);
+  expect(look.systemPrompt).not.toContain(PHONE_PLACE_PROMPT.computer);
   const confined = await run(await routine("Calendar watch", "read-and-draft"), "Calendar watch");
   expect(Object.keys(confined.launch.mcpConfig.mcpServers)).not.toContain(PHONE_MCP_SERVER);
   const refused = await rpc(await mint(chief.id, confined.threadId), "tools/list");

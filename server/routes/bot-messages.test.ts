@@ -52,8 +52,8 @@ async function fixture() {
     started: Array<{ text: string; opts: StartOpts }>;
     relayed: Array<Parameters<BotMessageRouteDeps["relayedReaction"]>>;
     serverPresses: Array<{ threadId: string; messageId: string; type: string }>; serverAnswer: "handled" | "refused" | null; records: string | null;
-    phoneSends: Array<Parameters<BotMessageRouteDeps["notePhoneSend"]>>;
-  } = { accepted: [], hold: null, refuse: null, busy: false, prompts: [], started: [], relayed: [], serverPresses: [], serverAnswer: null, records: null, phoneSends: [] };
+    fromPhone: boolean; phoneSends: string[];
+  } = { accepted: [], hold: null, refuse: null, busy: false, prompts: [], started: [], relayed: [], serverPresses: [], serverAnswer: null, records: null, fromPhone: false, phoneSends: [] };
   const startTurn: BotMessageRouteDeps["startTurn"] = async (botId, text, opts = {}) => {
     state.started.push({ text, opts });
     state.prompts.push(promptWithReply(text, opts.replyTo));
@@ -116,7 +116,8 @@ async function fixture() {
     registry: { get: () => ({ instanceId: "claude", driverKind: "claudeAgent" }) },
     policyModelRefusal: () => undefined,
     relayedReaction: (...args: Parameters<BotMessageRouteDeps["relayedReaction"]>) => { state.relayed.push(args); },
-    notePhoneSend: (...args: Parameters<BotMessageRouteDeps["notePhoneSend"]>) => { state.phoneSends.push(args); },
+    fromPhone: () => state.fromPhone,
+    notePhoneSend: (sendId: string) => { state.phoneSends.push(sendId); },
     pressRecords: () => state.records,
     serverPress: (_bot: unknown, thread: string, messageId: string, action: { type: string }) => {
       state.serverPresses.push({ threadId: thread, messageId, type: action.type });
@@ -488,24 +489,30 @@ describe("POST /api/bots/:id/messages/guarded with a reaction another app relaye
   });
 });
 
-describe("POST /api/bots/:id/messages tells the server who sent it", () => {
-  it("hands the send id and the request's auth to notePhoneSend before the send is accepted, on the plain and guarded routes", async () => {
+describe("POST /api/bots/:id/messages from a registered phone", () => {
+  it("notes a phone's send by its id on the plain and guarded routes, and gives one without an id its own", async () => {
     const { store, bot, threadId, state, post } = await fixture();
     store.patchBot(bot.id, { approvalMode: "ask", autoApprove: false });
-    expect((await post({ threadId, text: "No id on this one" })).status).toBe(202);
-    expect(state.phoneSends).toEqual([]);
-
+    state.fromPhone = true;
     expect((await post({ threadId, sendId: SEND, text: "Remind me at five" })).status).toBe(202);
     const guarded = await post({ threadId, sendId: OTHER_SEND, text: "And at six", expectedActiveLeafId: store.activeLeaf(threadId), expectedApprovalMode: "ask" }, "/guarded");
     expect(guarded.status, JSON.stringify(guarded.body)).toBe(202);
+    const minted = await post({ threadId, text: "And at seven" });
+    expect(minted.status).toBe(202);
 
-    expect(state.phoneSends).toEqual([[{ kind: "loopback", scopes: ["admin"] }, SEND], [{ kind: "loopback", scopes: ["admin"] }, OTHER_SEND]]);
-    expect(state.accepted.map((input) => input.sendId)).toEqual([undefined, SEND, OTHER_SEND]);
+    const mintedId = state.accepted[2]!.sendId;
+    expect(mintedId).toMatch(/^[A-Za-z0-9_-]{16,80}$/);
+    expect(minted.body.message.sendId).toBe(mintedId);
+    expect(state.phoneSends).toEqual([SEND, OTHER_SEND, mintedId]);
   });
 
-  it("notes nothing for a send it refuses before acceptance", async () => {
-    const { state, post } = await fixture();
-    expect((await post({ threadId: "someone-elses-thread", sendId: SEND, text: "Hi" })).status).toBe(409);
+  it("notes nothing from the computer, with or without an id, and nothing for a send refused before acceptance", async () => {
+    const { threadId, state, post } = await fixture();
+    expect((await post({ threadId, sendId: SEND, text: "Remind me at five" })).status).toBe(202);
+    expect((await post({ threadId, text: "And at six" })).status).toBe(202);
+    expect(state.accepted.map((input) => input.sendId)).toEqual([SEND, undefined]);
+    state.fromPhone = true;
+    expect((await post({ threadId: "someone-elses-thread", sendId: OTHER_SEND, text: "Hi" })).status).toBe(409);
     expect(state.phoneSends).toEqual([]);
   });
 });

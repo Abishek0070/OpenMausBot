@@ -119,8 +119,16 @@ describe("phone MCP host", () => {
     });
     expect(h.host.prompt(chief, OWNER)).toContain("Omkar's iPhone is an iPhone; this bot may use: Calendar.");
     expect(h.host.prompt(chief, OWNER)).not.toContain("Guest Pixel");
-    expect(h.host.prompt(chief, OWNER)).toContain(PHONE_PLACE_PROMPT.computer);
-    expect(h.host.prompt(chief, OWNER, "phone")).toContain(PHONE_PLACE_PROMPT.phone);
+    // Where the person is stays out of the phone part, in a part of its own.
+    for (const place of ["phone", "computer", "unattended"] as const) {
+      expect(h.host.parts(chief, OWNER, place)).toEqual([
+        { id: "device", label: "Phone", text: h.host.prompt(chief, OWNER) },
+        { id: "device-place", label: "Where the person is", text: PHONE_PLACE_PROMPT[place] },
+      ]);
+    }
+    expect(Object.values(PHONE_PLACE_PROMPT).some((text) => h.host.prompt(chief, OWNER).includes(text))).toBe(false);
+    expect(h.host.parts(chief, null, "phone")).toEqual([{ id: "device", label: "Phone", text: "" }, { id: "device-place", label: "Where the person is", text: "" }]);
+    expect(h.host.parts(off, OWNER, "computer").map((part) => part.text)).toEqual(["", ""]);
     expect(h.host.toolListing()?.phone.map((tool) => tool.name)).toEqual([...PHONE_TOOL_NAMES]);
     const rows = await h.rows();
     expect(rows.filter((row) => row.decision === "auto-approved").map((row) => row.tool)).toEqual(names);

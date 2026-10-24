@@ -366,7 +366,7 @@ export interface WireBot extends DefaultBotFields {
   connectorTools?: Record<string, ConnectorToolGrant>;
   connectorScopes?: { apps: Record<string, "read" | "write"> };
   outbound?: { policy: "ask" | "allow"; dailyCap: number };
-  /** Which of a paired phone's apps this bot may use; absent: the Chief gets all, others none (shared/phone-apps.ts). */
+  /** Which of a paired phone's apps this bot may use; absent: every bot may use what the phone allows (shared/phone-apps.ts). */
   phoneApps?: import("./phone-apps.ts").PhoneApps;
   /** Ordered backups used only by opt-in, pre-prompt startup recovery. */
   fallback?: Array<{ instanceId: string; model: string }>;
