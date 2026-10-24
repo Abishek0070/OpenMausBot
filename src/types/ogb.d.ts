@@ -130,6 +130,8 @@ const __APP_VERSION__: string;
       desktopNotices?: import("../../electron/desktop-prefs.mjs").DesktopNoticesBridge;
       desktopAnalytics?: import("../../electron/desktop-prefs.mjs").DesktopAnalyticsBridge;
       desktopLanguage?: import("../../electron/desktop-prefs.mjs").DesktopLanguageBridge;
+      /** This computer's page and My Cloud's own page: the one-time "Get MausBot updates?" answer. */
+      updatesConsent?: import("../../electron/updates-consent.mjs").UpdatesConsentBridge;
       companyBackups?: {
         state(): Promise<CompanyBackupState>;
         list(): Promise<{ backups: CompanyBackupEntry[]; usedBytes: number; limits: { ownerQuotaBytes: number; retainedSnapshots: number } }>;
@@ -343,7 +345,7 @@ const __APP_VERSION__: string;
       openLogsFolder?(): Promise<{ folder: string; opened: boolean; error?: string }>;
       /** Save a provider credential through Electron's OS-backed store. */
       setCredential?(
-        name: "composioApiKey" | "xaiApiKey" | "boxToken" | "opencodeGoApiKey" | "ttsKey" | "fishAudioKey" | "jevApiKey" | "openrouterDeciderKey" | "openaiImageApiKey" | "customImageApiKey" | "openaiLiveKey" | "tregApiKey",
+        name: "composioApiKey" | "xaiApiKey" | "boxToken" | "opencodeGoApiKey" | "ttsKey" | "fishAudioKey" | "jevApiKey" | "openrouterDeciderKey" | "workersAiToken" | "openaiImageApiKey" | "customImageApiKey" | "openaiLiveKey" | "tregApiKey",
         value: string,
       ): Promise<ConfigStatus>;
       /** In-app auto-update (packaged app only; dormant in dev). Updates

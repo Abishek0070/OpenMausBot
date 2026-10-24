@@ -301,7 +301,7 @@ describe("PATCH /api/bots/:id phoneApps", () => {
   it("refuses a client session and a paired device", async () => {
     const { store, bot, patch } = fixture();
 
-    const client = await patch(bot.id, { phoneApps: { calendar: "write" } }, { auth: { kind: "session", scopes: ["client"] } as unknown as RequestAuth });
+    const client = await patch(bot.id, { phoneApps: { calendar: "write" } }, { auth: { kind: "session", via: "bearer", scopes: ["client"], session: { id: "s-member", email: "member@example.com", label: "Front desk" } } as unknown as RequestAuth });
     const paired = await patch(bot.id, { phoneApps: { calendar: "write" } }, { headers: { "x-openmausbot-companion": "1" } });
 
     expect(client.status).toBe(403);

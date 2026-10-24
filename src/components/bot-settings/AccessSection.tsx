@@ -12,7 +12,6 @@ import { placeFacts, placeViewFor, usePlaceSeat } from "@/lib/place-view";
 import { shortPath } from "@/lib/short-path";
 import { useDesktopCapabilities } from "../DesktopCapabilities";
 import { CloudBackendPicker } from "../CloudBackendPicker";
-import { ConfirmDialog } from "../ConfirmDialog";
 import { Switch } from "../SettingsPrimitives";
 import { PhoneAppsCard } from "./PhoneAppsCard";
 import { ProposalStatus } from "./ProposalStatus";
@@ -245,10 +244,6 @@ function ConnectorToolsGrants({
   const [tools, setTools] = useState<Record<string, ToolListing[]> | null>(null);
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [lastExplicit, setLastExplicit] = useState<Record<string, string[]>>({});
-  /**
-   * The first grant creates the grants record, which limits every other connected app to no tools: confirm it first.
-   */
-  const [confirmFirstGrant, setConfirmFirstGrant] = useState<{ slug: string; tools: "*" | string[] } | null>(null);
 
   useEffect(() => {
     if (!openSlug || tools || toolsError) return;
@@ -273,7 +268,7 @@ function ConnectorToolsGrants({
   };
 
   const apply = (slug: string, next: { tools: "*" | string[] } | null) => {
-    const value = withServiceGrant(record, slug, next);
+    const value = withServiceGrant(record, slug, next, slugs);
     if (value === undefined) return;
     patch({ connectorTools: value });
   };
@@ -286,18 +281,10 @@ function ConnectorToolsGrants({
       return;
     }
     setLastExplicit((prev) => ({ ...prev, [slug]: next }));
-    if (!recordExists) {
-      setConfirmFirstGrant({ slug, tools: next });
-      return;
-    }
     apply(slug, { tools: next });
   };
 
   const allForService = (slug: string) => {
-    if (!recordExists) {
-      setConfirmFirstGrant({ slug, tools: "*" });
-      return;
-    }
     const selected = selectedFor(slug);
     if (selected.length) setLastExplicit((prev) => ({ ...prev, [slug]: selected }));
     apply(slug, { tools: "*" });
@@ -390,11 +377,6 @@ function ConnectorToolsGrants({
                           </button>
                         )}
                       </div>
-                      {!recordExists && (
-                        <div className="mt-2 text-[11px] leading-relaxed text-ink-secondary">
-                          {t("botAccess.grants.firstGrantWarning")}
-                        </div>
-                      )}
                       {toolsError ? (
                         <div className="mt-2 text-[11.5px] text-ink-secondary">
                           {t("botAccess.grants.loadError")}{" "}
@@ -427,10 +409,6 @@ function ConnectorToolsGrants({
                                   onClick={() => {
                                     const next = [...new Set([...selected, ...names])];
                                     setLastExplicit((prev) => ({ ...prev, [slug]: next }));
-                                    if (!recordExists) {
-                                      setConfirmFirstGrant({ slug, tools: next });
-                                      return;
-                                    }
                                     apply(slug, { tools: next });
                                   }}
                                   className="rounded-full bg-control px-2.5 py-1 text-[11px] text-ink hover:bg-raised-hover"
@@ -484,19 +462,6 @@ function ConnectorToolsGrants({
           );
         })}
       </div>
-      <ConfirmDialog
-        open={confirmFirstGrant !== null}
-        title={t("botAccess.grants.firstGrantTitle", { service: confirmFirstGrant?.slug ?? "" })}
-        body={t("botAccess.grants.firstGrantBody", { service: confirmFirstGrant?.slug ?? "" })}
-        confirmLabel={t("botAccess.grants.saveGrant")}
-        onCancel={() => setConfirmFirstGrant(null)}
-        onConfirm={() => {
-          const pending = confirmFirstGrant;
-          setConfirmFirstGrant(null);
-          if (!pending) return;
-          apply(pending.slug, { tools: pending.tools });
-        }}
-      />
     </div>
   );
 }
