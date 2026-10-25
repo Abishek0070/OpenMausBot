@@ -9,6 +9,8 @@ import { cloudHomeConfigured } from "../../cloud-home.ts";
 import { DATA_DIR, OPENCODE_PROVIDER_ENV } from "../../config.ts";
 import { hostedWorkspaceConfigured } from "../../enterprise.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
+import { applyStandaloneSpawnEnv } from "../../engine-install.ts";
+import { OPENCODE_STANDALONE } from "./opencode-release.ts";
 import { createAcpDriver, type AccountErrorCode, type AcpConfig, type AcpSupport } from "./core.ts";
 import { offeredModels } from "./config-options.ts";
 import type { ModelCatalog, ProviderDriver, ProviderErrorCode } from "../../contracts.ts";
@@ -754,6 +756,7 @@ const support = (loadCatalog: OpenCodeCatalogLoader, ownAccess = new Map<string,
     docsUrl: "https://opencode.ai/docs/",
     signInCommand: "opencode auth login",
     needsNode: true,
+    standalone: OPENCODE_STANDALONE,
   },
   spawnArgs: () => ["acp"],
   // A folder outside git files its session under OpenCode's global project, which every non-git folder of the person's
@@ -772,7 +775,10 @@ const support = (loadCatalog: OpenCodeCatalogLoader, ownAccess = new Map<string,
   // OpenCode 1.18.27's build agent lists 13 tools of its own (bash, read, edit, task, skill…); room for a newer CLI's.
   engineTools: 24,
   resolveTurnModel: (model, env) => model ? ensureOpenCodeInjectModel(model, env) : model,
-  transformEnv: withholdProviderKeysWhenManaged,
+  transformEnv: (env, config, instanceId, instanceEnvironment) => {
+    withholdProviderKeysWhenManaged(env, config, instanceId, instanceEnvironment);
+    applyStandaloneSpawnEnv(OPENCODE_STANDALONE, env, config.cli);
+  },
   spawnFingerprint: openCodeLoginsFingerprint,
   applyTurnEnv: (env, { fullAuto, botId, cwd }) => {
     if (openMausOwnsWorkingFolder(cwd)) env.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
