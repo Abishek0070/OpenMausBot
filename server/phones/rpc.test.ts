@@ -1,6 +1,6 @@
 // The device kind's MCP entry: tools/list follows the phone's apps and the bot's grant, a call becomes a job that a
-// scripted phone leases and answers, a send waits on the hold and is checked again after it, and only the owner's own
-// turns reach a phone.
+// scripted phone leases and answers, a send goes to the phone with no card of OpenMausBot's own (the person taps Send
+// there), and only the owner's own turns reach a phone.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,9 +9,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isOutboundTool } from "../../shared/outbound.ts";
 import { PHONE_TOOL_NAMES, phoneToolCapability } from "../../shared/phone-apps.ts";
 import { flushDecisionLog, readDecisions } from "../decision-log.ts";
-import { OutboundCounts } from "../outbound-counts.ts";
-import { createOutboundHold, type OutboundHold, type OutboundHoldAnswer, type OutboundHoldDeps } from "../outbound-hold.ts";
-import { OutboundRequestService } from "../outbound-requests.ts";
 import { AGENTS_NODE_FLAG, SPAWNED_PROXIES } from "../proxy-paths.ts";
 import type { BotRecord } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
@@ -43,7 +40,7 @@ const registration = (name: string, capabilities: PhoneRegistration["capabilitie
 const call = (name: string, args: Record<string, unknown> = {}) => ({ method: "tools/call", params: { name, arguments: args } });
 const text = (result: PhoneToolsList | PhoneToolResult) => (result as PhoneToolResult).content[0]!.text;
 
-function harness(options: { bot?: () => BotRecord | null; hold?: Partial<OutboundHold> | ((dataDir: string) => Partial<OutboundHold>) } = {}) {
+function harness(options: { bot?: () => BotRecord | null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "omb-phone-rpc-"));
   dirs.push(dir);
   const clock = { now: 1_800_000_000_000 };
@@ -57,28 +54,12 @@ function harness(options: { bot?: () => BotRecord | null; hold?: Partial<Outboun
     turnOwner: () => state.owner,
     inRoom: () => state.inRoom,
     appendMessage: (threadId, message) => { messages.push({ threadId, message }); },
-    outboundHold: { hold: async () => ({ ok: true, approved: true }), reserve: () => {}, ...(typeof options.hold === "function" ? options.hold(dir) : options.hold) },
-    sendsFreely: () => false,
     active: () => true,
   });
   let checks = 0;
   const handle = (body: unknown) => host.handle(body, TURN, () => { checks++; });
   const rows = async () => { await flushDecisionLog(dir); return readDecisions(dir, 200); };
   return { dir, clock, registry, jobs, state, messages, host, handle, rows, checks: () => checks };
-}
-
-/** The real hold and daily allowance (no card under the allow policy), with each step written to `log`. */
-function allowanceHold(dataDir: string, log: string[]) {
-  const outboundCounts = new OutboundCounts(join(dataDir, "outbound-counts.json"));
-  const real = createOutboundHold({
-    store: {} as OutboundHoldDeps["store"], dataDir, outboundRequests: new OutboundRequestService(), outboundCounts, holdMs: 1_000,
-    connectorThread: () => null, activeGroupTurnForBot: () => null, notify: () => {},
-  });
-  const hold: OutboundHold = {
-    hold: (input) => { log.push("hold"); return real.hold(input); },
-    reserve: (input) => { log.push("reserve"); real.reserve(input); },
-  };
-  return { outboundCounts, hold };
 }
 
 /** The phone's side of one job: take it from the long poll, lease it and answer. */
@@ -199,129 +180,51 @@ describe("phone MCP host", () => {
     ]);
   });
 
-  it("a send waits on the hold and a refusal reaches the bot", async () => {
-    const holds: Array<Parameters<OutboundHold["hold"]>[0]> = [];
-    const reserves: Array<Parameters<OutboundHold["reserve"]>[0]> = [];
-    let answer: ((value: OutboundHoldAnswer) => void) | undefined;
-    let reserveRefusal: string | undefined;
-    const h = harness({ hold: {
-      hold: (input) => { holds.push(input); return new Promise((resolve) => { answer = resolve; }); },
-      reserve: (input) => { reserves.push(input); if (reserveRefusal) throw new Error(reserveRefusal); },
-    } });
-    h.registry.register(IPHONE, OWNER, registration("Omkar's iPhone", { messages: "send" }));
+  it("a send goes straight to the phone: no card of OpenMausBot's own, the person taps Send there", async () => {
+    expect(PHONE_TOOL_NAMES.filter((name) => isOutboundTool(name))).toEqual(["PHONE_RESPOND_TO_INVITE", "PHONE_SEND_MESSAGE", "PHONE_SEND_WHATSAPP"]);
+    const h = harness();
+    h.registry.register(IPHONE, OWNER, registration("Omkar's iPhone", { calendar: "full", messages: "send" }));
     const request = vi.spyOn(h.jobs, "request");
     const message = { to: "Mom", text: "On my way" };
-    const pending = h.handle(call("PHONE_SEND_MESSAGE", message));
-    await vi.waitFor(() => expect(holds).toHaveLength(1));
-    expect(holds[0]).toMatchObject({ bot: { id: "chief" }, threadId: TURN.threadId, tool: "PHONE_SEND_MESSAGE",
-      calls: [{ slug: "PHONE_SEND_MESSAGE", arguments: message }], opaque: false, fullAccess: false });
-    expect(holds[0]!.active()).toBe(true);
-    expect(request).not.toHaveBeenCalled();
-    answer!({ ok: false, text: "declined" });
-    const declined = await pending as PhoneToolResult;
-    expect(declined).toMatchObject({ isError: true, structuredContent: { code: "refused" } });
-    expect(text(declined)).toBe("declined");
-    expect(reserves).toEqual([]);
-    expect(request).not.toHaveBeenCalled();
-    // The dispatch-time reservation can refuse too, and its text reaches the bot.
-    reserveRefusal = "This bot has reached its daily outbound limit. Nothing was sent.";
-    const capped = h.handle(call("PHONE_SEND_MESSAGE", message));
-    await vi.waitFor(() => expect(holds).toHaveLength(2));
-    answer!({ ok: true, approved: false });
-    expect(text(await capped)).toBe(reserveRefusal);
-    expect(reserves[0]).toMatchObject({ tool: "PHONE_SEND_MESSAGE", approved: false, fullAccess: false });
-    expect(request).not.toHaveBeenCalled();
-    // Approved: the phone gets it with the send timeout, and the send shows as an activity row.
-    reserveRefusal = undefined;
-    const approved = h.handle(call("PHONE_SEND_WHATSAPP", message));
-    await vi.waitFor(() => expect(holds).toHaveLength(3));
-    answer!({ ok: true, approved: true });
-    await answerNext(h.jobs, IPHONE, () => ({ ok: true, result: { status: "sheet_opened" } }));
-    expect((await approved as PhoneToolResult).isError).toBeUndefined();
-    expect(reserves[1]).toMatchObject({ tool: "PHONE_SEND_WHATSAPP", approved: true });
+    // Queued for the phone at once: nothing waits on an answer in the chat first.
+    const sent = h.handle(call("PHONE_SEND_MESSAGE", message));
+    const job = await answerNext(h.jobs, IPHONE, () => ({ ok: true, result: { status: "sheet_opened" } }));
+    expect(job).toMatchObject({ tool: "PHONE_SEND_MESSAGE", arguments: message });
+    expect((await sent as PhoneToolResult).isError).toBeUndefined();
     expect(request.mock.calls[0]![3]).toMatchObject({ timeoutMs: PHONE_SEND_TIMEOUT_MS });
-    expect(h.messages.map(({ message: row }) => (row.tool as { summary: string }).summary)).toEqual(["Send whatsapp on Omkar's iPhone"]);
+    const whatsapp = h.handle(call("PHONE_SEND_WHATSAPP", message));
+    await answerNext(h.jobs, IPHONE, () => ({ ok: true, result: { status: "sheet_opened" } }));
+    expect((await whatsapp as PhoneToolResult).isError).toBeUndefined();
+    // An RSVP is a calendar write the bot was granted: no card either.
+    const rsvp = h.handle(call("PHONE_RESPOND_TO_INVITE", { id: "inv-1", response: "accept" }));
+    expect((await answerNext(h.jobs, IPHONE, () => ({ ok: true, result: { response: "accept" } }))).arguments).toEqual({ id: "inv-1", response: "accept" });
+    expect((await rsvp as PhoneToolResult).isError).toBeUndefined();
+    // The chat gets the activity rows and nothing that asks the person.
+    expect(h.messages.map(({ message: row }) => row.kind)).toEqual(["activity", "activity", "activity"]);
+    expect(h.messages.some(({ message: row }) => "card" in row || row.kind === "options")).toBe(false);
+    expect(h.messages.map(({ message: row }) => (row.tool as { summary: string }).summary)).toEqual([
+      "Send message on Omkar's iPhone", "Send whatsapp on Omkar's iPhone", "Respond to invite on Omkar's iPhone",
+    ]);
+    // Only the per-bot verdict is recorded: no card shown, nothing held.
+    const rows = await h.rows();
+    expect(rows.some((row) => row.source === "outbound" || row.decision === "card-shown")).toBe(false);
+    expect(rows.map((row) => [row.tool, row.decision, row.rule])).toEqual([
+      ["PHONE_SEND_MESSAGE", "auto-approved", "scope:phone:messages"],
+      ["PHONE_SEND_WHATSAPP", "auto-approved", "scope:phone:messages"],
+      ["PHONE_RESPOND_TO_INVITE", "auto-approved", "scope:phone:calendar"],
+    ]);
   });
 
-  it("grant lowered during the hold refuses the send", async () => {
-    let held = false;
-    const reserve = vi.fn();
-    const h = harness({
-      bot: () => bot({ name: "Scout", phoneApps: { messages: held ? "read" : "write" } }),
-      hold: { hold: async () => { held = true; return { ok: true, approved: true }; }, reserve },
-    });
+  it("a bot whose Messages grant is read only cannot send", async () => {
+    const h = harness({ bot: () => bot({ name: "Scout", phoneApps: { messages: "read" } }) });
     h.registry.register(IPHONE, OWNER, registration("Omkar's iPhone", { messages: "send" }));
     const request = vi.spyOn(h.jobs, "request");
     const result = await h.handle(call("PHONE_SEND_MESSAGE", { to: "Mom", text: "On my way" })) as PhoneToolResult;
-    expect(held).toBe(true);
     expect(result).toMatchObject({ isError: true, structuredContent: { code: "refused" } });
     expect(text(result)).toBe("OpenMausBot did not run this: Phone Messages is read-only for Scout, and Send message would write to it. Ask the user before trying again.");
     expect(request).not.toHaveBeenCalled();
     expect(h.messages).toEqual([]);
-    expect(reserve).not.toHaveBeenCalled();
-    expect((await h.rows()).map((row) => [row.decision, row.rule])).toEqual([
-      ["auto-approved", "scope:phone:messages"],
-      ["auto-denied", "scope:phone:messages:write"],
-    ]);
-  });
-
-  it("an app switched off on the chosen phone during the hold refuses the send before anything is reserved", async () => {
-    const reserve = vi.fn();
-    const h: ReturnType<typeof harness> = harness({ hold: { hold: async () => {
-      // Messages goes off on the iPhone while the card waits; the Pixel still allows it, so the verdict still passes.
-      h.registry.register(IPHONE, OWNER, registration("Omkar's iPhone", { calendar: "full" }));
-      return { ok: true, approved: true };
-    }, reserve } });
-    h.registry.register(PIXEL, OWNER, registration("Work Pixel", { messages: "send" }, "android"));
-    h.clock.now += 1_000;
-    h.registry.register(IPHONE, OWNER, registration("Omkar's iPhone", { messages: "send" }));
-    const request = vi.spyOn(h.jobs, "request");
-    const result = await h.handle(call("PHONE_SEND_MESSAGE", { to: "Mom", text: "On my way" })) as PhoneToolResult;
-    expect(result).toMatchObject({ isError: true, structuredContent: { code: "denied" } });
-    expect(text(result)).toBe("Omkar's iPhone does not allow Messages.");
-    expect(reserve).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("under the allow policy a send that passes everything reserves once, after the hold and before the job", async () => {
-    const log: string[] = [];
-    let counts: OutboundCounts | undefined;
-    const h = harness({
-      bot: () => bot({ outbound: { policy: "allow", dailyCap: 25 }, chiefOfStaff: true }),
-      hold: (dataDir) => { const made = allowanceHold(dataDir, log); counts = made.outboundCounts; return made.hold; },
-    });
-    h.registry.register(IPHONE, OWNER, registration("Omkar's iPhone", { messages: "send" }));
-    const request = h.jobs.request.bind(h.jobs);
-    vi.spyOn(h.jobs, "request").mockImplementation((...args) => { log.push("request"); return request(...args); });
-    const pending = h.handle(call("PHONE_SEND_MESSAGE", { to: "Mom", text: "On my way" }));
-    await answerNext(h.jobs, IPHONE, () => ({ ok: true, result: { status: "sheet_opened" } }));
-    expect((await pending as PhoneToolResult).isError).toBeUndefined();
-    expect(log).toEqual(["hold", "reserve", "request"]);
-    expect(counts!.today("chief")).toBe(1);
-    expect((await h.rows()).filter((row) => row.source === "outbound").map((row) => [row.decision, row.rule])).toEqual([["auto-approved", "daily-allowance:1/25"]]);
-  });
-
-  it("an outbound phone tool waits on the hold and other writes do not", async () => {
-    expect(PHONE_TOOL_NAMES.filter((name) => isOutboundTool(name))).toEqual(["PHONE_RESPOND_TO_INVITE", "PHONE_SEND_MESSAGE", "PHONE_SEND_WHATSAPP"]);
-    const log: string[] = [];
-    const h = harness({ hold: {
-      hold: async (input) => { log.push(`hold ${input.tool}`); return { ok: true, approved: true }; },
-      reserve: (input) => { log.push(`reserve ${input.tool}`); },
-    } });
-    h.registry.register(IPHONE, OWNER, registration("Omkar's iPhone", { calendar: "full" }));
-    const request = vi.spyOn(h.jobs, "request");
-    const event = h.handle(call("PHONE_CREATE_EVENT", { title: "Dentist", start: "2026-10-24T10:00:00+05:30", end: "2026-10-24T11:00:00+05:30" }));
-    await answerNext(h.jobs, IPHONE, () => ({ ok: true, result: { id: "evt-1" } }));
-    await event;
-    expect(log).toEqual([]);
-    expect(request.mock.calls[0]![3]).toMatchObject({ timeoutMs: PHONE_JOB_TIMEOUT_MS });
-    // An RSVP notifies the organizer: it is held like a message.
-    const rsvp = h.handle(call("PHONE_RESPOND_TO_INVITE", { id: "inv-1", response: "accept" }));
-    const job = await answerNext(h.jobs, IPHONE, () => ({ ok: true, result: { response: "accept" } }));
-    expect(job.arguments).toEqual({ id: "inv-1", response: "accept" });
-    expect((await rsvp as PhoneToolResult).isError).toBeUndefined();
-    expect(log).toEqual(["hold PHONE_RESPOND_TO_INVITE", "reserve PHONE_RESPOND_TO_INVITE"]);
-    expect(request.mock.calls[1]![3]).toMatchObject({ timeoutMs: PHONE_SEND_TIMEOUT_MS });
+    expect((await h.rows()).map((row) => [row.decision, row.rule])).toEqual([["auto-denied", "scope:phone:messages:write"]]);
   });
 
   it("the default phone is the one used most recently, never the one that polled last", async () => {
@@ -348,8 +251,7 @@ describe("phone MCP host", () => {
   });
 
   it("the default phone is one that allows the tool's app", async () => {
-    const holds: string[] = [];
-    const h = harness({ hold: { hold: async (input) => { holds.push(input.tool); return { ok: true, approved: true }; } } });
+    const h = harness();
     h.registry.register(PIXEL, OWNER, registration("Work Pixel", { contacts: "full" }, "android"));
     h.clock.now += 1_000;
     h.registry.register(IPHONE, OWNER, registration("Omkar's iPhone", { calendar: "full" }));
@@ -359,15 +261,14 @@ describe("phone MCP host", () => {
     await answerNext(h.jobs, PIXEL, () => ({ ok: true, result: { contacts: [] } }));
     expect((await search as PhoneToolResult).structuredContent).toMatchObject({ phone: { name: "Work Pixel" } });
     request.mockClear();
-    // Neither allows Messages: refused before the hold.
+    // Neither allows Messages: refused before any job.
     const message = await h.handle(call("PHONE_SEND_MESSAGE", { to: "Mom", text: "On my way" })) as PhoneToolResult;
     expect(message.isError).toBe(true);
     expect(text(message)).toBe("MausBot can't use Messages on this phone: it is not allowed in the MausBot app on the phone.");
-    // A named phone without the app is refused before the hold too, though another phone allows it.
+    // A named phone without the app is refused too, though another phone allows it.
     const rsvp = await h.handle(call("PHONE_RESPOND_TO_INVITE", { id: "inv-1", response: "decline", phone: "work pixel" })) as PhoneToolResult;
     expect(rsvp).toMatchObject({ isError: true, structuredContent: { code: "denied" } });
     expect(text(rsvp)).toBe("Work Pixel does not allow Calendar.");
-    expect(holds).toEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -404,26 +305,22 @@ describe("phone MCP host", () => {
     // The rpc's own branch when no phone is left to pick.
     const run = vi.fn<PhoneRpcDeps["run"]>();
     const bare = await phoneRpc(call("PHONE_GET_LOCATION"), {
-      assertActive: () => {}, authorize: () => ({ ok: true }), phone: () => null, holdSend: async () => ({ ok: true, approved: true, fullAccess: false }),
-      allows: () => ({ ok: true }), reserveSend: () => ({ ok: true }), run,
+      assertActive: () => {}, authorize: () => ({ ok: true }), phone: () => null, run,
     }) as PhoneToolResult;
     expect(bare).toMatchObject({ isError: true, structuredContent: { code: "no_phone" } });
     expect(text(bare)).toBe(PHONE_NO_PHONE_TEXT);
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("a send whose turn ended while it waited on the hold spends nothing and never runs", async () => {
+  it("a send whose turn ended before it was queued never runs", async () => {
     const run = vi.fn<PhoneRpcDeps["run"]>();
-    const reserveSend = vi.fn<PhoneRpcDeps["reserveSend"]>(() => ({ ok: true }));
-    let checks = 0;
     const result = phoneRpc(call("PHONE_SEND_MESSAGE", { to: "Mom", text: "On my way" }), {
-      assertActive: () => { if (++checks > 1) throw new Error("turn ended"); },
-      authorize: () => ({ ok: true }), holdSend: async () => ({ ok: true, approved: true, fullAccess: false }),
+      assertActive: () => { throw new Error("turn ended"); },
+      authorize: () => ({ ok: true }),
       phone: () => ({ name: "Omkar's iPhone", platform: "ios" }) as ReturnType<PhoneRpcDeps["phone"]>,
-      allows: () => ({ ok: true }), reserveSend, run,
+      run,
     });
     await expect(result).rejects.toThrow("turn ended");
-    expect(reserveSend).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
   });
 

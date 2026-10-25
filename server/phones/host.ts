@@ -1,11 +1,10 @@
-// What server/index.ts needs from the phone integration, in one object so the host file gains only a few lines: the
-// per-turn mount, the prompt part and the internal MCP handler (owner check, per-bot verdict, decision rows, the send
-// hold, the phone job, write activity).
-import { isOutboundTool, outboundCallsIn } from "../../shared/outbound.ts";
+// The phone integration's per-turn pieces: the mount, the prompt part and the internal MCP handler (owner check, per-bot
+// verdict, decision rows, the phone job, write activity). A send waits on the person's Send tap on the phone, never on a
+// card of OpenMausBot's own.
+import { isOutboundTool } from "../../shared/outbound.ts";
 import { PHONE_MCP_SERVER, phoneToolCapability, type PhoneCapability, type PhoneToolName } from "../../shared/phone-apps.ts";
 import { appendDecision } from "../decision-log.ts";
 import { harnessMcpTokenEnv } from "../harness-mcp-token.ts";
-import type { OutboundHold } from "../outbound-hold.ts";
 import { AGENTS_NODE_FLAG, SPAWNED_PROXIES } from "../proxy-paths.ts";
 import type { BotRecord } from "../store.ts";
 import type { PromptPart } from "../system-prompt.ts";
@@ -29,9 +28,6 @@ export interface PhoneHostDeps {
   /** True when the thread is a room, so the activity row names its author. */
   inRoom(threadId: string): boolean;
   appendMessage(threadId: string, message: Record<string, unknown>): void;
-  outboundHold: OutboundHold;
-  /** Full access: a send skips the "Send on your behalf?" card, as on the connectors route. */
-  sendsFreely(capability: { botId: string; threadId: string }): boolean;
   active(capability: TurnCapability): boolean;
 }
 
@@ -71,7 +67,7 @@ export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
   const phonesOf = (owner: string) => registry.forOwner(owner)
     .filter((phone) => Object.values(phone.registration.capabilities).some(Boolean))
     .sort(byUse);
-  /** The apps any of the owner's phones allows: what exists for the verdict. The chosen phone's own apps decide the pick and are checked again before it runs. */
+  /** The apps any of the owner's phones allows: what exists for the verdict. The chosen phone's own apps decide the pick. */
   const merged = (phones: PhoneRecord[]) => Object.assign({}, ...phones.map((phone) => phone.registration.capabilities)) as Partial<Record<PhoneCapability, string>>;
   const mounts = (bot: PhoneBot, owner: string | null) => {
     if (owner === null) return false;
@@ -99,7 +95,6 @@ export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
     toolListing: () => (registry.list(null, () => false).length === 0 ? null : { phone: PHONE_TOOLS.map(({ name, description }) => ({ name, description })) }),
     async handle(body, capability, assertActive) {
       const active = () => deps.active(capability);
-      const send = (name: string, args: Record<string, unknown>) => ({ threadId: capability.threadId, tool: name, calls: outboundCallsIn(name, args), opaque: false });
       return phoneRpc(body as { method?: unknown; params?: unknown }, {
         assertActive,
         // Re-read the live bot and the turn's owner on every call, so a permission change wins over a request
@@ -130,26 +125,6 @@ export function createPhoneHost(deps: PhoneHostDeps): PhoneHost {
           const match = phones.find((phone) => phone.registration.name.trim().toLowerCase() === wanted);
           if (!match) return { ok: false, code: "no_phone", text: `${PHONE_NO_PHONE_TEXT} Available phones: ${phones.map((phone) => phone.registration.name).join(", ")}.` };
           return allows(match, phoneToolCapability(name)) ? target(match) : notAllowed(match.registration.name, name);
-        },
-        holdSend: async (name, args) => {
-          const bot = deps.bot(capability.botId);
-          if (!bot) return { ok: false, text: GONE_TEXT };
-          const fullAccess = deps.sendsFreely(capability);
-          const held = await deps.outboundHold.hold({ bot, ...send(name, args), fullAccess, active });
-          return held.ok ? { ...held, fullAccess } : held;
-        },
-        allows: (phone, name) => {
-          const record = registry.get(phone.key);
-          if (!record) return { ok: false, code: "no_phone", text: PHONE_NO_PHONE_TEXT };
-          return allows(record, phoneToolCapability(name)) ? { ok: true } : notAllowed(phone.name, name);
-        },
-        // At dispatch, as the connectors route does: the live bot's policy, and Full access only if it still holds.
-        reserveSend: (name, args, hold) => {
-          const bot = deps.bot(capability.botId);
-          if (!bot) return { ok: false, text: GONE_TEXT };
-          try { deps.outboundHold.reserve({ bot, ...send(name, args), fullAccess: hold.fullAccess && deps.sendsFreely(capability), approved: hold.approved }); }
-          catch (error) { return { ok: false, text: error instanceof Error ? error.message : String(error) }; }
-          return { ok: true };
         },
         run: async (phone, name, args) => {
           const outcome = await jobs.request(phone.key, name, args, {

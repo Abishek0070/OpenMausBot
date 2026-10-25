@@ -1,7 +1,8 @@
 // A real server with the fake engine left hanging, so a turn stays live: a phone pairs as a session and registers its
 // apps, the Chief's turn mounts the device tools, a tool call becomes a phone job the phone polls, leases and answers,
 // and the phone hears of the job over SSE. A bot whose phone apps are switched off sees no phone tools, a read-and-draft
-// run gets no phone at all, and a turn hears whether the person wrote from the phone or the computer.
+// run gets no phone at all, a turn hears whether the person wrote from the phone or the computer, and a send goes to the
+// phone with no card of OpenMausBot's own.
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -319,3 +320,25 @@ it("a conversation an outside event's run reported into loses the phone", async 
   const after = await turn({ id: chief.id, threadId: main }, "What did that lead want?");
   expect(after.mcpConfig.mcpServers[PHONE_MCP_SERVER]).toBeUndefined();
 }, 90_000);
+
+it("a send reaches the phone with no card of OpenMausBot's own in the chat: the person taps Send on the phone", async () => {
+  await settle();
+  const allowed = await phone("PUT", "/api/phones/self", { ...registration("install-0001", PHONE_NAME), capabilities: { calendar: "full", messages: "send" } });
+  expect(allowed.status).toBe(200);
+  const texter = (await api("POST", "/api/bots", { name: "Texter" })).body.bot;
+  const launch = await turn({ id: texter.id, threadId: texter.threadId }, "Text Mom that I am on my way.");
+  const token = launch.mcpConfig.mcpServers[PHONE_MCP_SERVER]!.env[harnessMcpTokenEnv("device")]!;
+  const message = { to: "Mom", text: "On my way" };
+  const sent = rpc(token, "tools/call", { name: "PHONE_SEND_MESSAGE", arguments: message });
+  // Queued at once: nothing in the chat waits on the person before the phone hears of it.
+  const { job } = (await phone("GET", "/api/phones/self/jobs")).body;
+  expect(job).toMatchObject({ tool: "PHONE_SEND_MESSAGE", arguments: message });
+  expect((await phone("POST", `/api/phones/self/jobs/${job.id}/lease`)).body).toEqual({ active: true });
+  expect((await phone("POST", `/api/phones/self/jobs/${job.id}/result`, { ok: true, result: { status: "sheet_opened" } })).body).toEqual({ ok: true });
+  const { status, body } = await sent;
+  expect(status).toBe(200);
+  expect(body.result.isError).toBeUndefined();
+  const lines = (await api("GET", `/api/threads/${texter.threadId}/messages?limit=50`)).body.messages as Array<{ kind?: string; card?: unknown; tool?: { name: string } }>;
+  expect(lines.filter((line) => line.card)).toEqual([]);
+  expect(lines.some((line) => line.kind === "activity" && line.tool?.name === `mcp__${PHONE_MCP_SERVER}__PHONE_SEND_MESSAGE`)).toBe(true);
+}, 60_000);
