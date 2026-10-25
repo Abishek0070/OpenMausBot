@@ -103,7 +103,7 @@ describe("bots leave the free backup once the person's own AI answers", () => {
     states.claude = "passed";
     bots.settle([claude, backup], CLAUDE);
     expect(store.bot("helper")!.modelSelection).toEqual({ ...CLAUDE, effort: "high" });
-    expect(store.lines).toEqual([{ threadId: "helper-main", message: { role: "bot", kind: "activity", tool: { name: "Now using Claude.", ok: true } } }]);
+    expect(store.lines).toEqual([{ threadId: "helper-main", message: { role: "bot", kind: "activity", tool: { name: "notice: Now using Claude.", ok: true } } }]);
     // Once.
     bots.settle([claude, backup], CLAUDE);
     expect(store.lines).toHaveLength(1);
@@ -119,7 +119,7 @@ describe("bots leave the free backup once the person's own AI answers", () => {
     states.claude = "passed";
     bots.settle([claude, backup], CLAUDE);
     expect(store.bot("chief")!.modelSelection).toEqual({ ...CLAUDE, effort: "high" });
-    expect(nowUsing("chief")).toEqual(["Now using Claude."]);
+    expect(nowUsing("chief")).toEqual(["notice: Now using Claude."]);
   });
 
   it("leaves a bot the person put on the backup's model themselves while it was the default", () => {
@@ -209,7 +209,7 @@ describe("bots leave the free backup once the person's own AI answers", () => {
     busy.clear();
     timers.filter((timer) => !timer.cancelled).at(-1)!.run();
     expect(store.bot("helper")!.modelSelection).toEqual({ ...CLAUDE, effort: "high" });
-    expect(nowUsing("helper")).toEqual(["Now using Claude."]);
+    expect(nowUsing("helper")).toEqual(["notice: Now using Claude."]);
     expect(timers.every((timer) => timer.ms === 5_000)).toBe(true);
   });
 

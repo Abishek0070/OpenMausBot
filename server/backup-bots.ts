@@ -120,7 +120,8 @@ export function createBackupBots(deps: BackupBotsDeps) {
       delete noted[botId];
       changed = true;
       store.applyModelDefault(bot.id, structuredClone(deps.forBot(selection)));
-      store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: `Now using ${deps.name(to.instanceId)}.`, ok: true } });
+      // `notice:` makes it a status row every client shows, never a folded tool step (as quota-switch.ts).
+      store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: `notice: Now using ${deps.name(to.instanceId)}.`, ok: true } });
     }
     if (changed) save();
   };

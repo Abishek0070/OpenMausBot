@@ -155,7 +155,7 @@ it.skipIf(process.platform === "win32")("installs at start when no AI is ready a
   await expect.poll(async () => (await server.engines()).claude?.snapshot, { timeout: 15_000, interval: 250 }).toMatchObject({ state: "available" });
   expect(await server.api("POST", "/api/instances/claude/check", {})).toMatchObject({ ok: true });
   await expect.poll(async () => (await server.starter()).modelSelection.instanceId, { timeout: 15_000, interval: 250 }).toBe("claude");
-  const moved = (await lines()).filter((line) => line.kind === "activity" && line.tool?.name === "Now using Claude.");
+  const moved = (await lines()).filter((line) => line.kind === "activity" && line.tool?.name === "notice: Now using Claude.");
   expect(moved).toHaveLength(1);
   const selections = async () => Object.fromEntries(((await server.api("GET", "/api/bots?messages=0")).bots as Array<{ id: string; modelSelection: { instanceId: string } }>)
     .map((bot) => [bot.id, bot.modelSelection.instanceId]));
