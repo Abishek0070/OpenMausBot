@@ -65,6 +65,9 @@ export interface FreeFallbackDeps {
   changed(): Promise<unknown> | void;
   /** Nothing is decided before this settles: the company runtime has started. */
   ready?: Promise<unknown>;
+  /** Nothing is decided from these engines while the start-up read is unfinished or they come from the last run's status
+   * (registry.provisional()). */
+  provisional?(instances: readonly SelectableInstance[]): boolean;
   /** Whether any bot runs on this engine. */
   botsOn?(instanceId: string): boolean;
   /** Where the wait between attempts is kept; none keeps it in memory. */
@@ -281,6 +284,7 @@ export function createFreeFallback(deps: FreeFallbackDeps) {
     settle(instances: readonly SelectableInstance[]): Promise<void> | undefined {
       if (!enabled || !started || running) return undefined;
       try {
+        if (deps.provisional?.(instances) === true) return undefined;
         return decide(instances);
       } catch (error) {
         log(`[engines] OpenCode's free backup was not checked: ${message(error)}`);

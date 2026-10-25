@@ -209,6 +209,18 @@ describe("OpenCode's free backup, installed without a word when nothing else can
     expect(registry.installRuntime).toHaveBeenCalledOnce();
   });
 
+  it("decides nothing from an unfinished start-up read of the engines, or the last run's status", async () => {
+    let provisional = true;
+    programs = new Set();
+    const fallback = make({ provisional: () => provisional });
+    await twoReads(fallback);
+    expect(registry.installRuntime).not.toHaveBeenCalled();
+    expect(timers).toEqual([]);
+    provisional = false;
+    await fallback.settle(instances);
+    expect(registry.installRuntime).toHaveBeenCalledOnce();
+  });
+
   it("installs nothing when the company connection arrives during the wait", async () => {
     const fallback = make();
     await fallback.settle(instances);
