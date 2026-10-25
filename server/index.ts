@@ -100,7 +100,11 @@ import { DATA_INTERNAL_MCP_PATH, dataRpc } from "./data/rpc.ts";
 import { createHighLevelHost } from "./highlevel/host.ts";
 import { HIGHLEVEL_INTERNAL_MCP_PATH } from "./highlevel/rpc.ts";
 import { createHighLevelService } from "./highlevel/service.ts";
-import { createHighLevelRoutes } from "./routes/highlevel.ts"; import { createPhoneHost } from "./phones/host.ts"; import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts"; import { PhoneRegistry } from "./phones/registry.ts"; import { PhoneJobs } from "./phones/jobs.ts"; import { createPhoneRoutes, isLongPollPath, phoneKey } from "./routes/phones.ts"; import { createPhoneSends } from "./phones/sends.ts"; import type { PhonePlace } from "./phones/access.ts"; import { adoptExistingRoutines, desktopLendingTurn, desktopPhonesOffered, NOT_THE_OWNER } from "./phones/owner.ts";
+import { createHighLevelRoutes } from "./routes/highlevel.ts";
+import { createPhones } from "./host/phones.ts";
+import { NOT_THE_OWNER } from "./phones/owner.ts";
+import { PHONE_INTERNAL_MCP_PATH } from "./phones/rpc.ts";
+import { isLongPollPath } from "./routes/phones.ts";
 import { createDataRoutes } from "./data/routes.ts";
 import { DataSheetRegistry } from "./data/sheet.ts";
 import { DataFailure } from "./data/types.ts";
@@ -677,7 +681,7 @@ const sessions = new SessionRegistry({
   },
   portalMembership: hostedWorkspaceConfiguration()?.portalMembership === true,
 });
-const deviceLinks = new DeviceLinks(); const sharedComputers = new SharedComputers(id => sessions.isLive(id), new LentComputers(join(DATA_DIR, "lent-computers.json")), deviceLinks); const phoneRegistry = new PhoneRegistry(join(DATA_DIR, "phones.json")); const phoneSends = createPhoneSends(); const fromPhone = (auth: RequestAuth): boolean => { const key = phoneKey(auth); return key !== null && phoneRegistry.get(key) !== undefined; }; const phoneJobs = new PhoneJobs((phone, id) => broadcast({ kind: "device.job", phone, id }, { adminOnly: true }));
+const deviceLinks = new DeviceLinks(); const sharedComputers = new SharedComputers(id => sessions.isLive(id), new LentComputers(join(DATA_DIR, "lent-computers.json")), deviceLinks);
 // A Cloud home's secrets come over the launcher's pipe, never this process's environment.
 const CLOUD_SECRETS = BOOT_CLOUD_SECRETS;
 const CLOUD_ENV: NodeJS.ProcessEnv = { ...process.env, ...CLOUD_SECRETS };
@@ -688,9 +692,9 @@ const appLanguage = (): string | undefined => cfg.language ?? CLOUD_TEAM?.langua
 if (CLOUD_HOME) repairMovedWorkspacePaths(DATA_DIR);
 if (CLOUD_PERSONAL) sessions.requireAdmin(CLOUD_PERSONAL_REFUSAL);
 const lendingEnabled = () => sharedComputersEnabled(cfg) || CLOUD_HOME !== null;
-const CLOUD_HOME_LENDER = "cloud-home"; const DESKTOP_OWNER = "owner"; const desktopPhones = () => desktopPhonesOffered({ sharedMembership: sharedMembership(), loopbackTrust: LOOPBACK.trust }); function phoneOwnerOf(auth: RequestAuth): string | null { return HOSTED_WORKSPACE || CLOUD_TEAM ? null : CLOUD_HOME ? (cloudOwnerSession(auth) ? CLOUD_OWNER_KEY : null) : desktopPhones() && ownerOrAdmin(auth) ? DESKTOP_OWNER : null; }
-/** Owner-written routines and owner-started runs: the only routine turns that may use a lent Mac on a Cloud home, or the desktop owner's phones elsewhere. */
-const cloudRoutineAuthors = CLOUD_HOME ? createCloudRoutineAuthors(join(DATA_DIR, "lending-routines.json")) : null; const desktopRoutineRecordsExisted = existsSync(join(DATA_DIR, "owner-routines.json")); const desktopRoutineAuthors = CLOUD_HOME ? null : createCloudRoutineAuthors(join(DATA_DIR, "owner-routines.json"));
+const CLOUD_HOME_LENDER = "cloud-home";
+/** Owner-written routines and owner-started runs: the only routine turns that may use a lent Mac. */
+const cloudRoutineAuthors = CLOUD_HOME ? createCloudRoutineAuthors(join(DATA_DIR, "lending-routines.json")) : null;
 const ownerStartedRoutineRuns = new Set<string>();
 const foreignTurns = new Map<string, { botId: string; threadId: string }>();
 const lendingMemory = CLOUD_PERSONAL ? createLendingMemory({
@@ -918,7 +922,7 @@ function cloudLendingRefusal(capability: Pick<InternalCapability, "botId" | "thr
   const refusal = cloudHomeLendingRefusal(cloudLendingTurn(capability));
   if (refusal) return refusal;
   return lendingMemory?.reconcile(capability.botId, foreignTurnRunning(capability.botId), { cached: true }).changedBySomeoneElse ? "memory-changed" : null;
-} /** Whose phones a turn may use: on a Cloud home the owner's, when the lent Mac would allow the turn; elsewhere the desktop owner's. */ function phoneTurnOwner(c: Pick<InternalCapability, "botId" | "threadId" | "generation">): string | null { if (HOSTED_WORKSPACE || CLOUD_TEAM) return null; if (CLOUD_HOME) return cloudLendingRefusal(c) === null ? CLOUD_OWNER_KEY : null; if (!desktopPhones()) return null; return cloudHomeLendingRefusal(desktopLendingTurn({ ...cloudLendingTurn(c), thread: store.messagesFor(c.threadId) }, { adminPersons: () => new Set(sessions.list().filter((s) => s.scopes.includes("admin")).map((s) => personKey(s))), originIsUser: () => turnOrigin(c).kind === "user", ownerWrote: (id) => { const r = routines?.listRoutines().find((x) => x.id === id); return Boolean(r && desktopRoutineAuthors?.authored(r.id, r)); } })) === null ? DESKTOP_OWNER : null; }
+}
 
 function cloudThreadStarters(threadId: string): (string | undefined)[] {
   const room = store.groupByThread(threadId);
@@ -1023,7 +1027,8 @@ function cloudRoutineIsOwners(routineId: string | undefined): boolean {
 }
 
 function cloudRoutineRunIsOwners(run: RoutineRun | null | undefined, botId: string, threadId: string): boolean {
-  const authors = cloudRoutineAuthors ?? desktopRoutineAuthors; if (!run || run.threadId !== threadId || store.taskByThread(botId, threadId)?.routineRunId !== run.id || !authors) return false;
+  const authors = cloudRoutineAuthors ?? phones.routineAuthors;
+  if (!run || run.threadId !== threadId || store.taskByThread(botId, threadId)?.routineRunId !== run.id || !authors) return false;
   const routine = routines?.listRoutines().find((candidate) => candidate.id === run.routineId);
   return Boolean(routine) && authors.authored(run.routineId, {
     ...routine!, prompt: run.prompt, target: run.target, botId: run.botId, groupId: run.groupId, attachments: run.attachments, runOn: run.runOn,
@@ -2028,7 +2033,7 @@ const directRequestOwners = new Map<string, {
   generation: string; messageId?: string; generations: Set<string>; turnId: string | null; stopped?: boolean;
   automation?: RoutineRunTrigger;
   origin?: WorkOrigin;
-}>(); const turnPlace = (threadId: string, personAsked: boolean): PhonePlace => { const request = directRequestOwners.get(threadId); const line = request?.messageId ? store.messagesFor(threadId).find((m) => m.id === request.messageId) : undefined; return phoneSends.has(line?.sendId) ? "phone" : personAsked && !request?.automation && request?.origin?.kind === "user" ? "computer" : "unattended"; };
+}>();
 type DirectTurnOutcome = HostTurnResult;
 const directFollowupTurns = new ProviderTurnGenerationRegistry<DirectTurnOutcome>();
 const directFollowupSettlers = new Map<string, { threadId: string; settle?: () => void }>();
@@ -2567,7 +2572,7 @@ function dataIntegration(botId: string, turn: { threadId: string; generation: st
 /** Only with a connection and for a bot allowed to use it (connected apps on; scopes and grants name highlevel). */
 function highlevelIntegration(bot: BotRecord, turn: { threadId: string; generation: string }) {
   return highlevelHost.integration(bot, () => mintInternalCapability({ botId: bot.id, ...turn, kind: "highlevel", depth: 0, skillAuthoring: false, createdBots: 0, openedThreads: 0 }), `http://127.0.0.1:${PORT}`);
-} /** Only for the owner's own turn and a bot granted an app one of the owner's phones allows. */ function deviceIntegration(bot: BotRecord, turn: { threadId: string; generation: string }) { return phoneHost.integration(bot, phoneTurnOwner({ botId: bot.id, ...turn }), () => mintInternalCapability({ botId: bot.id, ...turn, kind: "device", depth: 0, skillAuthoring: false, createdBots: 0, openedThreads: 0 }), `http://127.0.0.1:${PORT}`); }
+}
 
 let browserEngineInstall: Promise<void> | null = null;
 let browserEngineInstallError: string | null = null;
@@ -2963,6 +2968,14 @@ const skillsHost = createSkillsLibraryHost({ store, cfg, appendSkillRequestCard,
 const { listBotSkills, readBotSkillFile } = skillsHost; const cloudConnections = createCloudConnectionsHost({ cloudHome: CLOUD_HOME, config: () => cfg, environmentId: ENVIRONMENT_ID, mcpOAuth, highlevel, heldKeys, dataDir: DATA_DIR, engines: async () => selectableInstances(await registry.describe()).filter((instance) => readyToRun(instance, selectionContext)).map((instance) => instance.instanceId) });
 const highlevelHost = createHighLevelHost({ service: highlevel, dataDir: DATA_DIR, bot: (id) => store.bot(id),
   inRoom: (threadId) => Boolean(store.groupByThread(threadId)), appendMessage: (threadId, message) => { store.appendMessage(threadId, message as Parameters<typeof store.appendMessage>[1]); } });
+const phones = createPhones({
+  dataDir: DATA_DIR, shared: Boolean(HOSTED_WORKSPACE || CLOUD_TEAM), cloudHome: Boolean(CLOUD_HOME), cloudOwnerKey: CLOUD_OWNER_KEY,
+  loopbackTrust: LOOPBACK.trust, sharedMembership, store, sessions, routines: () => routines, ownerOrAdmin, cloudOwnerSession,
+  cloudLendingRefusal, cloudLendingTurn, originIsUser: (turn) => turnOrigin(turn).kind === "user", request: (threadId) => directRequestOwners.get(threadId),
+  nudge: (frame) => broadcast(frame, { adminOnly: true }), harnessUrl: `http://127.0.0.1:${PORT}`,
+  mint: (botId, turn) => mintInternalCapability({ botId, ...turn, kind: "device", depth: 0, skillAuthoring: false, createdBots: 0, openedThreads: 0 }),
+  active: (turn) => internalCapabilityIsActive(turn as InternalCapability),
+});
 let cloudPower: CloudPower | null = null; // The sleep handshake of a plan that sleeps (server/cloud-power.ts), made just before the server listens.
 const { cloudHealth, cloudSigned } = createCloudSignedHost({ cloudHome: CLOUD_HOME, sessions, power: () => cloudPower, box: () => botBox.report(), teamAdmin: teamAdminHost(), memberLeft: (email) => leaveTeam ? leaveTeam(email).then((result) => { teamOwners.left(email); return result; }) : Promise.reject(new Error("not a team")), health: { store, bus, dataDir: DATA_DIR, eventsDir: EVENTS_DIR, version: serverVersion(), image: process.env.OMB_CLOUD_IMAGE,
   engines: () => registry.instances().map((instance) => ({ instanceId: instance.instanceId, driverKind: instance.driverKind, snapshot: registry.knownSnapshot(instance.instanceId) })),
@@ -3107,7 +3120,8 @@ function previewSystemPrompt(bot: BotRecord) {
     }, { note: previewPlan.note, cloudHome: Boolean(CLOUD_HOME) }) },
     { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(agentsMounted && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER)) : "" },
     { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false && composio.configured(cfg) ? composioSystemPrompt(bot.connectorTools) + describeConnectorScopes(bot.connectorScopes) : "" },
-    { id: "highlevel", label: "HighLevel", text: caps?.highlevelMcp === true && highlevelHost.mounts(bot) ? highlevelHost.prompt(bot) : "" }, ...(caps?.deviceMcp === true && phoneHost.mounts(bot, CLOUD_HOME ? CLOUD_OWNER_KEY : DESKTOP_OWNER) ? phoneHost.parts(bot, CLOUD_HOME ? CLOUD_OWNER_KEY : DESKTOP_OWNER, "computer") : []),
+    { id: "highlevel", label: "HighLevel", text: caps?.highlevelMcp === true && highlevelHost.mounts(bot) ? highlevelHost.prompt(bot) : "" },
+    ...phones.previewParts(bot, caps?.deviceMcp === true),
     { id: "mcp", label: "MCP servers", text: caps?.customMcp ? customMcpPrompt(Object.keys(engineMcpServers(bot))) : "" }, { id: "to-connect", label: "Connections to make", text: cloudConnections.prompt(bot) },
     { id: "browser", label: "Browser", text: previewPlan.browser ? browserPromptFor(bot, agentsMounted) : "" },
     { id: "coordination", label: "Team", text: agentsMounted && coordination ? ` ${coordination}` : "" },
@@ -5931,7 +5945,7 @@ const automationReports = createAutomationReports({ store, routines: () => routi
   notify: (kind, bot, threadId, detail) => notify(buildNotification(kind, bot, threadId, detail, { avatarUrl: bot.avatarUrl })) });
 const proactive = createProactive({ store, cfg, composio, registry, dataDir: DATA_DIR, team: Boolean(HOSTED_WORKSPACE || CLOUD_TEAM), frozen: moveFreeze.frozen, routines: () => routines, mainThread: botMainThread, threadBusy, notify, helpers: { decider, extractor }, cloud: Boolean(CLOUD_HOME || HOSTED_WORKSPACE || CLOUD_TEAM),
   engineName: (instanceId) => engineName(instanceId), hostTimeZone: () => (CLOUD_HOME ? undefined : hostTimeZone()), decide: (row) => appendDecision(DATA_DIR, row), stale: shouldIgnoreProviderEvent, release: (threadId) => watchdog.setWaitingOnHuman(threadId, false),
-  owned: (routine) => { (cloudRoutineAuthors ?? desktopRoutineAuthors)?.record(routine.id, routine); if (CLOUD_OWNER_KEY) cloudRoutineAuthors?.wrote(routine.id, CLOUD_OWNER_KEY); }, needsYou: () => needsYouNow({ bots: store.bots, groups: store.groups, routines, parked: coordinator.active(), engines: registry.instances().map((instance) => ({ instanceId: instance.instanceId, snapshot: registry.lastSnapshot(instance.instanceId) })) }, { admin: true, thread: () => true, routine: () => true }) });
+  owned: (routine) => { (cloudRoutineAuthors ?? phones.routineAuthors)?.record(routine.id, routine); if (CLOUD_OWNER_KEY) cloudRoutineAuthors?.wrote(routine.id, CLOUD_OWNER_KEY); }, needsYou: () => needsYouNow({ bots: store.bots, groups: store.groups, routines, parked: coordinator.active(), engines: registry.instances().map((instance) => ({ instanceId: instance.instanceId, snapshot: registry.lastSnapshot(instance.instanceId) })) }, { admin: true, thread: () => true, routine: () => true }) });
 teamOwners.startBriefs({ store, threadBusy, runs: () => routines?.listRuns(Date.now() - 36 * 60 * 60_000) ?? [], needsYou: (asks) => needsYouNow({ bots: store.bots, groups: store.groups, routines, parked: coordinator.active(), engines: [] }, { admin: false, thread: () => true, routine: () => true, asks }),
   notify: (bot, threadId, detail) => notify(bot.notifications === false ? null : { kind: "brief", botId: bot.id, botName: bot.name, threadId, title: bot.name, body: detail.slice(0, 200), ...(bot.avatarUrl ? { avatarUrl: bot.avatarUrl } : {}) }) });
 let calendarCalls: CalendarCallManager | null = null;
@@ -8696,7 +8710,9 @@ async function startTurn(
         const data = dataIntegration(bot.id, { threadId, generation: dispatchClaimId });
         if (data) integrations.data = data;
       }
-      if (liveBot && instance.adapter.capabilities.highlevelMcp === true) { const crm = highlevelIntegration(liveBot, { threadId, generation: dispatchClaimId }); if (crm) integrations.highlevel = crm; } if (liveBot && instance.adapter.capabilities.deviceMcp === true) { const phone = deviceIntegration(liveBot, { threadId, generation: dispatchClaimId }); if (phone) integrations.device = phone; }
+      if (liveBot && instance.adapter.capabilities.highlevelMcp === true) { const crm = highlevelIntegration(liveBot, { threadId, generation: dispatchClaimId }); if (crm) integrations.highlevel = crm; }
+      const phone = liveBot && instance.adapter.capabilities.deviceMcp === true ? phones.integration(liveBot, { threadId, generation: dispatchClaimId }) : null;
+      if (phone) integrations.device = phone;
       const mountedComputer = surfaceOfComputerKind(computerKind);
       if (
         liveBot &&
@@ -8763,7 +8779,11 @@ async function startTurn(
         { id: "mcp", label: "MCP servers", text: customMcpPrompt(Object.keys(integrations.custom ?? {})) }, { id: "to-connect", label: "Connections to make", text: cloudConnections.prompt(liveBot ?? bot) + teamConnections.prompt(threadId, integrations) },
         { id: "browser", label: "Browser", text: integrations.browser ? browserPromptFor(bot, Boolean(integrations.agents)) : "" },
         { id: "data", label: "Data", text: integrations.data ? BUILT_IN_DATA_SYSTEM_PROMPT : "" },
-        { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(liveBot ?? bot) : "" }, ...(integrations.device ? phoneHost.parts(liveBot ?? bot, phoneTurnOwner({ botId: bot.id, threadId, generation: dispatchClaimId }), turnPlace(threadId, !(commsDepth > 0 || opts?.automationSource !== undefined || opts?.unattended || opts?.peerAsk || opts?.coordination))) : [{ id: "device", label: "Phone", text: instance.adapter.capabilities.deviceMcp === true ? phoneHost.withheld(liveBot ?? bot, CLOUD_HOME ? CLOUD_OWNER_KEY : desktopPhones() ? DESKTOP_OWNER : null) : "" }]),
+        { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(liveBot ?? bot) : "" },
+        ...phones.promptParts(liveBot ?? bot, {
+          mounted: Boolean(integrations.device), offered: instance.adapter.capabilities.deviceMcp === true, turn: { botId: bot.id, threadId, generation: dispatchClaimId },
+          place: phones.place(threadId, !(commsDepth > 0 || opts?.automationSource !== undefined || opts?.unattended || opts?.peerAsk || opts?.coordination)),
+        }),
         { id: "coordination", label: "Team", text: coordinationPrompt ? ` ${coordinationPrompt}` : "" },
         { id: "assignment", label: "Teammate task", text: coordinationNode?.parentId ? `\n${coordinationSystemInstructions()}` : "" },
         { id: "outstanding", label: "Outstanding teammate work", text: outstandingAssignmentsPrompt(threadId) },
@@ -9237,7 +9257,8 @@ routines = new RoutineManager({
     const detail = `${redactSecretsInText(run.routineName)}: ${alert?.detail ?? `target busy${minutes != null ? ` for ${minutes} minutes` : ""}`}`;
     notify(buildNotification("routine-deferred", routineSourceOwner(run)?.bot ?? bot, routineSourceThread(run) ?? bot.threadId, detail));
   },
-}); if (desktopRoutineAuthors) adoptExistingRoutines({ recordsExisted: desktopRoutineRecordsExisted, offered: desktopPhones(), otherPeople: sessions.list().some((s) => !s.scopes.includes("admin")), routines: routines.listRoutines(), record: (routine) => desktopRoutineAuthors.record(routine.id, routine), persist: () => desktopRoutineAuthors.persist() });
+});
+phones.adoptRoutines();
 // Settle Cloud ownership before anything is served and before any routine can run.
 if (CLOUD_HOME && CLOUD_OWNER_KEY && cloudRoutineAuthors) {
   cloudHome = settleCloudHome({ file: join(DATA_DIR, "cloud-owner.json"), machineId: CLOUD_HOME.machineId, ownerKey: CLOUD_OWNER_KEY, nobodyKey: CLOUD_NOBODY_KEY,
@@ -9555,7 +9576,7 @@ const teamMemory = new TeamMemory(join(DATA_DIR, "team-memory.json"));
 const teamMemoryRequests = createTeamMemoryRequests({ teamMemory, store, sectionKey: sectionContextKey, decide: (row) => appendDecision(DATA_DIR, row) });
 const outboundRequests = new OutboundRequestService();
 const outboundCounts = new OutboundCounts(join(DATA_DIR, "outbound-counts.json"));
-const outboundHold = createOutboundHold({ store, dataDir: DATA_DIR, outboundRequests, outboundCounts, holdMs: OUTBOUND_HOLD_MS, connectorThread, activeGroupTurnForBot, notify }); const phoneHost = createPhoneHost({ registry: phoneRegistry, jobs: phoneJobs, dataDir: DATA_DIR, bot: (id) => store.bot(id), turnOwner: phoneTurnOwner, inRoom: (t) => Boolean(store.groupByThread(t)), appendMessage: (t, m) => { store.appendMessage(t, m as Parameters<typeof store.appendMessage>[1]); }, active: (c) => internalCapabilityIsActive(c as InternalCapability) });
+const outboundHold = createOutboundHold({ store, dataDir: DATA_DIR, outboundRequests, outboundCounts, holdMs: OUTBOUND_HOLD_MS, connectorThread, activeGroupTurnForBot, notify });
 
 function resolveAndSendTrust(res: ServerResponse, threadId: string, requestId: string, behavior: "allow" | "deny" | "answer"): boolean {
   const remembered = teamMemoryRequests.resolve(threadId, requestId, behavior);
@@ -10379,7 +10400,9 @@ async function runClaimedGroupMemberTurn(
     const data = dataIntegration(readyBot.id, { threadId, generation: internalGeneration });
     if (data) integrations.data = data;
   }
-  if (instance.adapter.capabilities.highlevelMcp === true) { const crm = highlevelIntegration(readyBot, { threadId, generation: internalGeneration }); if (crm) integrations.highlevel = crm; } if (instance.adapter.capabilities.deviceMcp === true) { const phone = deviceIntegration(readyBot, { threadId, generation: internalGeneration }); if (phone) integrations.device = phone; }
+  if (instance.adapter.capabilities.highlevelMcp === true) { const crm = highlevelIntegration(readyBot, { threadId, generation: internalGeneration }); if (crm) integrations.highlevel = crm; }
+  const phone = instance.adapter.capabilities.deviceMcp === true ? phones.integration(readyBot, { threadId, generation: internalGeneration }) : null;
+  if (phone) integrations.device = phone;
   if (roomPlan.browser && !(roomPlan.computer === undefined && roomTeamComputer)) {
     const selectedProfile = readyBot.browserProfile;
     const browser = await browserIntegration(readyBot.id, selectedProfile, { threadId, generation: internalGeneration });
@@ -10592,7 +10615,11 @@ async function runClaimedGroupMemberTurn(
     { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(Boolean(integrations.agents) && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER)) : "" },
     { id: "browser", label: "Browser", text: integrations.browser ? browserPromptFor(bot, Boolean(integrations.agents)) : "" },
     { id: "data", label: "Data", text: integrations.data ? BUILT_IN_DATA_SYSTEM_PROMPT : "" },
-    { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(readyBot) : "" }, ...(integrations.device ? phoneHost.parts(readyBot, phoneTurnOwner({ botId: readyBot.id, threadId, generation: internalGeneration }), "computer") : [{ id: "device", label: "Phone", text: instance.adapter.capabilities.deviceMcp === true ? phoneHost.withheld(readyBot, CLOUD_HOME ? CLOUD_OWNER_KEY : desktopPhones() ? DESKTOP_OWNER : null) : "" }]),
+    { id: "highlevel", label: "HighLevel", text: integrations.highlevel ? highlevelHost.prompt(readyBot) : "" },
+    ...phones.promptParts(readyBot, {
+      mounted: Boolean(integrations.device), offered: instance.adapter.capabilities.deviceMcp === true,
+      turn: { botId: readyBot.id, threadId, generation: internalGeneration }, place: "computer",
+    }),
     { id: "recall", label: "Recall", text: integrations.agents && bot.memoryEnabled !== false ? SESSION_SEARCH_SYSTEM_PROMPT : "" },
     teamAvailabilityPart(outsideRoom),
     { id: "recent", label: "Recent work", text: recentWorkPrompt(recentLines) },
@@ -12929,7 +12956,8 @@ ROUTES.push(createSharedComputerRoutes({ enabled: lendingEnabled, computers: sha
 // `routines` is assigned at boot, so it is read per request.
 ROUTES.push(createBotMessageRoutes({
   store, registry, handoffs, phoneSecretSubmissions, directTurnDispatchClaims, groupSpeakers,
-  routines: () => routines, fromPhone, notePhoneSend: (sendId) => phoneSends.note(sendId),
+  routines: () => routines,
+  fromPhone: phones.fromPhone, notePhoneSend: phones.noteSend,
   desktopManaged: DESKTOP_MANAGED, cloudHome: Boolean(CLOUD_HOME), DirectSendRefused,
   acceptDirectSend, directSendRefusal, startTurn, usageTriggerFor, messageSender, cloudGuestSendRefusal, cloudThreadRefusal,
   cardAnswerRefusal, commandRememberRefusal, requestBehavior, requestedTaskBot, botForThread, threadBusy,
@@ -12990,7 +13018,8 @@ ROUTES.push(createBotLifecycleRoutes({
   activeGroupTurnForBot, cancelGroupTurnOperations, runningTurnInstance, closeOpenApprovals, deleteBotWithLifecycle,
 }));
 ROUTES.push(createBotSkillsRoutes({ store, cfg, listBotSkills, readBotSkillFile, stagedSkillListing }));
-ROUTES.push(createHighLevelRoutes({ service: highlevel })); ROUTES.push(createPhoneRoutes({ registry: phoneRegistry, jobs: phoneJobs, owner: phoneOwnerOf, isAdmin: ownerOrAdmin }));
+ROUTES.push(createHighLevelRoutes({ service: highlevel }));
+ROUTES.push(phones.routes);
 ROUTES.push(createSkillShareRoutes({ enabled: () => skillsHost.mode() !== "off", botExists: (id) => Boolean(store.bot(id)),
   cardRefusal: (auth, threadId, requestId) => cardAnswerRefusal(auth, threadId, requestId, "allow"), shareFromReceipt: skillsHost.shareFromReceipt, shareFromBot: skillsHost.shareFromBot }));
 ROUTES.push(createTeamContextRoutes({ store, teamMemory }));
@@ -13278,10 +13307,10 @@ function liveCallTitle(botId: string, threadId: string, excerpt: string): Promis
 const liveCalls = new LiveCallController({
   store,
   send: async ({ auth, botId, threadId, text, callId }) => {
-    if (!liveSignedIn(auth)) throw new LiveCallSignedOutError(); const sendId = randomUUID().replaceAll("-", ""); if (fromPhone(auth)) phoneSends.note(sendId);
+    if (!liveSignedIn(auth)) throw new LiveCallSignedOutError();
     const receipt = await acceptDirectSend({
       botId, threadId, text,
-      sendId,
+      sendId: phones.sendIdFor(auth),
       sender: messageSender(auth),
       trigger: usageTriggerFor(auth),
       via: "call",
@@ -13778,7 +13807,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         : path === DATA_INTERNAL_MCP_PATH
         ? "data"
         : path === HIGHLEVEL_INTERNAL_MCP_PATH
-        ? "highlevel" : path === PHONE_INTERNAL_MCP_PATH ? "device"
+        ? "highlevel"
+        : path === PHONE_INTERNAL_MCP_PATH
+        ? "device"
         : path === "/api/internal/phone/claim"
         ? "phone"
         : path.startsWith("/api/internal/connectors/")
@@ -14014,7 +14045,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The CRM tokens stay here; the agent process holds only the turn's capability, and every call gets the live bot's verdict.
       if (method === "POST" && path === HIGHLEVEL_INTERNAL_MCP_PATH) {
         return json(res, 200, { result: await highlevelHost.handle(await readInternalBody(), internalCapability, requireActiveInternalCapability) });
-      } if (method === "POST" && path === PHONE_INTERNAL_MCP_PATH) { return json(res, 200, { result: await phoneHost.handle(await readInternalBody(), internalCapability, requireActiveInternalCapability) }); }
+      }
+      if (method === "POST" && path === PHONE_INTERNAL_MCP_PATH) {
+        return json(res, 200, { result: await phones.handle(await readInternalBody(), internalCapability, requireActiveInternalCapability) });
+      }
       if (method === "POST" && path === "/api/internal/phone/claim") {
         requireActiveInternalCapability();
         if (!claimTurnResource(internalCapability, "computer:phone")) {
@@ -15403,7 +15437,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const sendsFreely = () => roomTurnLevels.forRequest(internalCapability.threadId, internalCapability.botId,
           () => sourceApprovalMode(internalCapability.botId, internalCapability.threadId)) === "full";
         const fullAccess = outboundTool !== null && sendsFreely();
-        const held: OutboundHoldAnswer = outboundTool && !fullAccess ? await outboundHold.hold({ bot: currentSender, threadId: internalCapability.threadId, tool: outboundTool, calls: outboundCalls, opaque, fullAccess, active: () => internalCapabilityIsActive(internalCapability) }) : { ok: true, approved: false };
+        const held: OutboundHoldAnswer = outboundTool && !fullAccess
+          ? await outboundHold.hold({
+            bot: currentSender, threadId: internalCapability.threadId, tool: outboundTool, calls: outboundCalls, opaque, fullAccess,
+            active: () => internalCapabilityIsActive(internalCapability),
+          })
+          : { ok: true, approved: false };
         if (!held.ok) return refuseOutbound(held.text);
         const outboundApproved = held.approved;
         if (outboundApproved) requireActiveInternalCapability();
@@ -15429,7 +15468,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
                 (call.kind === "unrecognized" && fresh.connectorTools !== undefined)) {
               refuseDispatch("This bot's connected-app permissions changed. The call was not run.");
             }
-            if (outboundTool) try { outboundHold.reserve({ bot: fresh, threadId: internalCapability.threadId, tool: outboundTool, calls: outboundCalls, opaque, fullAccess: fullAccess && sendsFreely(), approved: outboundApproved }); } catch (e) { refuseDispatch((e as Error).message); }
+            if (outboundTool) {
+              try {
+                outboundHold.reserve({
+                  bot: fresh, threadId: internalCapability.threadId, tool: outboundTool, calls: outboundCalls, opaque,
+                  fullAccess: fullAccess && sendsFreely(), approved: outboundApproved,
+                });
+              } catch (error) {
+                refuseDispatch(error instanceof Error ? error.message : String(error));
+              }
+            }
           }, undefined, actor.access,
         ); } catch (error) {
           if (dispatchRefusal) return refuseOutbound(dispatchRefusal);
@@ -15574,7 +15622,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const writer = auth.kind === "session" ? actorKey(auth) : CLOUD_NOBODY_KEY;
       const routine = withRoutineWriter(writer, () => routines!.create(body));
       if (cloudRoutineAuthors && cloudOwnerSession(auth)) cloudRoutineAuthors.record(routine.id, routine);
-      cloudRoutineAuthors?.wrote(routine.id, writer); if (ownerOrAdmin(auth)) desktopRoutineAuthors?.record(routine.id, routine);
+      cloudRoutineAuthors?.wrote(routine.id, writer);
+      if (ownerOrAdmin(auth)) phones.routineAuthors?.record(routine.id, routine);
       return json(res, 201, { routine });
     }
     if (path === "/api/routines/wake" && method === "GET") {
@@ -15593,8 +15642,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (hidden) return json(res, 404, { error: hidden });
       const notYours = routineResultsRefusal(body);
       if (notYours) return json(res, 403, { error: notYours });
-      const before = (cloudRoutineAuthors ?? desktopRoutineAuthors) ? routines!.listRoutines().find((candidate) => candidate.id === routineMatch![1]) : undefined;
-      const wasOwners = Boolean(before && (cloudRoutineAuthors ?? desktopRoutineAuthors)?.authored(before.id, before));
+      const authors = cloudRoutineAuthors ?? phones.routineAuthors;
+      const before = authors ? routines!.listRoutines().find((candidate) => candidate.id === routineMatch![1]) : undefined;
+      const wasOwners = Boolean(before && authors?.authored(before.id, before));
       const previous = cloudRoutineAuthors?.writer(routineMatch[1]);
       // A fingerprint that no longer matches means someone else changed what the routine runs; only the owner rewriting its instructions renews it.
       const ownerWriterOnly = CLOUD_OWNER_KEY !== null && previous === CLOUD_OWNER_KEY && !cloudRoutineAuthors?.recorded(routineMatch[1]);
@@ -15605,7 +15655,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           : previous && !cloudOwnerPerson(previous) ? previous : CLOUD_NOBODY_KEY;
       const routine = withRoutineWriter(writer, () => routines!.update(routineMatch![1], body));
       // Anyone else's edit, of any field, makes the routine no longer the owner's until the owner rewrites it; off a Cloud home the same for the desktop owner's phones.
-      if (routine && desktopRoutineAuthors) { if (!ownerOrAdmin(auth)) desktopRoutineAuthors.forget(routine.id); else if (wasOwners || (body && typeof body === "object" && "prompt" in body)) desktopRoutineAuthors.record(routine.id, routine); } if (routine && cloudRoutineAuthors) {
+      if (routine) phones.routineEdited(auth, routine, wasOwners || Boolean(body && typeof body === "object" && "prompt" in body));
+      if (routine && cloudRoutineAuthors) {
         if (!cloudOwnerSession(auth)) cloudRoutineAuthors.forget(routine.id);
         else if (ownerAuthors) cloudRoutineAuthors.record(routine.id, routine);
         cloudRoutineAuthors.wrote(routine.id, writer);
@@ -15614,7 +15665,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (routineMatch && method === "DELETE") {
       const removed = routines!.remove(routineMatch[1]);
-      if (removed) (cloudRoutineAuthors ?? desktopRoutineAuthors)?.remove(routineMatch[1]);
+      if (removed) (cloudRoutineAuthors ?? phones.routineAuthors)?.remove(routineMatch[1]);
       return removed ? json(res, 200, { ok: true }) : json(res, 404, { error: "no such routine" });
     }
     if (path === "/api/routine-runs/seen-all" && method === "POST") {
@@ -16019,7 +16070,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (method === "GET" && path === "/api/connectors/tools") {
       const availability = composio.connectorAvailability(cfg);
-      const highlevelTools = { ...highlevelHost.toolListing(), ...phoneHost.toolListing() };
+      const highlevelTools = { ...highlevelHost.toolListing(), ...phones.toolListing() };
       if (availability !== "configured") {
         return json(res, 200, { configured: Object.keys(highlevelTools).length > 0, services: highlevelTools });
       }
@@ -16533,7 +16584,8 @@ const gracefulShutdown = createGracefulShutdown({
       if (workspaceAccessTimer) clearInterval(workspaceAccessTimer);
       // Invalidate turn bearers before any cleanup reaches an await: child MCP processes and the listener may outlive it.
       revokeAllInternalCapabilities();
-      sharedComputers.close(); deviceLinks.close(); phoneJobs.close();
+      sharedComputers.close(); deviceLinks.close();
+      phones.close();
       sharedComputerControl.close();
       browserLive.closeAll();
       desktopViewer.closeAll();
