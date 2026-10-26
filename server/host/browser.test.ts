@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +11,9 @@ import { browserEgress } from "../browser/egress/registry.ts";
 import type { Audience } from "../audience.ts";
 import { DATA_DIR, type AppConfig } from "../config.ts";
 import type { Store } from "../store.ts";
-import type { TurnOwner } from "../turn-resources.ts";
+import { TurnResources, type TurnOwner } from "../turn-resources.ts";
+import { BrowserRuntime } from "../browser-runtime.ts";
+import { LentChromeDoors, type ChromeLender } from "../browser/lent-chrome.ts";
 import { audienceBrowserSuffix } from "../browser/audience.ts";
 import { chromeLauncher } from "../browser/chrome/launcher.ts";
 import { createBrowserHost, type BrowserHostDeps } from "./browser.ts";
@@ -36,9 +39,10 @@ afterEach(async () => { await Promise.all(hosts.splice(0).map((host) => host.bro
 
 const turn = { threadId: "thread-1", generation: "gen-1" };
 
-function setup(engine: "chrome" | "agent-browser" | undefined, { cloudHome = false, device, mayLend, holder, audienceOf, bots: botIds = ["scout"], browserBox }: {
+function setup(engine: "chrome" | "agent-browser" | undefined, { cloudHome = false, device, mayLend, holder, audienceOf, bots: botIds = ["scout"], browserBox, lentChrome, turnResources }: {
   cloudHome?: boolean; device?: BrowserHostDeps["device"]; mayLend?: BrowserHostDeps["mayLend"]; holder?: (resource: string) => TurnOwner | undefined;
   audienceOf?: BrowserHostDeps["audienceOf"]; bots?: string[]; browserBox?: BrowserHostDeps["browserBox"];
+  lentChrome?: BrowserHostDeps["lentChrome"]; turnResources?: BrowserHostDeps["turnResources"];
 } = {}) {
   const cfg = {
     features: { browser: true },
@@ -53,7 +57,7 @@ function setup(engine: "chrome" | "agent-browser" | undefined, { cloudHome = fal
   const host = createBrowserHost({
     cfg,
     store: () => ({ bots, bot: (id: string) => bots.find((bot) => bot.id === id), botByThread: () => bots[0] }) as unknown as Pick<Store, "bots" | "bot" | "botByThread">,
-    turnResources: { free: () => true, holder: holder ?? (() => undefined) },
+    turnResources: turnResources ?? { free: () => true, holder: holder ?? (() => undefined), onClaim: () => () => {} },
     activeInternalGenerationByThread: new Map([[turn.threadId, turn.generation]]),
     mintInternalCapability: (capability) => { minted.push(capability); return "capability-token"; },
     DESKTOP_MANAGED: !cloudHome,
@@ -63,6 +67,7 @@ function setup(engine: "chrome" | "agent-browser" | undefined, { cloudHome = fal
     mayLend,
     audienceOf,
     browserBox,
+    lentChrome,
   });
   hosts.push(host);
   return { cfg, host, minted, bots };
@@ -74,7 +79,7 @@ describe("the bots' browser host and the engine memory guard", () => {
     const host = createBrowserHost({
       cfg: { features: { browser: true } } as unknown as AppConfig,
       store: () => ({ bots: [], bot: () => undefined, botByThread: () => undefined }) as unknown as Pick<Store, "bots" | "bot" | "botByThread">,
-      turnResources: { free: () => true, holder: () => undefined },
+      turnResources: { free: () => true, holder: () => undefined, onClaim: () => () => {} },
       activeInternalGenerationByThread: new Map(),
       mintInternalCapability: () => "capability-token",
       DESKTOP_MANAGED: false,
@@ -193,6 +198,108 @@ describe("the person's lent computer's connection, for a bot's browser on My Clo
     const device = configure.mock.lastCall![0].device!;
     configure.mockRestore();
     expect(device("bot-1")).toBeNull();
+  });
+});
+
+describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
+  const lender: ChromeLender = { name: "Mac", device: "Mac", online: true };
+  const DOOR = /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[0-9a-f]{64}$/;
+  const OWNER = turn;
+  const GUEST = { threadId: "guest-thread", generation: "gen-b" };
+  const SNAPSHOT = { name: "agent_browser_snapshot", arguments: {} };
+  type Answer = { isError?: boolean; content: Array<{ type: string; text: string }> };
+  afterEach(async () => {
+    await Promise.all(hosts.map((host) => host.browserSweep.closeAll()));
+    vi.restoreAllMocks();
+    vi.mocked(browserEngineStatus).mockReset();
+  });
+
+  /** A personal Cloud home whose bot "scout" uses the My Chrome profile "mine"; `lend` changes which computer lends Chrome. */
+  function onMyCloud(found: ChromeLender | null, mayLend: (turn: TurnOwner) => boolean = () => true) {
+    vi.mocked(browserEngineStatus).mockReturnValue({ kind: "ready", binaryPath: "/usr/local/bin/agent-browser", version: "0.37.0", managed: false });
+    let current = found;
+    const resources = new TurnResources();
+    const route = vi.fn(() => null);
+    const made = setup(undefined, { cloudHome: true, mayLend, turnResources: resources, lentChrome: { route, lender: () => current } });
+    made.cfg.browserProfiles = [{ id: "mine", name: "Mine", browser: "chrome" }] as AppConfig["browserProfiles"];
+    (made.bots[0] as { browserProfile?: string }).browserProfile = "mine";
+    return { ...made, resources, route, lend: (next: ChromeLender | null) => { current = next; } };
+  }
+  /** What the door answers a client that has its token. */
+  async function knock(url: string): Promise<string> {
+    const { port, pathname } = new URL(url);
+    const socket = connect(Number(port), "127.0.0.1");
+    socket.write(`GET ${pathname} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
+    let answer = "";
+    for await (const chunk of socket) answer += String(chunk);
+    return answer.split("\r\n")[0]!;
+  }
+
+  it("on My Cloud a My Chrome profile attaches through the lent computer's door", async () => {
+    const { host, lend } = onMyCloud(lender);
+    expect(host.myChromeAvailable()).toBe(true);
+    const browser = await host.browserIntegration("scout", "mine", turn);
+    expect(browser?.spec.env.AGENT_BROWSER_CDP).toMatch(DOOR);
+    expect(browser?.spec.env).not.toHaveProperty("AGENT_BROWSER_AUTO_CONNECT");
+    host.usedBrowserSessions.clear();
+    expect((await host.currentBrowserSpec("scout", "mine"))?.spec.env.AGENT_BROWSER_CDP, "the live view's spec names the same door").toBe(browser?.spec.env.AGENT_BROWSER_CDP);
+    lend(null);
+    expect(host.myChromeAvailable()).toBe(false);
+  });
+
+  it("a conversation that may not lend loses the Chrome connection and is told why", async () => {
+    const drop = vi.spyOn(LentChromeDoors.prototype, "drop");
+    const reached = vi.spyOn(BrowserRuntime.prototype, "agentRpc");
+    const { host, resources, route } = onMyCloud(lender, (holder) => holder.threadId !== GUEST.threadId);
+    const browser = await host.browserIntegration("scout", "mine", turn);
+    const session = browser!.session;
+    expect(resources.claim(`browser:${session}`, OWNER)).toBe(true);
+    expect(drop, "the person's own turn keeps the connection").not.toHaveBeenCalled();
+    resources.release(OWNER);
+    expect(resources.claim(`browser:${session}`, GUEST)).toBe(true);
+    expect(drop).toHaveBeenCalledWith(session);
+    const refused = { isError: true, content: [{ type: "text", text: expect.stringContaining("Someone else wrote in this conversation, so it can't use your Chrome.") }] };
+    await expect(host.browserRuntime.agentRpc(session, browser!.spec, "tools/call", SNAPSHOT)).resolves.toEqual(refused);
+    resources.release(GUEST);
+    await expect(host.browserRuntime.agentRpc(session, browser!.spec, "tools/call", SNAPSHOT), "the browser stays off the lent Chrome after that turn ends").resolves.toEqual(refused);
+    expect(await knock(browser!.spec.env.AGENT_BROWSER_CDP!), "agent-browser's reconnect is refused too").toBe("HTTP/1.1 403 Forbidden");
+    expect(route).not.toHaveBeenCalled();
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it("an offline or missing lender is explained before the call reaches the browser", async () => {
+    const reached = vi.spyOn(BrowserRuntime.prototype, "agentRpc");
+    const { host, lend } = onMyCloud({ ...lender, online: false });
+    const browser = await host.browserIntegration("scout", "mine", turn);
+    const call = async () => (await host.browserRuntime.agentRpc(browser!.session, browser!.spec, "tools/call", SNAPSHOT)) as Answer;
+    expect(await call()).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("is lent but offline") }] });
+    lend(null);
+    expect(await call()).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("turn on Your Chrome") }] });
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it("a call that failed at the lent computer says why after agent-browser's own error", async () => {
+    const cdpError = { isError: true, content: [{ type: "text", text: "CDP WebSocket connect failed: 503" }] };
+    vi.spyOn(BrowserRuntime.prototype, "agentRpc").mockResolvedValue(cdpError);
+    const { host } = onMyCloud(lender);
+    const browser = await host.browserIntegration("scout", "mine", turn);
+    const call = async () => (await host.browserRuntime.agentRpc(browser!.session, browser!.spec, "tools/call", SNAPSHOT)) as Answer;
+    expect(await call(), "nothing is known yet").toEqual(cdpError);
+    expect(await knock(browser!.spec.env.AGENT_BROWSER_CDP!), "the link is gone though the computer was online").toBe("HTTP/1.1 503 Service Unavailable");
+    const answer = await call();
+    expect(answer.content).toHaveLength(2);
+    expect(answer.content[0]).toEqual(cdpError.content[0]);
+    expect(answer.content[1]!.text).toContain("Mac is lent but offline");
+  });
+
+  it("the summary says which computer lends Chrome, or that one can", () => {
+    const { cfg, host, lend } = onMyCloud(lender);
+    expect(host.lentChromeSummary()).toEqual({ myChromeOn: lender });
+    cfg.browserEngine = { engine: "chrome" };
+    expect(host.engineSummary({ kind: "engine", version: "0.37.0", myChrome: true }), "My Chrome stays on agent-browser").toMatchObject({ engine: "chrome", myChromeOn: lender });
+    lend(null);
+    expect(host.lentChromeSummary()).toEqual({ myChromeLendable: true });
+    expect(setup(undefined).host.lentChromeSummary(), "the desktop host").toEqual({});
   });
 });
 

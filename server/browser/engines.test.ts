@@ -97,7 +97,7 @@ describe("the runtime router", () => {
   const onHost = (host: EgressHost) => {
     const egress = new BrowserEgress();
     egress.configure({ host, config: () => ({}), ownership: { botOwned: async () => false } as unknown as ListenerOwnership, listeners: new OwnListeners(host, { env: {}, streamPorts: () => [], devToolsPorts: () => [] }) });
-    return engines({ refusal: (spec, params) => (attachesToChrome(spec.env) ? null : egress.callRefusal(params)) });
+    return engines({ refusal: (_session, spec, params) => (attachesToChrome(spec.env) ? null : egress.callRefusal(params)) });
   };
   const OPENS_REDDIT = [
     { name: "agent_browser_open", arguments: { url: "https://www.reddit.com/r/test/" } },
@@ -132,6 +132,23 @@ describe("the runtime router", () => {
     const { runtime } = onHost("cloud");
     const myChrome = { ...AGENT_BROWSER, env: { ...AGENT_BROWSER.env, AGENT_BROWSER_AUTO_CONNECT: "1" } };
     await expect(runtime.agentRpc("s", myChrome, "tools/call", OPENS_REDDIT[0])).resolves.toBe("agent-browser");
+  });
+
+  it("refusal and afterCall see the session", async () => {
+    const refused: string[] = [];
+    const afterCall = vi.fn((_session: string, _spec: unknown, result: unknown) => ({ after: result }));
+    const { old, runtime } = engines({
+      refusal: (session) => { refused.push(session); return null; },
+      annotate: (_spec, result) => ({ annotated: result }),
+      afterCall,
+    });
+    await expect(runtime.agentRpc("s1", AGENT_BROWSER, "tools/call", { name: "agent_browser_snapshot" })).resolves.toEqual({ after: { annotated: "agent-browser" } });
+    expect(refused).toEqual(["s1"]);
+    expect(afterCall).toHaveBeenCalledWith("s1", AGENT_BROWSER, { annotated: "agent-browser" });
+    await expect(runtime.agentRpc("s1", AGENT_BROWSER, "tools/list", {}), "a listing is neither refused nor passed on").resolves.toBe("agent-browser");
+    expect(refused).toEqual(["s1"]);
+    expect(afterCall).toHaveBeenCalledOnce();
+    expect(old.agentRpc).toHaveBeenCalledTimes(2);
   });
 
   it("answers who holds a session and what was interrupted across both engines", () => {

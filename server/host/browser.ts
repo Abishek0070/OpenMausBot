@@ -39,6 +39,8 @@ import { browserEngineKind, type BrowserEngineKind } from "../browser/config.ts"
 import { ChromeEngine, chromeTarget, LiveRouter, profileKey, RuntimeRouter } from "../browser/engines.ts";
 import { CHROME_BROWSER_SYSTEM_PROMPT } from "../browser/prompt.ts";
 import { passkeyAnnotation } from "../browser/passkey-notice.ts";
+import { LentChromeDoors, lentChromeGuidance, type ChromeLender } from "../browser/lent-chrome.ts";
+import type { ChromeRoute } from "../device-links.ts";
 import type { EngineBrowsers } from "../engine-memory.ts";
 import { augmentedPath } from "../env-path.ts";
 import { harnessMcpTokenEnv } from "../harness-mcp-token.ts";
@@ -51,7 +53,7 @@ export interface BrowserHostDeps {
   cfg: AppConfig;
   /** The store is built after this host, so it is read when used. */
   store(): Pick<Store, "bots" | "bot" | "botByThread">;
-  turnResources: Pick<TurnResources, "free" | "holder">;
+  turnResources: Pick<TurnResources, "free" | "holder" | "onClaim">;
   activeInternalGenerationByThread: ReadonlyMap<string, string>;
   mintInternalCapability(capability: {
     botId: string; threadId: string; generation: string; browserSession: string; kind: "browser";
@@ -64,6 +66,8 @@ export interface BrowserHostDeps {
   device?: EgressSetup["device"];
   /** Whether a turn may use the person's lent computer (cloud-lending.ts). Without it, no browser a turn holds may. */
   mayLend?(turn: TurnOwner): boolean;
+  /** My Cloud's way to the person's own Chrome on the computer that lends it, and which computer that is. */
+  lentChrome?: { route(): ChromeRoute | null; lender(): ChromeLender | null };
   /** The engine memory guard, told which browsers each thread's turn starts or holds. */
   engineMemory?: { useBrowsers(browsers: EngineBrowsers): void };
   /** Whose browser a conversation's turns use on a Team Cloud: the member's, the group chat's or the team's. Every
@@ -118,17 +122,48 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     idleMs,
     log: (line) => console.warn(line),
   });
+  const mayLend = deps.mayLend ?? (() => false);
+  const lentChrome = deps.lentChrome;
+  const chromeLends = new Map<string, boolean>();
+  /** lentDevice's rule for the lent Chrome: the last holder's verdict, and a browser no turn has held is the person's own. */
+  function lentChromeAllowed(session: string): boolean {
+    const turn = turnResources.holder(`browser:${session}`);
+    if (turn) chromeLends.set(session, mayLend(turn));
+    return chromeLends.get(session) !== false;
+  }
+  const doors = lentChrome ? new LentChromeDoors({ route: () => lentChrome.route(), allowed: lentChromeAllowed, idleMs }) : undefined;
   // A tool call that would open Reddit from MausBot Cloud is refused before it reaches the browser. My Chrome is the
-  // person's own, outside the egress gate too.
+  // person's own, outside the egress gate too; on My Cloud a call that can't reach it now says why instead.
   const browserRuntime = new RuntimeRouter(agentBrowserRuntime, chromeEngine, {
-    refusal: (spec, params) => (attachesToChrome(spec.env) ? null : browserEgress.callRefusal(params)),
+    refusal: (session, spec, params) => {
+      if (!doors?.owns(session)) return attachesToChrome(spec.env) ? null : browserEgress.callRefusal(params);
+      const lender = lentChrome?.lender() ?? null;
+      if (!lentChromeAllowed(session)) return lentChromeGuidance("not-allowed", lender);
+      if (!lender) return lentChromeGuidance("not-lent", null);
+      return lender.online ? null : lentChromeGuidance("offline", lender);
+    },
     annotate: passkeyAnnotation(CLOUD_HOME ? "cloud" : DESKTOP_MANAGED ? "desktop" : "server"),
+    // agent-browser's own error names only the CDP connection; the door knows what went wrong on the way.
+    afterCall: (session, _spec, result) => {
+      const failed = result as { isError?: unknown; content?: unknown };
+      const problem = failed?.isError === true && doors?.owns(session) ? doors.problem(session) : null;
+      if (!problem) return result;
+      const content = Array.isArray(failed.content) ? failed.content : [];
+      return { ...failed, content: [...content, { type: "text", text: lentChromeGuidance(problem, lentChrome?.lender() ?? null) }] };
+    },
+  });
+  // agent-browser keeps its Chrome connection across turns, so a turn that may not lend must not inherit an open one.
+  if (doors) turnResources.onClaim((resource, owner) => {
+    const session = resource.startsWith("browser:") ? resource.slice("browser:".length) : null;
+    if (session === null || !doors.owns(session) || mayLend(owner)) return;
+    chromeLends.set(session, false);
+    doors.drop(session);
   });
   const browserLive = new LiveRouter(agentBrowserLive, chromeEngine);
   const usedBrowserSessions = new Map<string, Spec>();
   const audiences = new AudienceBrowsers(join(DATA_DIR, "browser", "audiences.json"));
   const browserAudience = (threadId: string | undefined): Audience => (threadId && deps.audienceOf ? deps.audienceOf(threadId) : "team");
-  const device = deps.device && lentDevice(deps.device, (session) => turnResources.holder(`browser:${session}`), deps.mayLend ?? (() => false));
+  const device = deps.device && lentDevice(deps.device, (session) => turnResources.holder(`browser:${session}`), mayLend);
   browserEgress.configure({ host: DESKTOP_MANAGED ? "desktop" : CLOUD_HOME ? "cloud" : "server", config: () => cfg.browserEngine?.egress, ...(device ? { device } : {}) });
   /** A live bot's, profile's or temporary browser of this data dir, for any audience. */
   const belongs = (session: string) => isTemporaryBrowserSession(session) || audiences.variants().some((suffix) =>
@@ -149,7 +184,10 @@ export function createBrowserHost(deps: BrowserHostDeps) {
       chromeEngine.start({ inUse: browserEngineKind(cfg) === "chrome", prepare: builtInBrowserEnabled(cfg) });
       return browserSweep;
     },
-    closeAll: () => agentBrowserSweep.closeAll(),
+    closeAll: () => {
+      doors?.close();
+      return agentBrowserSweep.closeAll();
+    },
   };
   // The viewer and the agent must address the SAME temporary browser.
   const temporaryBrowserSessions = new Map<string, string>();
@@ -205,14 +243,24 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     else console.warn(`temporary browser ${session}: could not close its session; run agent-browser --session ${session} close on this server`);
   }
   function myChromeAvailable(): boolean {
-    return DESKTOP_MANAGED || browserEngineAttachCdpUrl(cfg) !== null;
+    return DESKTOP_MANAGED || browserEngineAttachCdpUrl(cfg) !== null || Boolean(lentChrome?.lender());
+  }
+  /** A My Chrome profile on My Cloud: the person's lent Chrome, through this session's door. */
+  function lentChromeSession(profileId: string | undefined): boolean {
+    return !DESKTOP_MANAGED && browserEngineAttachCdpUrl(cfg) === null && doors !== undefined && usesMyChrome(profileId);
+  }
+  /** Where My Chrome is on My Cloud: the computer that lends it, or that one could. */
+  function lentChromeSummary(): { myChromeOn?: ChromeLender; myChromeLendable?: true } {
+    const lender = lentChrome?.lender() ?? null;
+    if (lender) return { myChromeOn: lender };
+    return lentChrome ? { myChromeLendable: true } : {};
   }
   function usesMyChrome(profileId: string | undefined): boolean {
     return Boolean(profileId) && myChromeAvailable()
       && cfg.browserProfiles?.some((profile) => profile.id === profileId && profile.browser === "chrome") === true;
   }
-  function browserSessionSpec(binaryPath: string, session: string, profile: string | undefined, egressPort?: number) {
-    const attachCdpUrl = browserEngineAttachCdpUrl(cfg);
+  function browserSessionSpec(binaryPath: string, session: string, profile: string | undefined, egressPort?: number, cdpUrl?: string) {
+    const attachCdpUrl = cdpUrl ?? browserEngineAttachCdpUrl(cfg);
     return agentBrowserIntegration({
       binaryPath, session, encryptionKey: browserEngineEncryptionKey(), persistent: profile !== "guest", egressPort,
       env: { ...process.env, PATH: augmentedPath() },
@@ -262,7 +310,8 @@ export function createBrowserHost(deps: BrowserHostDeps) {
       return null;
     }
     const session = currentBrowserSession(botId, profile, audience);
-    const spec = browserSessionSpec(status.binaryPath, session, browserProfileId, usesMyChrome(browserProfileId) ? undefined : await browserEgress.open(session));
+    const cdpUrl = lentChromeSession(browserProfileId) ? await doors?.door(session) : undefined;
+    const spec = browserSessionSpec(status.binaryPath, session, browserProfileId, usesMyChrome(browserProfileId) ? undefined : await browserEgress.open(session), cdpUrl);
     usedBrowserSessions.set(session, spec);
     await prepareBrowserSessionState(status.binaryPath, session, { env: spec.env, persistent: profile !== "guest" && !attachesToChrome(spec.env), isCurrent: () => {
       const current = store.bot(botId);
@@ -279,7 +328,11 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     const engine = browserEngineStatus();
     if (engine.kind !== "ready") return null;
     const session = currentBrowserSession(botId, profile, audience);
-    return { session, spec: usedBrowserSessions.get(session) ?? browserSessionSpec(engine.binaryPath, session, browserProfileIdOf(profile), await browserEgress.open(session)) };
+    const used = usedBrowserSessions.get(session);
+    if (used) return { session, spec: used };
+    const profileId = browserProfileIdOf(profile);
+    const cdpUrl = lentChromeSession(profileId) ? await doors?.door(session) : undefined;
+    return { session, spec: browserSessionSpec(engine.binaryPath, session, profileId, await browserEgress.open(session), cdpUrl) };
   }
   /** fill_login's reads and typing, on whichever engine runs the session. */
   function loginInput(session: string, spec: Spec, env: NodeJS.ProcessEnv): Pick<FillLoginDeps, "engine" | "insertText" | "press" | "click"> {
@@ -432,12 +485,12 @@ export function createBrowserHost(deps: BrowserHostDeps) {
   /** What Settings shows of the engine that runs bots' browsers here; My Chrome stays on agent-browser. */
   function engineSummary<T extends { myChrome: boolean }>(agentBrowser: T): (T | (ReturnType<ChromeEngine["summary"]> & { myChrome: boolean })) & { engine: BrowserEngineKind } {
     if (browserEngineKind(cfg) !== "chrome") return { ...agentBrowser, engine: "agent-browser" };
-    return { ...chromeEngine.summary(), myChrome: agentBrowser.myChrome, engine: "chrome" };
+    return { ...chromeEngine.summary(), myChrome: agentBrowser.myChrome, ...lentChromeSummary(), engine: "chrome" };
   }
 
   return {
     browserRuntime, browserLive, usedBrowserSessions, browserSweep, temporaryBrowserSessions, browserIdleMs: idleMs,
-    currentBrowserSession, forgetTemporaryBrowser, myChromeAvailable, usesMyChrome, browserSessionSpec, browserIntegration,
+    currentBrowserSession, forgetTemporaryBrowser, myChromeAvailable, lentChromeSummary, usesMyChrome, browserSessionSpec, browserIntegration,
     browserReady, currentBrowserSpec, loginInput, browserSystemPrompt, signedInSitesRefusal, closeBrowser, browserEngineSwitched,
     eraseDeletedBrowser, engineSummary, engineBrowsers, browserAudience, browserSessionsOf, signedInSitesTarget, uploadPaths,
     eraseAudienceBrowsers,
