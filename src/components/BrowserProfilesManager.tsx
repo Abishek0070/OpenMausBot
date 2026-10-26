@@ -149,6 +149,8 @@ export function BrowserProfilesManager({ bot, onProfileChanged, disabled = false
   const selected = currentBot?.browserProfile ?? "";
   const selectedProfile = profiles.find((profile) => profile.id === selected);
   const usersOf = (profileId: string) => bots.filter((candidate) => candidate.browserProfile === profileId).map((candidate) => candidate.name);
+  // On My Cloud a My Chrome profile keeps waiting for a lent Chrome, so it has no built-in sign-ins to list.
+  const usesMyChrome = (profile: BrowserProfile | undefined) => profile?.browser === "chrome" && (myChrome || myChromeLendable);
   const chromeNote = <>
     <p className="text-[11px] leading-relaxed text-ink-secondary">{t("settings.profiles.myChromeHint")}</p>
     {myChromeOn && <p className="text-[11px] leading-relaxed text-ink-secondary">{t("settings.profiles.myChromeLent", { name: myChromeOn.name, device: myChromeOn.device })}</p>}
@@ -174,7 +176,10 @@ export function BrowserProfilesManager({ bot, onProfileChanged, disabled = false
           <p className="text-[11px] leading-relaxed text-ink-secondary">
             {currentBot.busy ? t("settings.profiles.stopToSwitch") : selected === "guest" ? t("settings.profiles.temporaryHint") : t("settings.profiles.sharedHint")}
           </p>
-          {selectedProfile?.browser === "chrome" && myChrome ? chromeNote
+          {usesMyChrome(selectedProfile) ? <>
+            {chromeNote}
+            {!myChrome && <p className="text-[11px] leading-relaxed text-ink-secondary">{t("settings.profiles.myChromeLend")}</p>}
+          </>
             : (selected === "" || selectedProfile) && (
               <SignedInSites key={`${currentBot.id}:${selected}`} target={{ bot: currentBot.id }} scope={browserScope(state.config?.team, bot?.threadId)} sharedBy={selected ? usersOf(selected) : [currentBot.name]} disabled={locked} />
             )}
@@ -195,7 +200,7 @@ export function BrowserProfilesManager({ bot, onProfileChanged, disabled = false
             {profiles.map((profile) => {
               const users = usersOf(profile.id);
               const blocked = browserProfileDeletionBlockReason(bots, profile.id);
-              const chrome = profile.browser === "chrome" && myChrome;
+              const chrome = usesMyChrome(profile);
               return (
                 <div key={profile.id} className="flex flex-col gap-1 py-2">
                   <div className="flex min-w-0 items-center gap-2">

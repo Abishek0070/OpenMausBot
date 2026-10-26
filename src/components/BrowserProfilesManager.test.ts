@@ -108,6 +108,18 @@ describe("browser profile manager", () => {
     expect(html).not.toContain("there is no Chrome of yours to use");
   });
 
+  it("on My Cloud with nothing lent, a My Chrome profile shows the My Chrome note and how to lend it, never a sign-ins list", () => {
+    fixture.engine = { myChrome: false, myChromeLendable: true };
+    fixture.profiles = [{ id: "work", name: "Work", browser: "chrome" }];
+    const html = renderToStaticMarkup(createElement(BrowserProfilesManager));
+    expect(html).toContain("act inside your real Chrome");
+    expect(html).not.toContain("Signed-in sites");
+    const botPanel = renderToStaticMarkup(createElement(BrowserProfilesManager, { bot })).split("<details")[0]!;
+    expect(botPanel).toContain("act inside your real Chrome");
+    expect(botPanel).toContain("turn on Your Chrome");
+    expect(botPanel).not.toContain("Signed-in sites");
+  });
+
   it("lists the bot's own browser's sites, shared by nobody, and none for a temporary browser", () => {
     fixture.bots = [{ ...bot, browserProfile: undefined }];
     const own = renderToStaticMarkup(createElement(BrowserProfilesManager, { bot: fixture.bots[0] }));
