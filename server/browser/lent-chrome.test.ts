@@ -47,6 +47,22 @@ function joining(port: number): ChromeRoute {
   };
 }
 
+/** A route whose far end answers `reply` in two writes once joined, or holds the connection without a word. */
+function answering(reply: string | null): ChromeRoute & { joined: Promise<void> } {
+  let joined = () => {};
+  const done = new Promise<void>((resolve) => { joined = resolve; });
+  return {
+    joined: done,
+    open: async (): Promise<LinkOpened> => ({
+      join(socket) {
+        if (reply !== null) for (const part of [reply.slice(0, 7), reply.slice(7)]) socket.write(Buffer.from(part));
+        joined();
+      },
+      cancel() {},
+    }),
+  };
+}
+
 function make(route: ChromeRoute | null, extra: Partial<LentChromeDeps> = {}) {
   const calls = { open: 0 };
   const counted: ChromeRoute | null = route && { open: () => { calls.open += 1; return route.open(); } };
@@ -66,6 +82,10 @@ async function client(url: string, bytes?: Buffer, pathOverride?: string): Promi
   return socket;
 }
 
+const received = (socket: Socket, length: number) => within(new Promise<string>((done) => {
+  let got = "";
+  socket.on("data", (chunk: Buffer) => { got += chunk.toString("latin1"); if (got.length >= length) done(got); });
+}));
 const nextData = (socket: Socket) => within(new Promise<Buffer>((done) => socket.once("data", (chunk: Buffer) => done(chunk))));
 const closed = (socket: Socket) => within(new Promise<void>((done) => { socket.resume(); socket.once("close", () => done()); }));
 
@@ -120,7 +140,6 @@ describe("LentChromeDoors", () => {
   });
 
   it("each way of not reaching Chrome is recorded", async () => {
-    const target = await echo();
     const cases: [ChromeRoute | null, string][] = [
       [null, "offline"],
       [{ open: async () => ({ gone: true }) }, "offline"],
@@ -141,11 +160,28 @@ describe("LentChromeDoors", () => {
     const url = await door.door("s1");
     await nextData(await client(url));
     expect(door.problem("s1")).toBe("offline");
-    current = joining(target.port);
-    const socket = await client(url);
-    socket.write("x");
-    await nextData(socket);
+    const switched = "HTTP/1.1 101 Switching Protocols\r\n\r\n";
+    current = answering(switched);
+    await received(await client(url), switched.length);
     expect(door.problem("s1")).toBeNull();
+  });
+
+  it("a joined connection counts as reaching Chrome only once Chrome answers 101", async () => {
+    const silent = answering(null);
+    const held = make(silent).door;
+    await client(await held.door("s1"));
+    await within(silent.joined);
+    expect(held.problem("s1"), "Chrome waits for the person to click Allow").toBe("unreachable");
+
+    const denied = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
+    const refused = make(answering(denied)).door;
+    expect(await received(await client(await refused.door("s1")), denied.length)).toBe(denied);
+    expect(refused.problem("s1"), "the person clicked Deny").toBe("unreachable");
+
+    const switched = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
+    const letIn = make(answering(switched)).door;
+    expect(await received(await client(await letIn.door("s1")), switched.length), "every byte, in order").toBe(switched);
+    expect(letIn.problem("s1")).toBeNull();
   });
 
   it("drop ends the session's open connections and nothing else's", async () => {

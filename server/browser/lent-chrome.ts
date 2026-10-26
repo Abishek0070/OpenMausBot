@@ -26,6 +26,23 @@ function answer(socket: Socket, status: string): void {
   socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`, () => socket.destroy());
 }
 
+const UPGRADED = Buffer.from("HTTP/1.1 101");
+
+/** Tells once whether the first bytes written to `socket` start a WebSocket upgrade; every byte is written as it came. */
+function watchUpgrade(socket: Socket, answered: (upgraded: boolean) => void): void {
+  const write = socket.write as (...args: unknown[]) => boolean;
+  let seen = Buffer.alloc(0);
+  socket.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    seen = Buffer.concat([seen, Buffer.from(chunk)]);
+    const head = seen.subarray(0, UPGRADED.length);
+    if (head.length === UPGRADED.length || !head.equals(UPGRADED.subarray(0, head.length))) {
+      socket.write = write as Socket["write"];
+      answered(head.equals(UPGRADED));
+    }
+    return write.call(socket, chunk, ...rest);
+  }) as Socket["write"];
+}
+
 export class LentChromeDoors {
   readonly #deps: LentChromeDeps;
   readonly #doors = new Map<string, Promise<Door>>();
@@ -138,7 +155,9 @@ export class LentChromeDoors {
     const opened = await route.open().catch((): { gone: true } => ({ gone: true }));
     if (socket.destroyed) return void ("cancel" in opened && opened.cancel());
     if ("join" in opened) {
-      this.#problems.delete(session);
+      // Chrome holds its answer until the person clicks Allow and answers 403 on Deny, so only its 101 means it let us in.
+      this.#problems.set(session, "unreachable");
+      watchUpgrade(socket, (upgraded) => { if (upgraded) this.#problems.delete(session); });
       this.#joined.set(socket, { session, bytes: socket.bytesRead, at: Date.now() });
       opened.join(socket, [data]);
       return;
