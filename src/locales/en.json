@@ -880,6 +880,7 @@
   "lending.cloudSide.folderOne": "1 folder",
   "lending.cloudSide.screen": "apps and screen",
   "lending.cloudSide.internet": "internet connection",
+  "lending.cloudSide.chrome": "Chrome",
   "lending.cloudSide.internetAway": "While it's away, Instagram, YouTube and Google sign-in open from My Cloud's own connection and may turn your bots away.",
   "lending.cloudSide.terminal": "terminal",
   "lending.cloudSide.lastUsed": "Last used {when}",
