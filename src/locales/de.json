@@ -2346,5 +2346,7 @@
   "voice.libraryHint": "Wenn du eine auswählst, wird sie deinen Stimmen hinzugefügt.",
   "voice.adding": "Wird hinzugefügt…",
   "computer.simple.usingNow": "Gerade: {place}",
-  "automations.run.stoppedBecause": "Gestoppt: {reason}"
+  "automations.run.stoppedBecause": "Gestoppt: {reason}",
+  "chat.sentDirectly": "Direkt an {name} geschickt: Der Bot ist nicht in diesem Raum.",
+  "chat.sentDirectlyNotInRoom": "Direkt an {name} geschickt: Der Bot ist nicht in {room}."
 }

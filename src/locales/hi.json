@@ -2328,5 +2328,7 @@
   "voice.libraryHint": "किसी एक को चुनने पर वह आपकी आवाजों में जुड़ जाती है।",
   "voice.adding": "जोड़ी जा रही है…",
   "computer.simple.usingNow": "अभी: {place}",
-  "automations.run.stoppedBecause": "रोका गया: {reason}"
+  "automations.run.stoppedBecause": "रोका गया: {reason}",
+  "chat.sentDirectly": "सीधे {name} को भेजा: यह इस रूम में नहीं है।",
+  "chat.sentDirectlyNotInRoom": "सीधे {name} को भेजा: यह {room} में नहीं है।"
 }

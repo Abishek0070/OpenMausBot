@@ -2328,5 +2328,7 @@
   "voice.libraryHint": "En choisir une l'ajoute à vos voix.",
   "voice.adding": "Ajout en cours…",
   "computer.simple.usingNow": "En ce moment : {place}",
-  "automations.run.stoppedBecause": "Arrêtée : {reason}"
+  "automations.run.stoppedBecause": "Arrêtée : {reason}",
+  "chat.sentDirectly": "Envoyé directement à {name} : ce bot n'est pas dans ce salon.",
+  "chat.sentDirectlyNotInRoom": "Envoyé directement à {name} : ce bot n'est pas dans {room}."
 }
