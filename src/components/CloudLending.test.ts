@@ -295,6 +295,7 @@ it("turning the terminal off needs no question, and it is not kept when lending 
 
 it("a lent terminal is named in what is lent, in the same words as the Cloud's list", () => {
   expect(lentWhat([], false, false, true)).toBe("terminal");
+  expect(lentWhat([], false, true, false, true)).toBe("the internet connection and your Chrome");
   expect(lentWhat([{ name: "Plans", write: true }], true, true, true)).toBe("the internet connection, Plans (can edit), apps and screen, and terminal");
 });
 

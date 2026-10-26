@@ -3,12 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, BrowserProfile } from "@/state/store";
 
-const fixture = vi.hoisted(() => ({ profiles: [] as BrowserProfile[], bots: [] as Bot[], myChrome: true }));
+const fixture = vi.hoisted(() => ({ profiles: [] as BrowserProfile[], bots: [] as Bot[], myChrome: true, engine: undefined as Record<string, unknown> | undefined }));
 vi.mock("@/state/store", () => ({
   api: vi.fn(),
   ApiError: class extends Error {},
   useStore: () => ({
-    state: { config: { browserProfiles: fixture.profiles, browserEngine: { kind: "engine", myChrome: fixture.myChrome } }, bots: fixture.bots },
+    state: { config: { browserProfiles: fixture.profiles, browserEngine: fixture.engine ?? { kind: "engine", myChrome: fixture.myChrome } }, bots: fixture.bots },
     dispatch: vi.fn(),
     flushBotPatches: vi.fn(),
   }),
@@ -20,6 +20,7 @@ beforeEach(() => {
   fixture.profiles = [{ id: "work", name: "Work", partitionId: "LegacyWork" }];
   fixture.bots = [bot, { id: "scout", name: "Scout", browserProfile: "work" } as Bot];
   fixture.myChrome = true;
+  fixture.engine = undefined;
 });
 
 describe("browser profile manager", () => {
@@ -86,6 +87,23 @@ describe("browser profile manager", () => {
     expect(html).toContain("My Chrome is for the desktop app, where bots run on your own computer. Anywhere else, such as the Cloud, there is no Chrome of yours to use, so every profile uses the built-in browser.");
     expect(html).not.toContain("act inside your real Chrome");
     expect(html).toContain("Signed-in sites");
+  });
+
+  it("on My Cloud, My Chrome names the lent computer and says when it is offline", () => {
+    fixture.engine = { myChrome: true, myChromeOn: { name: "Studio Mac", device: "Mac", online: false } };
+    fixture.profiles = [{ id: "work", name: "Work", browser: "chrome" }];
+    const html = renderToStaticMarkup(createElement(BrowserProfilesManager, { bot: { ...bot, browserProfile: "work" } }));
+    expect(html).toContain("the Chrome on Studio Mac, your Mac");
+    expect(html).toContain("Studio Mac is offline right now.");
+    expect(html).not.toMatch(/<option value="chrome" disabled/);
+  });
+
+  it("on My Cloud with nothing lent, it says how to lend Chrome", () => {
+    fixture.engine = { myChrome: false, myChromeLendable: true };
+    fixture.profiles = [{ id: "work", name: "Work", browser: "chrome" }];
+    const html = renderToStaticMarkup(createElement(BrowserProfilesManager));
+    expect(html).toContain("turn on Your Chrome");
+    expect(html).not.toContain("there is no Chrome of yours to use");
   });
 
   it("lists the bot's own browser's sites, shared by nobody, and none for a temporary browser", () => {

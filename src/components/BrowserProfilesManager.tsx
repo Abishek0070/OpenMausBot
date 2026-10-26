@@ -17,6 +17,8 @@ export function BrowserProfilesManager({ bot, onProfileChanged, disabled = false
   const { state, dispatch, flushBotPatches } = useStore();
   const profiles = state.config?.browserProfiles ?? [];
   const myChrome = state.config?.browserEngine?.myChrome === true;
+  const myChromeOn = state.config?.browserEngine?.myChromeOn;
+  const myChromeLendable = state.config?.browserEngine?.myChromeLendable === true;
   const bots = state.bots ?? [];
   const currentBot = bot ? bots.find((candidate) => candidate.id === bot.id) ?? bot : undefined;
   const [canManage, setCanManage] = useState<boolean | null>(null);
@@ -147,7 +149,11 @@ export function BrowserProfilesManager({ bot, onProfileChanged, disabled = false
   const selected = currentBot?.browserProfile ?? "";
   const selectedProfile = profiles.find((profile) => profile.id === selected);
   const usersOf = (profileId: string) => bots.filter((candidate) => candidate.browserProfile === profileId).map((candidate) => candidate.name);
-  const chromeNote = <p className="text-[11px] leading-relaxed text-ink-secondary">{t("settings.profiles.myChromeHint")}</p>;
+  const chromeNote = <>
+    <p className="text-[11px] leading-relaxed text-ink-secondary">{t("settings.profiles.myChromeHint")}</p>
+    {myChromeOn && <p className="text-[11px] leading-relaxed text-ink-secondary">{t("settings.profiles.myChromeLent", { name: myChromeOn.name, device: myChromeOn.device })}</p>}
+    {myChromeOn?.online === false && <p className="text-[11px] leading-relaxed text-ink-secondary">{t("settings.profiles.myChromeLentOffline", { name: myChromeOn.name })}</p>}
+  </>;
   return (
     <div className="flex min-w-0 flex-col gap-3" aria-busy={busy}>
       {currentBot && (
@@ -183,7 +189,7 @@ export function BrowserProfilesManager({ bot, onProfileChanged, disabled = false
             <button type="submit" disabled={locked || !name.trim() || profiles.length >= 20} className={`${buttonClass} flex items-center gap-1`}><Plus size={13} />{t("settings.profiles.create")}</button>
           </form>
           {profiles.length >= 20 && <p className="text-[11px] text-ink-secondary">{t("settings.profiles.limit")}</p>}
-          {!myChrome && profiles.length > 0 && <p className="text-[11px] leading-relaxed text-ink-secondary">{t("settings.profiles.myChromeUnavailable")}</p>}
+          {!myChrome && profiles.length > 0 && <p className="text-[11px] leading-relaxed text-ink-secondary">{t(myChromeLendable ? "settings.profiles.myChromeLend" : "settings.profiles.myChromeUnavailable")}</p>}
           {!profiles.length && <p className="text-[12px] text-ink-secondary">{t("settings.profiles.sharedEmpty")}</p>}
           <div className="divide-y divide-hairline/30">
             {profiles.map((profile) => {
