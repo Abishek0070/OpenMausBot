@@ -29,13 +29,17 @@ async function fakeChrome({ onUpgrade } = {}) {
   server.on("connection", (socket) => socket.on("data", (data) => { state.bytes += data.length; }));
   server.on("upgrade", (req, socket, head) => {
     record(req);
-    if (req.url !== "/devtools/browser/REAL-ID") { socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"); return; }
+    if (req.url !== "/devtools/browser/REAL-ID") { socket.resume(); socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"); return; }
+    socket.resume(); // http stops reading once it emits `upgrade`; keep counting
     if (onUpgrade) { onUpgrade(socket); return; }
     wss.handleUpgrade(req, socket, head, (ws) => ws.on("message", (data) => ws.send(data.toString())));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return { seen, state, port: server.address().port, close: () => { wss.clients.forEach((c) => c.terminate()); server.closeAllConnections(); server.close(); } };
 }
+
+// A regression should fail a test, not hang the file.
+const bounded = (promise, what, ms = 5000) => Promise.race([promise, delay(ms).then(() => assert.fail(`timed out waiting for ${what}`))]);
 
 const withDir = async (text, body) => {
   const dir = await mkdtemp(join(tmpdir(), "chrome-door-"));
@@ -70,8 +74,9 @@ test("rewrites only a WebSocket upgrade to Chrome's browser or a page, with Chro
   assert.equal(rewriteHandshake(head("GET /devtools/browser/x HTTP/1.1", ...upgrade, "X-A: 1\rOrigin: https://evil.test"), target), null, "a bare CR inside a line");
 });
 
-test("a door to a running Chrome upgrades end to end and passes frames unchanged", async () => {
+test("a door to a running Chrome upgrades end to end and passes frames unchanged", async (t) => {
   const chrome = await fakeChrome();
+  t.after(() => chrome.close());
   await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
     const opened = await createChromeDoor({ dirs: [dir] }).open();
     assert.ok(opened.socket);
@@ -83,27 +88,27 @@ test("a door to a running Chrome upgrades end to end and passes frames unchanged
     assert.deepEqual(chrome.seen, [{ url: "/devtools/browser/REAL-ID", host: `127.0.0.1:${chrome.port}`, origin: undefined }]);
     ws.terminate(); local.close();
   });
-  chrome.close();
 });
 
-test("a request that is not a WebSocket upgrade gets 403 and never reaches Chrome", async () => {
+test("a request that is not a WebSocket upgrade gets 403 and never reaches Chrome", async (t) => {
   const chrome = await fakeChrome();
+  t.after(() => chrome.close());
   await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
     const { socket } = await createChromeDoor({ dirs: [dir] }).open();
     const chunks = [];
     socket.on("data", (c) => chunks.push(c));
     const closed = new Promise((resolve) => socket.on("close", resolve));
     await new Promise((resolve) => socket.write("GET /json/new?https://x HTTP/1.1\r\nHost: a\r\n\r\n", resolve));
-    await closed;
+    await bounded(closed, "closed");
     assert.match(Buffer.concat(chunks).toString(), /^HTTP\/1\.1 403 Forbidden\r\n/);
     assert.deepEqual(chrome.seen, []);
     assert.equal(chrome.state.bytes, 0);
   });
-  chrome.close();
 });
 
-test("an oversized head is dropped", async () => {
+test("an oversized head is dropped", async (t) => {
   const chrome = await fakeChrome();
+  t.after(() => chrome.close());
   await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
     const { socket } = await createChromeDoor({ dirs: [dir] }).open();
     socket.on("error", () => {});
@@ -113,7 +118,6 @@ test("an oversized head is dropped", async () => {
     assert.deepEqual(chrome.seen, []);
     assert.equal(chrome.state.bytes, 0);
   });
-  chrome.close();
 });
 
 test("no DevToolsActivePort, or a stale one whose port refuses, is no-chrome", async () => {
@@ -127,22 +131,24 @@ test("no DevToolsActivePort, or a stale one whose port refuses, is no-chrome", a
 
 const UPGRADE = "GET /devtools/browser/TOKEN HTTP/1.1\r\nHost: a\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
 
-test("a second request pipelined behind the upgrade never reaches Chrome", async () => {
+test("a second request pipelined behind the upgrade never reaches Chrome", async (t) => {
   const chrome = await fakeChrome({ onUpgrade: (socket) => { socket.write("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"); } });
+  t.after(() => chrome.close());
   await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
     const { socket } = await createChromeDoor({ dirs: [dir] }).open();
     socket.on("data", () => {});
     const closed = new Promise((resolve) => socket.on("close", resolve));
     socket.write(`${UPGRADE}GET /json/list HTTP/1.1\r\nHost: localhost\r\n\r\n`);
-    await closed;
+    await bounded(closed, "closed");
+    await delay(100);
     assert.deepEqual(chrome.seen.map((r) => r.url), ["/devtools/browser/REAL-ID"]);
     assert.equal(chrome.state.bytes, UPGRADE.replace("TOKEN", "REAL-ID").length - "Host: a".length + `Host: 127.0.0.1:${chrome.port}`.length);
   });
-  chrome.close();
 });
 
-test("when Chrome answers anything but 101, held bytes are not sent and the guard ends after delivering the answer", async () => {
+test("when Chrome answers anything but 101, held bytes are not sent and the guard ends after delivering the answer", async (t) => {
   const chrome = await fakeChrome();
+  t.after(() => chrome.close());
   await withDir(`${chrome.port}\n/devtools/browser/NOT-REAL\n`, async (dir) => {
     const { socket } = await createChromeDoor({ dirs: [dir] }).open();
     const chunks = [];
@@ -150,17 +156,18 @@ test("when Chrome answers anything but 101, held bytes are not sent and the guar
     const closed = new Promise((resolve) => socket.on("close", resolve));
     socket.write(UPGRADE);
     const second = new Promise((resolve) => socket.write("GET /json/list HTTP/1.1\r\nHost: x\r\n\r\n", resolve));
-    await closed;
-    await second;
+    await bounded(closed, "closed");
+    await bounded(second, "second");
+    await delay(100); // anything wrongly sent after the answer would land by now
     assert.match(Buffer.concat(chunks).toString(), /^HTTP\/1\.1 404 /);
     assert.equal(chrome.seen.length, 1, "only the upgrade, never the held request");
-    assert.ok(chrome.state.bytes < UPGRADE.length + 20, "held bytes were not sent");
+    assert.equal(chrome.state.bytes, UPGRADE.replace("TOKEN", "NOT-REAL").length - "Host: a".length + `Host: 127.0.0.1:${chrome.port}`.length, "only the head reached Chrome, never the held request");
   });
-  chrome.close();
 });
 
-test("bytes Chrome sends just before it closes still arrive when the guard was paused", async () => {
+test("bytes Chrome sends just before it closes still arrive when the guard was paused", async (t) => {
   const chrome = await fakeChrome({ onUpgrade: (socket) => socket.end("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nTAIL") });
+  t.after(() => chrome.close());
   await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
     const { socket } = await createChromeDoor({ dirs: [dir] }).open();
     const chunks = [];
@@ -170,14 +177,14 @@ test("bytes Chrome sends just before it closes still arrive when the guard was p
     socket.write(UPGRADE);
     await delay(150);
     socket.resume();
-    await ended;
+    await bounded(ended, "ended");
     assert.match(Buffer.concat(chunks).toString(), /^HTTP\/1\.1 101 [\s\S]*TAIL$/);
   });
-  chrome.close();
 });
 
-test("ending the guard before the head is complete closes it and Chrome's side", async () => {
+test("ending the guard before the head is complete closes it and Chrome's side", async (t) => {
   const chrome = await fakeChrome();
+  t.after(() => chrome.close());
   await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
     const { socket } = await createChromeDoor({ dirs: [dir] }).open();
     socket.resume();
@@ -185,10 +192,24 @@ test("ending the guard before the head is complete closes it and Chrome's side",
     const closed = new Promise((resolve) => socket.on("close", resolve));
     await new Promise((resolve) => socket.write("GET /devtools/browser/x HTT", resolve));
     socket.end();
-    await ended;
-    await closed;
+    await bounded(ended, "ended");
+    await bounded(closed, "closed");
     assert.deepEqual(chrome.seen, []);
     assert.equal(chrome.state.bytes, 0);
   });
-  chrome.close();
+});
+
+test("Chrome closing before it answers closes the guard, with later writes still pending", async (t) => {
+  const chrome = await fakeChrome({ onUpgrade: (socket) => socket.end() });
+  t.after(() => chrome.close());
+  await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
+    const { socket } = await createChromeDoor({ dirs: [dir] }).open();
+    socket.resume();
+    const closed = new Promise((resolve) => socket.on("close", resolve));
+    socket.write(UPGRADE);
+    socket.write("one");
+    socket.write("two");
+    socket.end();
+    await bounded(closed, "the guard to close");
+  });
 });

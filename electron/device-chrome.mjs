@@ -136,7 +136,12 @@ function createGuard(chrome, target) {
   // A clean end is pushed through, so bytes Chrome sent just before it are read before this closes; only a close with
   // no end before it (a reset) closes at once.
   let ended = false;
-  chrome.on("end", () => { ended = true; releaseHeld(); guard.push(null); });
+  chrome.on("end", () => {
+    ended = true;
+    if (state === "awaiting") { state = "refused"; guard.push(response); }
+    releaseHeld();
+    guard.push(null);
+  });
   chrome.on("close", () => { if (!ended) guard.destroy(); });
   chrome.on("error", (error) => guard.destroy(error));
   guard.on("end", () => { if (!guard.writableEnded) guard.end(); });
