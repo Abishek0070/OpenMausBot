@@ -12,8 +12,8 @@ const { LentComputersCard, lentComputerLines, pageLendingLine } = await import("
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let host: HTMLDivElement;
 let root: Root;
-const off: PageLending = { available: true, on: false, status: null, folders: [], screen: false, screenAvailable: true, internet: false };
-const lent: PageLending = { available: true, on: true, status: "lent", folders: ["Desktop", "Documents", "Downloads"].map((name) => ({ name, write: false })), screen: false, screenAvailable: true, internet: true };
+const off: PageLending = { available: true, on: false, status: null, folders: [], screen: false, screenAvailable: true, internet: false, chrome: false };
+const lent: PageLending = { available: true, on: true, status: "lent", folders: ["Desktop", "Documents", "Downloads"].map((name) => ({ name, write: false })), screen: false, screenAvailable: true, internet: true, chrome: false };
 
 beforeEach(() => {
   setLocale("en");
