@@ -147,14 +147,16 @@ export function createBrowserHost(deps: BrowserHostDeps) {
   // A tool call that would open Reddit from MausBot Cloud is refused before it reaches the browser. My Chrome is the
   // person's own, outside the egress gate too; on My Cloud a call that can't reach it now says why instead.
   const browserRuntime = new RuntimeRouter(agentBrowserRuntime, chromeEngine, {
-    refusal: (session, spec, params) => {
-      if (!viaDoor(session, spec)) return attachesToChrome(spec.env) ? null : browserEgress.callRefusal(params);
+    refusal: (_session, spec, params) => (attachesToChrome(spec.env) ? null : browserEgress.callRefusal(params)),
+    // After beforeDispatch's claim the holder is this call's own turn, so the verdict is the caller's, not the last
+    // holder's. Only a caller who may use the computer learns whether it lends Chrome or is online.
+    afterClaim: (session, spec) => {
+      if (!viaDoor(session, spec)) return null;
       const lender = lentChrome?.lender() ?? null;
+      if (!lentChromeAllowed(session)) return lentChromeGuidance("not-allowed", lender);
       if (!lender) return lentChromeGuidance("not-lent", null);
       return lender.online ? null : lentChromeGuidance("offline", lender);
     },
-    // After beforeDispatch's claim the holder is this call's own turn, so the verdict is the caller's, not the last holder's.
-    afterClaim: (session, spec) => (viaDoor(session, spec) && !lentChromeAllowed(session) ? lentChromeGuidance("not-allowed", lentChrome?.lender() ?? null) : null),
     annotate: passkeyAnnotation(CLOUD_HOME ? "cloud" : DESKTOP_MANAGED ? "desktop" : "server"),
     // agent-browser's own error names only the CDP connection; the door knows what went wrong on the way.
     afterCall: (session, spec, result) => {

@@ -299,13 +299,21 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
     expect(route).toHaveBeenCalledOnce();
   });
 
-  it("an offline or missing lender is explained before the call reaches the browser", async () => {
+  it("an offline or missing lender is explained to the owner before the call reaches the engine", async () => {
     const { host, lend, call, engine } = onMyCloud({ ...lender, online: false });
     const browser = (await host.browserIntegration("scout", "mine", turn))!;
     expect(await call(browser, OWNER)).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("is lent but offline") }] });
     lend(null);
     expect(await call(browser, OWNER)).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("turn on Your Chrome") }] });
-    expect(BrowserRuntime.prototype.agentRpc).not.toHaveBeenCalled();
+    expect(engine).not.toHaveBeenCalled();
+  });
+
+  it("a guest learns nothing about the owner's computer: offline or not lending, it hears only the someone-else sentence", async () => {
+    const { host, lend, call, engine } = onMyCloud({ ...lender, online: false });
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    expect(await call(browser, GUEST)).toEqual({ isError: true, content: [{ type: "text", text: expect.stringContaining(SOMEONE_ELSE) }] });
+    lend(null);
+    expect(await call(browser, GUEST)).toEqual({ isError: true, content: [{ type: "text", text: expect.stringContaining(SOMEONE_ELSE) }] });
     expect(engine).not.toHaveBeenCalled();
   });
 
