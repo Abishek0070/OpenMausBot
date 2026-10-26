@@ -90,9 +90,9 @@ export function createComputerSharing(options: {
   /** The device link's sign-in for My Cloud, as the poll's fetch carries it (its session cookie). */
   linkHeaders?: (env: Workspace) => Record<string, string> | Promise<Record<string, string>>;
   WebSocket?: typeof globalThis.WebSocket;
-  /** This computer's own check on each connection, for tests: how it looks names up and connects. */
   /** The Chrome door's options, for tests: an object with `open` stands in for the door. */
   chrome?: Parameters<typeof import("./device-chrome.mjs").createChromeDoor>[0];
+  /** This computer's own check on each connection, for tests: how it looks names up and connects. */
   egress?: Omit<NonNullable<Parameters<typeof import("./device-egress.mjs").createDeviceEgress>[0]>, "seenAs">;
 }): {
   state(id: string): SharingState;
