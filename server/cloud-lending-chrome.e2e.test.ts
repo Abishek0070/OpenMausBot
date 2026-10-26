@@ -104,19 +104,20 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
   const cloud: Cloud = { home, base: `http://127.0.0.1:${port}`, port, secret, owner: "", child, log: "", proxies: [] };
   child.stdout?.on("data", (chunk) => { cloud.log += chunk; });
   child.stderr?.on("data", (chunk) => { cloud.log += chunk; });
+  // The caller gets no handle to stop if this throws, so every failure from here stops the server and what it started.
   try {
     await until(async () => {
       if (child.exitCode !== null) throw new Error(`the Cloud home exited:\n${cloud.log}`);
       try { return (await fetch(`${cloud.base}/api/health`, { signal: AbortSignal.timeout(2_000) })).ok; } catch { return false; }
     }, "the Cloud home to start", 20_000);
+    cloud.owner = await adminPairing(cloud);
+    const saved = await api(cloud, "PATCH", "/api/config", { browserProfiles: [{ id: PROFILE, name: "My Chrome", browser: "chrome" }] });
+    if (saved.status !== 200) throw new Error(`could not save the browser profile: ${JSON.stringify(saved.body)}`);
+    return cloud;
   } catch (error) {
-    await waitForExit(child, { signal: "SIGTERM" });
+    await stopCloud(cloud);
     throw error;
   }
-  cloud.owner = await adminPairing(cloud);
-  const saved = await api(cloud, "PATCH", "/api/config", { browserProfiles: [{ id: PROFILE, name: "My Chrome", browser: "chrome" }] });
-  if (saved.status !== 200) throw new Error(`could not save the browser profile: ${JSON.stringify(saved.body)}`);
-  return cloud;
 }
 
 /** agent-browser also runs for the person's own bots on this machine, so what is left under `root` is ended by PID,
@@ -135,6 +136,10 @@ function descendantsOf(root: number | undefined): number[] {
   return found;
 }
 
+function listen(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.off("error", reject); resolve(); }); });
+}
+
 const running = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 async function endPids(pids: number[]): Promise<void> {
@@ -144,12 +149,17 @@ async function endPids(pids: number[]): Promise<void> {
   for (const pid of left.filter(running)) { try { process.kill(pid, "SIGKILL"); } catch {} }
 }
 
+async function stopProcess(child: ChildProcess | undefined): Promise<void> {
+  if (!child) return;
+  const started = descendantsOf(child.pid);
+  await waitForExit(child, { signal: "SIGTERM" });
+  await endPids(started);
+}
+
 async function stopCloud(cloud: Cloud | undefined): Promise<void> {
   if (!cloud) return;
   for (const proxy of cloud.proxies) proxy.kill();
-  const started = descendantsOf(cloud.child.pid);
-  await waitForExit(cloud.child, { signal: "SIGTERM" });
-  await endPids(started);
+  await stopProcess(cloud.child);
 }
 
 /** The desktop app lending to My Cloud through the real connector, signed in with the owner's session. `chromeDirs` is
@@ -289,8 +299,8 @@ describe.skipIf(process.platform === "win32")("My Chrome on My Cloud, with stand
         });
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     fake = { seen, live, server, wss };
+    await listen(server);
     // Chrome's data folder as the computer finds it: DevToolsActivePort names the port and Chrome's own browser path.
     const chromeDir = join(home, "person-chrome");
     mkdirSync(chromeDir, { recursive: true });
@@ -496,10 +506,13 @@ describe.skipIf(!full)("My Chrome on My Cloud, with the real agent-browser and a
       "--disable-background-networking", "--disable-component-update", "--disable-sync", ...credentialStoreFlags(),
       ...(process.platform === "linux" ? ["--no-sandbox"] : []), "about:blank",
     ], { env: chromeLaunchEnv(), stdio: ["ignore", "ignore", "ignore"] });
-    await until(() => existsSync(join(profile, "DevToolsActivePort")), "Chrome to open its DevTools port", 20_000);
+    await until(() => {
+      if (chrome?.exitCode !== null) throw new Error("Chrome exited before it opened its DevTools port");
+      return existsSync(join(profile, "DevToolsActivePort"));
+    }, "Chrome to open its DevTools port", 20_000);
     chromePort = Number(readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0]);
     pages = createServer((_req, res) => { res.writeHead(200, { "content-type": "text/html" }); res.end("<!doctype html><title>Order 1042</title><h1>Order 1042</h1><p>Total: 42.00 EUR</p>"); });
-    await new Promise<void>((resolve) => pages!.listen(0, "127.0.0.1", resolve));
+    await listen(pages);
     pageUrl = `http://127.0.0.1:${(pages.address() as { port: number }).port}/orders/1042`;
     cloud = await bootCloud(home, realAgentBrowser!, { XDG_RUNTIME_DIR: runtime });
     lent = lender(cloud, [profile]);
@@ -515,7 +528,7 @@ describe.skipIf(!full)("My Chrome on My Cloud, with the real agent-browser and a
       catch { return []; }
     })();
     await endPids(daemons.filter((pid) => Number.isInteger(pid) && pid > 0));
-    if (chrome) await waitForExit(chrome, { signal: "SIGTERM" });
+    await stopProcess(chrome);
     pages?.closeAllConnections();
     await new Promise((resolve) => pages ? pages.close(resolve) : resolve(undefined));
     for (const dir of [home, runtime, profile]) if (dir) await removeTempDir(dir);
