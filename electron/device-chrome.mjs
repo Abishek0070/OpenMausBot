@@ -3,7 +3,7 @@
 import { readFile as readFileFs } from "node:fs/promises";
 import { connect as tcpConnect } from "node:net";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { Duplex } from "node:stream";
 
 export const DEVTOOLS_FILE = "DevToolsActivePort";
@@ -14,11 +14,13 @@ const BROWSER_PATH = /^\/devtools\/browser(?:[/?].*)?$/;
 const PAGE_PATH = /^\/devtools\/page\/[A-Za-z0-9-]+$/;
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
-/** Chrome's own profile folders, in the order agent-browser looks. */
+/** Chrome's own profile folders, in the order agent-browser looks; none without the folder they live in, since a relative
+ * path would be read from wherever the app was started. */
 export function chromeDataDirs({ platform, home = "", localAppData = "" }) {
-  if (platform === "win32") return ["Google/Chrome/User Data", "Google/Chrome SxS/User Data", "BraveSoftware/Brave-Browser/User Data"].map((dir) => join(localAppData, dir));
-  if (platform === "darwin") return ["Google/Chrome", "Google/Chrome Canary", "BraveSoftware/Brave-Browser"].map((dir) => join(home, "Library/Application Support", dir));
-  return ["google-chrome", "google-chrome-unstable", "BraveSoftware/Brave-Browser"].map((dir) => join(home, ".config", dir));
+  if (platform === "win32") return localAppData ? ["Google/Chrome/User Data", "Google/Chrome SxS/User Data", "BraveSoftware/Brave-Browser/User Data"].map((dir) => win32.join(localAppData, dir)) : [];
+  if (!home) return [];
+  if (platform === "darwin") return ["Google/Chrome", "Google/Chrome Canary", "BraveSoftware/Brave-Browser"].map((dir) => posix.join(home, "Library/Application Support", dir));
+  return ["google-chrome", "google-chrome-unstable", "BraveSoftware/Brave-Browser"].map((dir) => posix.join(home, ".config", dir));
 }
 
 /** Chrome's DevToolsActivePort file: the port, then its `/devtools/browser/<id>` path. Anything else is null. */

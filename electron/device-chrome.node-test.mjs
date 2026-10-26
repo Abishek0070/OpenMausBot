@@ -53,8 +53,9 @@ test("reads DevToolsActivePort: a port and Chrome's browser path, nothing else",
 
 test("looks only in Chrome's own folders, in agent-browser's order", () => {
   assert.deepEqual(chromeDataDirs({ platform: "darwin", home: "/U" }), ["/U/Library/Application Support/Google/Chrome", "/U/Library/Application Support/Google/Chrome Canary", "/U/Library/Application Support/BraveSoftware/Brave-Browser"]);
-  assert.deepEqual(chromeDataDirs({ platform: "win32", localAppData: "/L" }), ["/L/Google/Chrome/User Data", "/L/Google/Chrome SxS/User Data", "/L/BraveSoftware/Brave-Browser/User Data"]);
+  assert.deepEqual(chromeDataDirs({ platform: "win32", localAppData: "C:\\L" }), ["C:\\L\\Google\\Chrome\\User Data", "C:\\L\\Google\\Chrome SxS\\User Data", "C:\\L\\BraveSoftware\\Brave-Browser\\User Data"]);
   assert.deepEqual(chromeDataDirs({ platform: "linux", home: "/h" }), ["/h/.config/google-chrome", "/h/.config/google-chrome-unstable", "/h/.config/BraveSoftware/Brave-Browser"]);
+  for (const platform of ["win32", "darwin", "linux"]) assert.deepEqual(chromeDataDirs({ platform }), [], `${platform} without its base folder`);
 });
 
 test("rewrites only a WebSocket upgrade to Chrome's browser or a page, with Chrome's own host and no Origin", () => {
