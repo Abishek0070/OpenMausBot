@@ -32,7 +32,6 @@ const HOST = "omb-t-0123456789ab.fly.dev";
 const edge = { host: HOST, "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https", origin: `https://${HOST}` };
 const SOMEONE_ELSE = "Someone else wrote in this conversation, so it can't use your Chrome. Start a new conversation to use it.";
 const PROFILE = "mine";
-const OMB6_AGENT_BROWSER = "/Applications/OMB6.app/Contents/Resources/browser-engine/agent-browser";
 
 type ToolResult = { isError?: boolean; content?: Array<{ type: string; text?: string }> };
 type Call = (name: string, args?: Record<string, unknown>) => Promise<ToolResult>;
@@ -472,9 +471,10 @@ lines.on("close", () => process.exit(0));
   }, hostTimeout(60_000));
 });
 
-// The real thing, when this machine has it: agent-browser from OMB_TEST_AGENT_BROWSER or a local OMB build, and Chrome
-// from OMB_TEST_CHROME, CHROME_BIN or where it installs.
-const realAgentBrowser = [process.env.OMB_TEST_AGENT_BROWSER, OMB6_AGENT_BROWSER].find((path): path is string => Boolean(path && existsSync(path))) ?? null;
+// The real thing, only when asked for, since it starts a real Chrome and agent-browser: agent-browser from
+// OMB_TEST_AGENT_BROWSER, and Chrome from OMB_TEST_CHROME, CHROME_BIN or where it installs.
+const askedFor = process.env.OMB_TEST_AGENT_BROWSER;
+const realAgentBrowser = askedFor && existsSync(askedFor) ? askedFor : null;
 const realChrome = findChrome();
 const full = process.platform !== "win32" && realAgentBrowser !== null && realChrome !== null;
 if (!full) console.log("skipping My Chrome through the real agent-browser and Chrome: set OMB_TEST_AGENT_BROWSER and OMB_TEST_CHROME to run it");
