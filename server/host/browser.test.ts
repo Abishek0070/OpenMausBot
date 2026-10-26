@@ -8,6 +8,7 @@ import { BUILT_IN_BROWSER_SYSTEM_PROMPT, browserEngineStatus, clearBrowserSessio
 import { CHROME_BROWSER_SYSTEM_PROMPT } from "../browser/prompt.ts";
 import { TOOL_LIST } from "../browser/tools.ts";
 import { browserEgress } from "../browser/egress/registry.ts";
+import { REDDIT_REFUSAL } from "../browser/egress/reddit.ts";
 import type { Audience } from "../audience.ts";
 import { DATA_DIR, type AppConfig } from "../config.ts";
 import type { Store } from "../store.ts";
@@ -207,6 +208,7 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
   const OWNER = turn;
   const GUEST = { threadId: "guest-thread", generation: "gen-b" };
   const SNAPSHOT = { name: "agent_browser_snapshot", arguments: {} };
+  const SOMEONE_ELSE = "Someone else wrote in this conversation, so it can't use your Chrome.";
   type Answer = { isError?: boolean; content: Array<{ type: string; text: string }> };
   afterEach(async () => {
     await Promise.all(hosts.map((host) => host.browserSweep.closeAll()));
@@ -214,16 +216,29 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
     vi.mocked(browserEngineStatus).mockReset();
   });
 
-  /** A personal Cloud home whose bot "scout" uses the My Chrome profile "mine"; `lend` changes which computer lends Chrome. */
-  function onMyCloud(found: ChromeLender | null, mayLend: (turn: TurnOwner) => boolean = () => true) {
+  /**
+   * A personal Cloud home whose bot "scout" uses the My Chrome profile "mine"; `lend` changes which computer lends Chrome.
+   * agent-browser is a stub that runs beforeDispatch, as the real one does, and then `engine`: what reaches the daemon.
+   */
+  function onMyCloud(found: ChromeLender | null, mayLend: (turn: TurnOwner) => boolean = (holder) => holder.threadId !== GUEST.threadId) {
     vi.mocked(browserEngineStatus).mockReturnValue({ kind: "ready", binaryPath: "/usr/local/bin/agent-browser", version: "0.37.0", managed: false });
+    const engine = vi.fn(async (): Promise<unknown> => ({ content: [{ type: "text", text: "page" }] }));
+    vi.spyOn(BrowserRuntime.prototype, "agentRpc").mockImplementation(async (_session, _spec, _method, _params, beforeDispatch) => {
+      beforeDispatch?.();
+      return engine();
+    });
     let current = found;
     const resources = new TurnResources();
     const route = vi.fn(() => null);
     const made = setup(undefined, { cloudHome: true, mayLend, turnResources: resources, lentChrome: { route, lender: () => current } });
     made.cfg.browserProfiles = [{ id: "mine", name: "Mine", browser: "chrome" }] as AppConfig["browserProfiles"];
     (made.bots[0] as { browserProfile?: string }).browserProfile = "mine";
-    return { ...made, resources, route, lend: (next: ChromeLender | null) => { current = next; } };
+    /** A tool call as the browser route makes it: beforeDispatch claims the browser for the calling turn. */
+    const call = async (browser: { session: string; spec: { command: string; env: Record<string, string> } }, caller: TurnOwner, params: unknown = SNAPSHOT) =>
+      (await made.host.browserRuntime.agentRpc(browser.session, browser.spec as never, "tools/call", params, () => {
+        if (!resources.claim(`browser:${browser.session}`, caller)) throw new Error("another thread is using this browser");
+      })) as Answer;
+    return { ...made, resources, route, engine, call, lend: (next: ChromeLender | null) => { current = next; } };
   }
   /** What the door answers a client that has its token. */
   async function knock(url: string): Promise<string> {
@@ -236,6 +251,7 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
   }
 
   it("on My Cloud a My Chrome profile attaches through the lent computer's door", async () => {
+    const egress = vi.spyOn(browserEgress, "open");
     const { host, lend } = onMyCloud(lender);
     expect(host.myChromeAvailable()).toBe(true);
     const browser = await host.browserIntegration("scout", "mine", turn);
@@ -243,53 +259,97 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
     expect(browser?.spec.env).not.toHaveProperty("AGENT_BROWSER_AUTO_CONNECT");
     host.usedBrowserSessions.clear();
     expect((await host.currentBrowserSpec("scout", "mine"))?.spec.env.AGENT_BROWSER_CDP, "the live view's spec names the same door").toBe(browser?.spec.env.AGENT_BROWSER_CDP);
+    expect(egress, "the person's Chrome is outside the egress gate").not.toHaveBeenCalled();
     lend(null);
     expect(host.myChromeAvailable()).toBe(false);
   });
 
   it("a conversation that may not lend loses the Chrome connection and is told why", async () => {
     const drop = vi.spyOn(LentChromeDoors.prototype, "drop");
-    const reached = vi.spyOn(BrowserRuntime.prototype, "agentRpc");
-    const { host, resources, route } = onMyCloud(lender, (holder) => holder.threadId !== GUEST.threadId);
-    const browser = await host.browserIntegration("scout", "mine", turn);
-    const session = browser!.session;
-    expect(resources.claim(`browser:${session}`, OWNER)).toBe(true);
+    const { host, resources, route, engine, call } = onMyCloud(lender);
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    expect(resources.claim(`browser:${browser.session}`, OWNER)).toBe(true);
     expect(drop, "the person's own turn keeps the connection").not.toHaveBeenCalled();
     resources.release(OWNER);
-    expect(resources.claim(`browser:${session}`, GUEST)).toBe(true);
-    expect(drop).toHaveBeenCalledWith(session);
-    const refused = { isError: true, content: [{ type: "text", text: expect.stringContaining("Someone else wrote in this conversation, so it can't use your Chrome.") }] };
-    await expect(host.browserRuntime.agentRpc(session, browser!.spec, "tools/call", SNAPSHOT)).resolves.toEqual(refused);
-    resources.release(GUEST);
-    await expect(host.browserRuntime.agentRpc(session, browser!.spec, "tools/call", SNAPSHOT), "the browser stays off the lent Chrome after that turn ends").resolves.toEqual(refused);
-    expect(await knock(browser!.spec.env.AGENT_BROWSER_CDP!), "agent-browser's reconnect is refused too").toBe("HTTP/1.1 403 Forbidden");
+    expect(resources.claim(`browser:${browser.session}`, GUEST)).toBe(true);
+    expect(drop).toHaveBeenCalledWith(browser.session);
+    expect(await call(browser, GUEST)).toEqual({ isError: true, content: [{ type: "text", text: expect.stringContaining(SOMEONE_ELSE) }] });
+    expect(await knock(browser.spec.env.AGENT_BROWSER_CDP!), "agent-browser's reconnect is refused too").toBe("HTTP/1.1 403 Forbidden");
     expect(route).not.toHaveBeenCalled();
-    expect(reached).not.toHaveBeenCalled();
+    expect(engine).not.toHaveBeenCalled();
+  });
+
+  it("a guest's first call is refused before it reaches the engine", async () => {
+    const drop = vi.spyOn(LentChromeDoors.prototype, "drop");
+    const { host, engine, call } = onMyCloud(lender);
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    expect(await call(browser, GUEST)).toEqual({ isError: true, content: [{ type: "text", text: expect.stringContaining(SOMEONE_ELSE) }] });
+    expect(drop, "its claim dropped any connection the person's turn left open").toHaveBeenCalledWith(browser.session);
+    expect(engine).not.toHaveBeenCalled();
+  });
+
+  it("the owner's call after a guest's turn reaches the engine", async () => {
+    const { host, resources, route, engine, call } = onMyCloud(lender);
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    expect((await call(browser, GUEST)).isError).toBe(true);
+    resources.release(GUEST);
+    expect(await call(browser, OWNER)).toEqual({ content: [{ type: "text", text: "page" }] });
+    expect(engine).toHaveBeenCalledOnce();
+    expect(await knock(browser.spec.env.AGENT_BROWSER_CDP!), "agent-browser's reconnect is let through to the route").toBe("HTTP/1.1 503 Service Unavailable");
+    expect(route).toHaveBeenCalledOnce();
   });
 
   it("an offline or missing lender is explained before the call reaches the browser", async () => {
-    const reached = vi.spyOn(BrowserRuntime.prototype, "agentRpc");
-    const { host, lend } = onMyCloud({ ...lender, online: false });
-    const browser = await host.browserIntegration("scout", "mine", turn);
-    const call = async () => (await host.browserRuntime.agentRpc(browser!.session, browser!.spec, "tools/call", SNAPSHOT)) as Answer;
-    expect(await call()).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("is lent but offline") }] });
+    const { host, lend, call, engine } = onMyCloud({ ...lender, online: false });
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    expect(await call(browser, OWNER)).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("is lent but offline") }] });
     lend(null);
-    expect(await call()).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("turn on Your Chrome") }] });
-    expect(reached).not.toHaveBeenCalled();
+    expect(await call(browser, OWNER)).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("turn on Your Chrome") }] });
+    expect(BrowserRuntime.prototype.agentRpc).not.toHaveBeenCalled();
+    expect(engine).not.toHaveBeenCalled();
+  });
+
+  it("with no computer lending Chrome, a My Chrome profile still uses the door and never the built-in browser", async () => {
+    const egress = vi.spyOn(browserEgress, "open");
+    const { cfg, host, call, engine } = onMyCloud(null);
+    expect(host.myChromeAvailable(), "the dialog's own answer").toBe(false);
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    expect(browser.spec.env.AGENT_BROWSER_CDP).toMatch(DOOR);
+    host.usedBrowserSessions.clear();
+    expect((await host.currentBrowserSpec("scout", "mine"))?.spec.env.AGENT_BROWSER_CDP).toBe(browser.spec.env.AGENT_BROWSER_CDP);
+    cfg.browserEngine = { engine: "chrome" };
+    expect((await host.browserIntegration("scout", "mine", turn))?.spec.env.AGENT_BROWSER_CDP, "nor the new engine's").toBe(browser.spec.env.AGENT_BROWSER_CDP);
+    expect(egress).not.toHaveBeenCalled();
+    expect(await call(browser, OWNER)).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("turn on Your Chrome") }] });
+    expect(engine).not.toHaveBeenCalled();
   });
 
   it("a call that failed at the lent computer says why after agent-browser's own error", async () => {
     const cdpError = { isError: true, content: [{ type: "text", text: "CDP WebSocket connect failed: 503" }] };
-    vi.spyOn(BrowserRuntime.prototype, "agentRpc").mockResolvedValue(cdpError);
-    const { host } = onMyCloud(lender);
-    const browser = await host.browserIntegration("scout", "mine", turn);
-    const call = async () => (await host.browserRuntime.agentRpc(browser!.session, browser!.spec, "tools/call", SNAPSHOT)) as Answer;
-    expect(await call(), "nothing is known yet").toEqual(cdpError);
-    expect(await knock(browser!.spec.env.AGENT_BROWSER_CDP!), "the link is gone though the computer was online").toBe("HTTP/1.1 503 Service Unavailable");
-    const answer = await call();
+    const { host, engine, call } = onMyCloud(lender);
+    engine.mockResolvedValue(cdpError);
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    expect(await call(browser, OWNER), "nothing is known yet").toEqual(cdpError);
+    expect(await knock(browser.spec.env.AGENT_BROWSER_CDP!), "the link is gone though the computer was online").toBe("HTTP/1.1 503 Service Unavailable");
+    const answer = await call(browser, OWNER);
     expect(answer.content).toHaveLength(2);
     expect(answer.content[0]).toEqual(cdpError.content[0]);
     expect(answer.content[1]!.text).toContain("Mac is lent but offline");
+  });
+
+  it("a profile switched back to the built-in browser keeps its session but none of the lent Chrome's answers", async () => {
+    const { cfg, host, engine, call } = onMyCloud(null);
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    expect(await knock(browser.spec.env.AGENT_BROWSER_CDP!), "the door has a problem to tell").toBe("HTTP/1.1 503 Service Unavailable");
+    cfg.browserProfiles = [{ id: "mine", name: "Mine" }] as AppConfig["browserProfiles"];
+    expect(host.currentBrowserSession("scout", "mine")).toBe(browser.session);
+    const builtIn = { session: browser.session, spec: host.browserSessionSpec("/usr/local/bin/agent-browser", browser.session, "mine") };
+    expect(builtIn.spec.env).not.toHaveProperty("AGENT_BROWSER_CDP");
+    const failed = { isError: true, content: [{ type: "text", text: "Element not found" }] };
+    engine.mockResolvedValue(failed);
+    expect(await call(builtIn, GUEST), "neither the someone-else nor the not-lent answer, and no guidance after").toEqual(failed);
+    expect(await call(builtIn, GUEST, { name: "agent_browser_open", arguments: { url: "https://www.reddit.com/" } }), "the Cloud's egress rule still applies").toEqual({ isError: true, content: [{ type: "text", text: REDDIT_REFUSAL }] });
+    expect(engine).toHaveBeenCalledOnce();
   });
 
   it("the summary says which computer lends Chrome, or that one can", () => {

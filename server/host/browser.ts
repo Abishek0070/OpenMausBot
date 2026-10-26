@@ -131,22 +131,35 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     if (turn) chromeLends.set(session, mayLend(turn));
     return chromeLends.get(session) !== false;
   }
-  const doors = lentChrome ? new LentChromeDoors({ route: () => lentChrome.route(), allowed: lentChromeAllowed, idleMs }) : undefined;
+  // The desktop's idle time, not a Cloud home's shorter one: each reconnect may make Chrome ask the person to Allow again.
+  const doors = lentChrome ? new LentChromeDoors({ route: () => lentChrome.route(), allowed: lentChromeAllowed, idleMs: () => browserIdleMs(cfg, { cloudHome: false }) }) : undefined;
+  const doorUrls = new Map<string, string>();
+  async function lentChromeDoor(session: string): Promise<string | undefined> {
+    const url = await doors?.door(session);
+    if (url) doorUrls.set(session, url);
+    return url;
+  }
+  /** A profile switched back to the built-in browser keeps its session name and its door, but its calls no longer use it. */
+  function viaDoor(session: string, spec: { env: NodeJS.ProcessEnv }): boolean {
+    const url = doorUrls.get(session);
+    return url !== undefined && spec.env.AGENT_BROWSER_CDP === url;
+  }
   // A tool call that would open Reddit from MausBot Cloud is refused before it reaches the browser. My Chrome is the
   // person's own, outside the egress gate too; on My Cloud a call that can't reach it now says why instead.
   const browserRuntime = new RuntimeRouter(agentBrowserRuntime, chromeEngine, {
     refusal: (session, spec, params) => {
-      if (!doors?.owns(session)) return attachesToChrome(spec.env) ? null : browserEgress.callRefusal(params);
+      if (!viaDoor(session, spec)) return attachesToChrome(spec.env) ? null : browserEgress.callRefusal(params);
       const lender = lentChrome?.lender() ?? null;
-      if (!lentChromeAllowed(session)) return lentChromeGuidance("not-allowed", lender);
       if (!lender) return lentChromeGuidance("not-lent", null);
       return lender.online ? null : lentChromeGuidance("offline", lender);
     },
+    // After beforeDispatch's claim the holder is this call's own turn, so the verdict is the caller's, not the last holder's.
+    afterClaim: (session, spec) => (viaDoor(session, spec) && !lentChromeAllowed(session) ? lentChromeGuidance("not-allowed", lentChrome?.lender() ?? null) : null),
     annotate: passkeyAnnotation(CLOUD_HOME ? "cloud" : DESKTOP_MANAGED ? "desktop" : "server"),
     // agent-browser's own error names only the CDP connection; the door knows what went wrong on the way.
-    afterCall: (session, _spec, result) => {
+    afterCall: (session, spec, result) => {
       const failed = result as { isError?: unknown; content?: unknown };
-      const problem = failed?.isError === true && doors?.owns(session) ? doors.problem(session) : null;
+      const problem = failed?.isError === true && viaDoor(session, spec) ? doors?.problem(session) : null;
       if (!problem) return result;
       const content = Array.isArray(failed.content) ? failed.content : [];
       return { ...failed, content: [...content, { type: "text", text: lentChromeGuidance(problem, lentChrome?.lender() ?? null) }] };
@@ -186,6 +199,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     },
     closeAll: () => {
       doors?.close();
+      doorUrls.clear();
       return agentBrowserSweep.closeAll();
     },
   };
@@ -255,8 +269,10 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     if (lender) return { myChromeOn: lender };
     return lentChrome ? { myChromeLendable: true } : {};
   }
+  /** On My Cloud a My Chrome profile stays the person's Chrome while no computer lends it: its calls say so, and never
+   * fall back to the built-in browser, whose sign-ins differ. */
   function usesMyChrome(profileId: string | undefined): boolean {
-    return Boolean(profileId) && myChromeAvailable()
+    return Boolean(profileId) && (myChromeAvailable() || lentChrome !== undefined)
       && cfg.browserProfiles?.some((profile) => profile.id === profileId && profile.browser === "chrome") === true;
   }
   function browserSessionSpec(binaryPath: string, session: string, profile: string | undefined, egressPort?: number, cdpUrl?: string) {
@@ -310,7 +326,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
       return null;
     }
     const session = currentBrowserSession(botId, profile, audience);
-    const cdpUrl = lentChromeSession(browserProfileId) ? await doors?.door(session) : undefined;
+    const cdpUrl = lentChromeSession(browserProfileId) ? await lentChromeDoor(session) : undefined;
     const spec = browserSessionSpec(status.binaryPath, session, browserProfileId, usesMyChrome(browserProfileId) ? undefined : await browserEgress.open(session), cdpUrl);
     usedBrowserSessions.set(session, spec);
     await prepareBrowserSessionState(status.binaryPath, session, { env: spec.env, persistent: profile !== "guest" && !attachesToChrome(spec.env), isCurrent: () => {
@@ -331,8 +347,8 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     const used = usedBrowserSessions.get(session);
     if (used) return { session, spec: used };
     const profileId = browserProfileIdOf(profile);
-    const cdpUrl = lentChromeSession(profileId) ? await doors?.door(session) : undefined;
-    return { session, spec: browserSessionSpec(engine.binaryPath, session, profileId, await browserEgress.open(session), cdpUrl) };
+    const cdpUrl = lentChromeSession(profileId) ? await lentChromeDoor(session) : undefined;
+    return { session, spec: browserSessionSpec(engine.binaryPath, session, profileId, usesMyChrome(profileId) ? undefined : await browserEgress.open(session), cdpUrl) };
   }
   /** fill_login's reads and typing, on whichever engine runs the session. */
   function loginInput(session: string, spec: Spec, env: NodeJS.ProcessEnv): Pick<FillLoginDeps, "engine" | "insertText" | "press" | "click"> {
