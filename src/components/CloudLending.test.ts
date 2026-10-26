@@ -13,7 +13,7 @@ vi.mock("react", async original => ({ ...await original<typeof import("react")>(
 }));
 import { CloudLending, lendingFailureKey, lendingStatusKey, lendingStoppedLine, lendingTitle, lentWhat, thisDevice } from "./CloudLending";
 
-type Node = ReactElement<{ children?: ReactNode; onClick?: () => void; onChange?: (event: { target: { checked: boolean } }) => void; role?: string; type?: string; "aria-label"?: string; disabled?: boolean; checked?: boolean; "data-lending-more"?: boolean; "data-lending-terminal-choice"?: boolean; "data-lending-internet-choice"?: boolean; }>;
+type Node = ReactElement<{ children?: ReactNode; onClick?: () => void; onChange?: (event: { target: { checked: boolean } }) => void; role?: string; type?: string; "aria-label"?: string; disabled?: boolean; checked?: boolean; "data-lending-more"?: boolean; "data-lending-terminal-choice"?: boolean; "data-lending-internet-choice"?: boolean; "data-lending-chrome-choice"?: boolean; }>;
 function nodes(value: ReactNode): Node[] { if (!isValidElement(value)) return []; const node = value as Node; return [node, ...Children.toArray(node.props.children).flatMap(nodes)]; }
 let bridge: CloudLendingBridge;
 function render() { f.index = 0; f.effects = []; let tree: ReactNode; function Capture() { tree = CloudLending({ bridge }); return tree; }
@@ -291,6 +291,28 @@ it("turning the terminal off needs no question, and it is not kept when lending 
   await ready({ ...off, state: { ...off.state!, folders: [folder], terminal: true } });
   toggle().props.onClick!(); await flush();
   expect(bridge.save).toHaveBeenCalledExactlyOnceWith({ folders: [folder], screen: false, internet: false });
+});
+
+it("ticking Your Chrome saves it, unticking omits it, and Off then on does not carry it", async () => {
+  await ready({ ...lent, state: { ...lent.state!, chrome: true } });
+  more();
+  const chromeBox = () => render().nodes.find(node => node.props["data-lending-chrome-choice"])!;
+  expect(chromeBox().props.checked).toBe(true);
+  chromeBox().props.onChange!({ target: { checked: false } }); await flush();
+  expect(bridge.save).toHaveBeenLastCalledWith({ folders: [folder], screen: false, internet: false });
+  chromeBox().props.onChange!({ target: { checked: true } }); await flush();
+  expect(bridge.save).toHaveBeenLastCalledWith({ folders: [folder], screen: false, internet: false, chrome: true });
+  vi.mocked(bridge.save).mockClear();
+  await ready({ ...off, state: { ...off.state!, folders: [folder], chrome: true } });
+  toggle().props.onClick!(); await flush();
+  expect(bridge.save).toHaveBeenCalledExactlyOnceWith({ folders: [folder], screen: false, internet: false });
+});
+
+it("the Chrome update note shows only when the Cloud cannot take Your Chrome yet", async () => {
+  await ready({ ...lent, state: { ...lent.state!, chrome: true, chromeLink: "on" } });
+  expect(render().html).not.toContain("My Cloud is updating. Your bots can use your Chrome");
+  await ready({ ...lent, state: { ...lent.state!, chrome: true, chromeLink: "unsupported" } });
+  expect(render().html).toContain("My Cloud is updating. Your bots can use your Chrome");
 });
 
 it("a lent terminal is named in what is lent, in the same words as the Cloud's list", () => {

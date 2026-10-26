@@ -146,9 +146,9 @@ export function CloudLending({ bridge, moving = false }: { bridge: CloudLendingB
   const toggle = () => {
     if (on) { setDraftOn(false); void perform(() => bridge.stop()); return; }
     setDraftOn(true);
-    // The terminal is never carried over: after Off it has to be ticked again.
-    setTerminal(false);
-    void perform(() => bridge.save(choiceOf(folders, screen, internet, false, chrome)));
+    // The terminal and Chrome are never carried over: after Off they have to be ticked again.
+    setTerminal(false); setChrome(false);
+    void perform(() => bridge.save(choiceOf(folders, screen, internet, false, false)));
   };
   if (!snapshot?.available) return null;
   const status = moving && !on && snapshot.state?.stopped?.reason !== "you" ? "lending.status.afterMove" : lendingStatusKey(snapshot, on);

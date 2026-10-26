@@ -430,7 +430,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
   /** The same for the person's Chrome: "on", "connecting", or "unsupported" by a Cloud that does not take it. */
   const chromeState = (env, lent) => lent?.cloud && lent.chrome === true && lent.enabled === true && status.get(env.id)?.connected
     ? { chrome: true, chromeLink: !supportsChrome.has(env.id) ? "unsupported" : linked.has(env.id) ? "on" : "connecting" }
-    : { chrome: lent?.cloud ? lent.chrome === true : false };
+    : { chrome: lent?.cloud ? lent.enabled === true && lent.chrome === true : false };
   const state = id => {
     const grant = records[id];
     return { enabled: grant?.enabled === true, folders: Array.isArray(grant?.folders) ? grant.folders : [], terminal: grant?.terminal === true, computer: grant?.computer === true, ...status.get(id) };
