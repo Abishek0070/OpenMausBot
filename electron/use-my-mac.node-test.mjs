@@ -22,13 +22,13 @@ const until = async (check, what, ms = 5000) => {
 };
 
 /** My Cloud's HTTP side, as the poll sees it; `link` says whether it advertises the device link. */
-function cloudHome({ link = true } = {}) {
+function cloudHome({ link = true, chrome = false } = {}) {
   const json = (value, status = 200) => ({ ok: status < 400, status, headers: { get: () => null }, body: (async function* () { yield Buffer.from(JSON.stringify(value)); })() });
   const state = { environmentId: randomUUID(), sessionId: randomUUID(), connects: [], polls: 0, disconnects: 0 };
   state.fetch = async (url, init) => {
     const route = new URL(url).pathname;
     if (route === "/api/auth/session") return json({ kind: "session", id: state.sessionId, scopes: ["admin", "client"], cloudHome: true });
-    if (route === "/.well-known/openmausbot/environment") return json({ environmentId: state.environmentId, capabilities: { sharedComputers: true, lendingDetails: true, ...(link ? { deviceLink: true } : {}) } });
+    if (route === "/.well-known/openmausbot/environment") return json({ environmentId: state.environmentId, capabilities: { sharedComputers: true, lendingDetails: true, ...(link ? { deviceLink: true } : {}), ...(chrome ? { myChromeLink: true } : {}) } });
     const body = init?.body ? JSON.parse(init.body) : {};
     if (route === "/api/shared-computers/connect") { state.connects.push(body); return json({ ok: true }); }
     if (route.endsWith("/poll")) {
@@ -60,10 +60,10 @@ function fakeSockets() {
   return { FakeSocket, made, open: () => made.filter((socket) => !socket.closed) };
 }
 
-async function fixture(t, { link = true, adminWord = null } = {}) {
+async function fixture(t, { link = true, chrome = false, adminWord = null } = {}) {
   const dir = await realpath(await mkdtemp(path.join(tmpdir(), "omb-use-my-mac-")));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  const home = cloudHome({ link });
+  const home = cloudHome({ link, chrome });
   const sockets = fakeSockets();
   let word = adminWord;
   const power = createCloudPowerGate({ power: () => word, holdMs: 60_000 });
@@ -263,4 +263,31 @@ test("an app started hidden at login runs with no window until the person opens 
   windows.length = 0;
   listeners.get("window-all-closed")();
   assert.equal(app.quits, 1);
+});
+
+test("lends Chrome only when the person turns it on, and tells only a Cloud that takes it", async (t) => {
+  const old = await fixture(t);
+  await old.sharing.saveCloud(env, { chrome: true, folders: [] });
+  await until(() => old.home.connects.length === 1, "the connect");
+  assert.equal("chrome" in old.home.connects[0], false, "a Cloud that does not know Chrome is not sent it");
+  const { home, sockets, sharing } = await fixture(t, { chrome: true });
+  await sharing.saveCloud(env, { chrome: true, folders: [] });
+  await until(() => sockets.open().length === 1 && sharing.cloudState(env).chromeLink === "on", "the device link to open");
+  assert.equal(home.connects[0].chrome, true);
+  assert.equal(sharing.cloudState(env).chrome, true);
+  await sharing.saveCloud(env, { folders: [{ id: randomUUID(), path: tmpdir(), write: false }], screen: false });
+  await until(() => home.connects.length === 2, "the second connect");
+  assert.equal(home.connects[1].chrome, false);
+  assert.equal(sharing.cloudState(env).chrome, false);
+});
+
+test("a Chrome-only grant keeps the device link open, and the link refuses web streams", async (t) => {
+  const { sockets, sharing } = await fixture(t, { chrome: true });
+  await sharing.saveCloud(env, { chrome: true, internet: false, folders: [] });
+  await until(() => sockets.open().length === 1, "the device link to open");
+  const socket = sockets.made[0];
+  socket.deliver(JSON.stringify({ t: "open", id: 1, host: "example.com", port: 443 }));
+  await until(() => socket.sent.some((frame) => typeof frame === "string" && JSON.parse(frame).id === 1), "an answer");
+  const answer = socket.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.id === 1);
+  assert.deepEqual({ t: answer.t, reason: answer.reason }, { t: "refused", reason: "not-lent" });
 });

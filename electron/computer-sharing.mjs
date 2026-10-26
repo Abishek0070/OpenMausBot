@@ -135,7 +135,7 @@ const BROWSE_NOTE_MS = 10 * 60_000;
  * resumes by itself; at most every 15 minutes. `linkHeaders(env)`: the device link's sign-in, as the poll's fetch
  * carries it (the session cookie). */
 export function createComputerSharing({ file, fetch: fetchImpl, environments, cuaConnection, hostControl, screenLocked = () => false, protectedPaths = [], enabled = async () => false, home = os.homedir(), activityFile, cloud = () => null, onChange = () => {}, reconnect = null, now = Date.now, power = createCloudPowerGate(),
-  linkHeaders = () => ({}), WebSocket: linkSocket = globalThis.WebSocket, egress = {} }) {
+  linkHeaders = () => ({}), WebSocket: linkSocket = globalThis.WebSocket, egress = {}, chrome = {} }) {
   const protectedRoots = [path.dirname(file), ...protectedPaths.filter(entry => typeof entry === "string" && entry), ...personalSecretPaths(home)];
   const activity = createLendingActivity(activityFile ?? path.join(path.dirname(file), "lending-activity.jsonl"));
   let records = {};
@@ -164,11 +164,12 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
   const noted = new Map();
   const browsed = env => (target, result) => {
     if (!result?.socket && !result?.refused) return;
-    const key = `${env.id}\n${target.host}\n${result.refused ?? "ok"}`;
+    const key = `${env.id}\n${target.chrome === true ? "chrome" : target.host}\n${result.refused ?? "ok"}`;
     if (now() - (noted.get(key) ?? -Infinity) < BROWSE_NOTE_MS) return;
     if (noted.size >= 1000) for (const [old, at] of noted) if (now() - at >= BROWSE_NOTE_MS) noted.delete(old);
     noted.set(key, now());
-    activity.record({ env, action: "internet", detail: String(target.host), ok: Boolean(result.socket), ...(result.refused ? { error: String(result.refused) } : {}) });
+    const viaChrome = target.chrome === true;
+    activity.record({ env, action: viaChrome ? "chrome" : "internet", detail: viaChrome ? "" : String(target.host), ok: Boolean(result.socket), ...(result.refused ? { error: String(result.refused) } : {}) });
   };
   const traffic = id => () => {
     const was = inUse.get(id);
@@ -241,7 +242,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
       .catch(error => { throw error.status === 401 || error.status === 403 ? Object.assign(error, { problem: "connect-first" }) : error; });
     if (auth.kind !== "session" || !uuid(auth.id) || !uuid(descriptor.environmentId)) throw Object.assign(new Error("Complete server pairing or sign-in first"), { problem: "connect-first" });
     if (descriptor.capabilities?.sharedComputers !== true) throw new Error("Update this server to enable computer sharing");
-    return { auth, info: { sessionId: auth.id, environmentId: descriptor.environmentId }, details: descriptor.capabilities?.lendingDetails === true, link: descriptor.capabilities?.deviceLink === true };
+    return { auth, info: { sessionId: auth.id, environmentId: descriptor.environmentId }, details: descriptor.capabilities?.lendingDetails === true, link: descriptor.capabilities?.deviceLink === true, chrome: descriptor.capabilities?.myChromeLink === true };
   };
   const identity = async env => {
     await requireEnabled();
@@ -250,14 +251,17 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
     return info;
   };
   const cloudIdentity = async env => {
-    const { auth, info, details, link } = await describe(env);
+    const { auth, info, details, link, chrome: takesChrome } = await describe(env);
     if (auth.cloudHome !== true || !Array.isArray(auth.scopes) || !auth.scopes.includes("admin")) throw Object.assign(new Error("This server is not My Cloud"), { problem: "not-cloud" });
     if (details) supportsDetails.add(env.id); else supportsDetails.delete(env.id);
     if (link) supportsLink.add(env.id); else supportsLink.delete(env.id);
+    if (takesChrome) supportsChrome.add(env.id); else supportsChrome.delete(env.id);
     return info;
   };
   const supportsDetails = new Set();
   const supportsLink = new Set();
+  /** The Clouds that take the person's Chrome over the device link. */
+  const supportsChrome = new Set();
   /** My Cloud's browsers reach the web through this computer while lending runs; never while My Cloud sleeps, so a
    * sleeping Cloud is never dialled. */
   const keepLink = async (env, grant, signal) => {
@@ -269,7 +273,8 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
       let opened = false;
       const signIn = await Promise.resolve().then(() => linkHeaders(env)).catch(() => ({}));
       const ended = await runDeviceLink({
-        url: linkUrl(env.origin, linkPath(grant.id)), signal, WebSocket: linkSocket, egress, traffic: traffic(env.id), onStream: browsed(env),
+        url: linkUrl(env.origin, linkPath(grant.id)), signal, WebSocket: linkSocket, egress, traffic: traffic(env.id), onStream: browsed(env), chrome,
+        lends: () => ({ internet: grant.internet === true, chrome: grant.chrome === true && supportsChrome.has(env.id) }),
         headers: { ...signIn, origin: env.origin, ...BACKGROUND_HEADERS, "x-omb-computer-secret": grant.secret },
         onOpen: () => { opened = true; failures = 0; linked.add(env.id); changed(); },
       });
@@ -322,11 +327,12 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
             // So My Cloud's bots say "your PC" on Windows and "your Mac" only on a Mac; only a server that takes it gets it.
             ...(supportsDetails.has(env.id) && LENT_PLATFORMS.has(process.platform) ? { platform: process.platform } : {}),
             ...(grant.cloud && supportsLink.has(env.id) ? { internet: grant.internet === true } : {}),
+            ...(grant.cloud && supportsChrome.has(env.id) ? { chrome: grant.chrome === true } : {}),
           }, signal, grant.secret);
           if (signal.aborted) break;
           status.set(env.id, { connected: true });
           changed();
-          if (grant.cloud && grant.internet === true && supportsLink.has(env.id)) live.link ??= keepLink(env, grant, signal).catch(() => {});
+          if (grant.cloud && supportsLink.has(env.id) && (grant.internet === true || (grant.chrome === true && supportsChrome.has(env.id)))) live.link ??= keepLink(env, grant, signal).catch(() => {});
           while (!signal.aborted) {
             await gate();
             awake();
@@ -421,6 +427,10 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
   const internetState = (env, lent) => lent?.cloud && lent.internet === true && lent.enabled === true && status.get(env.id)?.connected
     ? { internet: true, link: !supportsLink.has(env.id) ? "unsupported" : linked.has(env.id) ? "on" : "connecting" }
     : { internet: lent?.cloud ? lent.internet === true : false };
+  /** The same for the person's Chrome: "on", "connecting", or "unsupported" by a Cloud that does not take it. */
+  const chromeState = (env, lent) => lent?.cloud && lent.chrome === true && lent.enabled === true && status.get(env.id)?.connected
+    ? { chrome: true, chromeLink: !supportsChrome.has(env.id) ? "unsupported" : linked.has(env.id) ? "on" : "connecting" }
+    : { chrome: lent?.cloud ? lent.chrome === true : false };
   const state = id => {
     const grant = records[id];
     return { enabled: grant?.enabled === true, folders: Array.isArray(grant?.folders) ? grant.folders : [], terminal: grant?.terminal === true, computer: grant?.computer === true, ...status.get(id) };
@@ -444,6 +454,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
       // Only while lent: an off switch never keeps a terminal choice to be turned on again with it.
       terminal: lent?.enabled === true && lent.terminal === true,
       ...internetState(env, lent),
+      ...chromeState(env, lent),
       busy: Boolean(env && executing?.env === env.id),
       ...(access ? { via: "access", terminal: access.terminal === true, ...(running.has(env.id) ? {} : { problem: "access-off" }) } : {}),
       ...(lent?.enabled !== true && grant?.stopped && typeof grant.stopped.at === "number" ? { stopped: { reason: String(grant.stopped.reason), at: grant.stopped.at } } : {}),
@@ -489,11 +500,11 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
       const current = cloud();
       if (current?.status !== "connected" || !current.accountId || current.origin !== env.origin) throw Object.assign(new Error("Open My Cloud first."), { problem: "connect-first" });
       const folders = await validateSharedFolders(input?.folders);
-      if (!folders.length && input?.screen !== true && input?.internet !== true && input?.terminal !== true) throw new Error("Choose at least one folder, apps and screen, the internet connection, or the terminal.");
+      if (!folders.length && input?.screen !== true && input?.internet !== true && input?.chrome !== true && input?.terminal !== true) throw new Error("Choose at least one folder, apps and screen, the internet connection, your Chrome, or the terminal.");
       let info = { sessionId: null, environmentId: null };
       try { info = await cloudIdentity(env); } catch (error) { if (error.problem !== "connect-first") throw error; }
       const grant = { ...info, id: randomUUID(), secret: randomBytes(32).toString("hex"), enabled: true, folders, terminal: input.terminal === true, computer: input.screen === true,
-        internet: input.internet === true, cloud: { accountId: current.accountId, origin: env.origin } };
+        internet: input.internet === true, chrome: input.chrome === true, cloud: { accountId: current.accountId, origin: env.origin } };
       disconnect(env, records[env.id]);
       store({ ...records, [env.id]: grant }); run(env, grant); changed();
       return cloudState(env);

@@ -10,12 +10,14 @@ export interface PageLending {
   screenAvailable: boolean;
   /** Its internet connection, for the bots' browsers on My Cloud. */
   internet: boolean;
+  /** Its Chrome, for the bots on My Cloud. */
+  chrome: boolean;
   /** Whether My Cloud's browsing goes through it yet. */
   link?: "on" | "connecting" | "unsupported";
 }
 export function pageLending(snapshot: unknown): PageLending;
 export interface LentFolder { id: string; path: string; name: string; write: boolean }
-export function defaultGrant(input: { kept?: { folders?: LentFolder[]; screen?: boolean }; usual: LentFolder[]; projects: LentFolder[]; screenAvailable?: boolean; screenReady?: boolean }): { folders: LentFolder[]; screen: boolean; internet: true };
+export function defaultGrant(input: { kept?: { folders?: LentFolder[]; screen?: boolean; chrome?: boolean }; usual: LentFolder[]; projects: LentFolder[]; screenAvailable?: boolean; screenReady?: boolean }): { folders: LentFolder[]; screen: boolean; internet: true; chrome: boolean };
 export function existingFolders<T>(folders: unknown[], validate: (folders: unknown[]) => Promise<T[]>): Promise<T[]>;
 /** A refusal the page says plainly, never with Try again: `lending-refused:<code>` in the IPC error's message. */
 export declare const LENDING_REFUSED: string;
