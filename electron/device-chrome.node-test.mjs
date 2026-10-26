@@ -18,18 +18,23 @@ const until = async (check, what, ms = 5000) => {
   assert.fail(`timed out waiting for ${what}`);
 };
 
-// A stand-in for Chrome: upgrades only its own browser path, and records what each request looked like.
-async function fakeChrome() {
+// A stand-in for Chrome: upgrades only its own browser path. `seen` records every request, upgrade or not, and `bytes`
+// every byte any connection delivered, so "never reaches Chrome" means nothing arrived at all.
+async function fakeChrome({ onUpgrade } = {}) {
   const seen = [];
+  const state = { bytes: 0 };
   const wss = new WebSocketServer({ noServer: true });
-  const server = createHttpServer((_req, res) => { res.statusCode = 404; res.end(); });
+  const record = (req) => seen.push({ url: req.url, host: req.headers.host, origin: req.headers.origin });
+  const server = createHttpServer((req, res) => { record(req); res.statusCode = 404; res.end(); });
+  server.on("connection", (socket) => socket.on("data", (data) => { state.bytes += data.length; }));
   server.on("upgrade", (req, socket, head) => {
-    seen.push({ url: req.url, host: req.headers.host, origin: req.headers.origin });
+    record(req);
     if (req.url !== "/devtools/browser/REAL-ID") { socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"); return; }
+    if (onUpgrade) { onUpgrade(socket); return; }
     wss.handleUpgrade(req, socket, head, (ws) => ws.on("message", (data) => ws.send(data.toString())));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { seen, port: server.address().port, close: () => { wss.clients.forEach((c) => c.terminate()); server.close(); } };
+  return { seen, state, port: server.address().port, close: () => { wss.clients.forEach((c) => c.terminate()); server.closeAllConnections(); server.close(); } };
 }
 
 const withDir = async (text, body) => {
@@ -54,11 +59,15 @@ test("rewrites only a WebSocket upgrade to Chrome's browser or a page, with Chro
   const upgrade = ["Upgrade: websocket", "Connection: Upgrade"];
   assert.equal(rewriteHandshake(head("GET /devtools/browser/TOKEN HTTP/1.1", ...upgrade), target),
     "GET /devtools/browser/REAL-ID HTTP/1.1\r\nHost: 127.0.0.1:9222\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
-  assert.match(rewriteHandshake(head("GET /devtools/browser?x=1 HTTP/1.1", "upgrade: WebSocket"), target), /^GET \/devtools\/browser\/REAL-ID HTTP/);
+  assert.match(rewriteHandshake(head("GET /devtools/browser?x=1 HTTP/1.1", "upgrade: WebSocket", "connection: keep-alive, Upgrade"), target), /^GET \/devtools\/browser\/REAL-ID HTTP/);
   assert.match(rewriteHandshake(head("GET /devtools/page/AB12 HTTP/1.1", ...upgrade), target), /^GET \/devtools\/page\/AB12 HTTP/);
   assert.equal(rewriteHandshake(head("GET /json/new?https://x HTTP/1.1", ...upgrade), target), null);
   assert.equal(rewriteHandshake(head("POST /devtools/browser/x HTTP/1.1", ...upgrade), target), null);
   assert.equal(rewriteHandshake(head("GET /devtools/browser/x HTTP/1.1"), target), null);
+  assert.equal(rewriteHandshake(head("GET /devtools/browser/x HTTP/1.1", "Upgrade: websocket"), target), null, "no Connection: upgrade");
+  assert.equal(rewriteHandshake(head("GET /devtools/browser/x HTTP/1.1", "Upgrade: websocket", "Connection: close"), target), null, "Connection without upgrade");
+  assert.equal(rewriteHandshake(head("GET /devtools/browser/x HTTP/1.1", ...upgrade, "X-A: 1\nOrigin: https://evil.test"), target), null, "a bare LF inside a line");
+  assert.equal(rewriteHandshake(head("GET /devtools/browser/x HTTP/1.1", ...upgrade, "X-A: 1\rOrigin: https://evil.test"), target), null, "a bare CR inside a line");
 });
 
 test("a door to a running Chrome upgrades end to end and passes frames unchanged", async () => {
@@ -88,6 +97,7 @@ test("a request that is not a WebSocket upgrade gets 403 and never reaches Chrom
     await closed;
     assert.match(Buffer.concat(chunks).toString(), /^HTTP\/1\.1 403 Forbidden\r\n/);
     assert.deepEqual(chrome.seen, []);
+    assert.equal(chrome.state.bytes, 0);
   });
   chrome.close();
 });
@@ -99,7 +109,9 @@ test("an oversized head is dropped", async () => {
     socket.on("error", () => {});
     socket.write(Buffer.alloc(MAX_HEAD + 1, 0x61));
     await until(() => socket.destroyed, "the guard to be destroyed");
+    await delay(50);
     assert.deepEqual(chrome.seen, []);
+    assert.equal(chrome.state.bytes, 0);
   });
   chrome.close();
 });
@@ -111,4 +123,72 @@ test("no DevToolsActivePort, or a stale one whose port refuses, is no-chrome", a
   const { port } = closed.address();
   await new Promise((resolve) => closed.close(resolve));
   await withDir(`${port}\n/devtools/browser/REAL-ID\n`, async (dir) => assert.deepEqual(await createChromeDoor({ dirs: [dir] }).open(), { failed: "no-chrome" }));
+});
+
+const UPGRADE = "GET /devtools/browser/TOKEN HTTP/1.1\r\nHost: a\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+
+test("a second request pipelined behind the upgrade never reaches Chrome", async () => {
+  const chrome = await fakeChrome({ onUpgrade: (socket) => { socket.write("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"); } });
+  await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
+    const { socket } = await createChromeDoor({ dirs: [dir] }).open();
+    socket.on("data", () => {});
+    const closed = new Promise((resolve) => socket.on("close", resolve));
+    socket.write(`${UPGRADE}GET /json/list HTTP/1.1\r\nHost: localhost\r\n\r\n`);
+    await closed;
+    assert.deepEqual(chrome.seen.map((r) => r.url), ["/devtools/browser/REAL-ID"]);
+    assert.equal(chrome.state.bytes, UPGRADE.replace("TOKEN", "REAL-ID").length - "Host: a".length + `Host: 127.0.0.1:${chrome.port}`.length);
+  });
+  chrome.close();
+});
+
+test("when Chrome answers anything but 101, held bytes are not sent and the guard ends after delivering the answer", async () => {
+  const chrome = await fakeChrome();
+  await withDir(`${chrome.port}\n/devtools/browser/NOT-REAL\n`, async (dir) => {
+    const { socket } = await createChromeDoor({ dirs: [dir] }).open();
+    const chunks = [];
+    socket.on("data", (c) => chunks.push(c));
+    const closed = new Promise((resolve) => socket.on("close", resolve));
+    socket.write(UPGRADE);
+    const second = new Promise((resolve) => socket.write("GET /json/list HTTP/1.1\r\nHost: x\r\n\r\n", resolve));
+    await closed;
+    await second;
+    assert.match(Buffer.concat(chunks).toString(), /^HTTP\/1\.1 404 /);
+    assert.equal(chrome.seen.length, 1, "only the upgrade, never the held request");
+    assert.ok(chrome.state.bytes < UPGRADE.length + 20, "held bytes were not sent");
+  });
+  chrome.close();
+});
+
+test("bytes Chrome sends just before it closes still arrive when the guard was paused", async () => {
+  const chrome = await fakeChrome({ onUpgrade: (socket) => socket.end("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nTAIL") });
+  await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
+    const { socket } = await createChromeDoor({ dirs: [dir] }).open();
+    const chunks = [];
+    socket.on("data", (c) => chunks.push(c));
+    const ended = new Promise((resolve) => socket.on("end", resolve));
+    socket.pause();
+    socket.write(UPGRADE);
+    await delay(150);
+    socket.resume();
+    await ended;
+    assert.match(Buffer.concat(chunks).toString(), /^HTTP\/1\.1 101 [\s\S]*TAIL$/);
+  });
+  chrome.close();
+});
+
+test("ending the guard before the head is complete closes it and Chrome's side", async () => {
+  const chrome = await fakeChrome();
+  await withDir(`${chrome.port}\n/devtools/browser/REAL-ID\n`, async (dir) => {
+    const { socket } = await createChromeDoor({ dirs: [dir] }).open();
+    socket.resume();
+    const ended = new Promise((resolve) => socket.on("end", resolve));
+    const closed = new Promise((resolve) => socket.on("close", resolve));
+    await new Promise((resolve) => socket.write("GET /devtools/browser/x HTT", resolve));
+    socket.end();
+    await ended;
+    await closed;
+    assert.deepEqual(chrome.seen, []);
+    assert.equal(chrome.state.bytes, 0);
+  });
+  chrome.close();
 });

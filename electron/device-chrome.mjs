@@ -44,7 +44,9 @@ export function rewriteHandshake(head, target) {
   else if (!PAGE_PATH.test(path)) return null;
   const kept = [];
   let upgrade = false;
+  let connection = false;
   let host = false;
+  if (/[\x00-\x08\x0a-\x1f\x7f]/.test(head.replaceAll("\r\n", ""))) return null;
   for (const line of headers) {
     const colon = line.indexOf(":");
     const name = colon > 0 ? line.slice(0, colon) : "";
@@ -52,23 +54,31 @@ export function rewriteHandshake(head, target) {
     const key = name.toLowerCase();
     if (key === "origin") continue;
     if (key === "upgrade" && line.slice(colon + 1).trim().toLowerCase() === "websocket") upgrade = true;
+    if (key === "connection" && line.slice(colon + 1).split(",").some((token) => token.trim().toLowerCase() === "upgrade")) connection = true;
     if (key === "host") { if (!host) kept.push(`Host: 127.0.0.1:${target.port}`); host = true; continue; }
     kept.push(line);
   }
-  if (!upgrade) return null;
+  if (!upgrade || !connection) return null;
   if (!host) kept.unshift(`Host: 127.0.0.1:${target.port}`);
   return `GET ${path} HTTP/1.1\r\n${kept.join("\r\n")}\r\n\r\n`;
 }
 
 // The stream the link sees. Writes wait in `head` until the request is whole; then they either reach Chrome rewritten
-// or get a 403. Chrome's side ending or closing closes this one, and the reverse.
+// or get a 403. After the head, everything the client sends is held until Chrome answers 101: a request that Chrome
+// refuses, or a second request pipelined behind the upgrade, never gets its bytes to Chrome. A stream ending on
+// either side ends this one, and Chrome's last bytes are delivered before it closes.
 function createGuard(chrome, target) {
   let head = Buffer.alloc(0);
-  let state = "head";
+  let state = "head"; // head -> awaiting (head sent, no 101 yet) -> open; or refused
+  let response = Buffer.alloc(0);
+  let held = [];
+  const releaseHeld = () => { for (const { callback } of held.splice(0)) callback(); };
+  const abandon = () => { chrome.removeAllListeners(); chrome.on("error", () => {}); chrome.destroy(); };
   const guard = new Duplex({
     write(chunk, _encoding, callback) {
       if (state === "open") { chrome.write(chunk, callback); return; }
       if (state === "refused") { callback(); return; }
+      if (state === "awaiting") { held.push({ chunk, callback }); return; }
       head = Buffer.concat([head, chunk]);
       const end = head.indexOf("\r\n\r\n");
       if (end < 0) {
@@ -80,28 +90,56 @@ function createGuard(chrome, target) {
       if (rewritten === null) {
         // Not ours to forward: answer, and let go of Chrome without that closing the answer's stream.
         state = "refused";
-        chrome.removeAllListeners();
-        chrome.on("error", () => {});
-        chrome.destroy();
+        abandon();
         guard.push(FORBIDDEN);
         guard.push(null);
         callback();
         process.nextTick(() => { if (!guard.writableEnded) guard.end(); });
         return;
       }
-      state = "open";
+      state = "awaiting";
       const rest = head.subarray(end + 4);
       head = Buffer.alloc(0);
-      chrome.write(Buffer.concat([Buffer.from(rewritten, "latin1"), rest]), callback);
+      if (rest.length) { chrome.write(Buffer.from(rewritten, "latin1")); held.push({ chunk: rest, callback }); }
+      else chrome.write(Buffer.from(rewritten, "latin1"), callback);
     },
-    final(callback) { if (state === "open") chrome.end(); callback(); },
+    final(callback) {
+      if (state === "head") { abandon(); guard.push(null); } else if (!chrome.destroyed) chrome.end();
+      callback();
+    },
     read() { chrome.resume(); },
     destroy(error, callback) { chrome.destroy(); callback(error); },
   });
-  chrome.on("data", (data) => { if (!guard.push(data)) chrome.pause(); });
-  chrome.on("end", () => guard.push(null));
-  chrome.on("close", () => guard.destroy());
+  chrome.on("data", (data) => {
+    if (state === "awaiting") {
+      response = Buffer.concat([response, data]);
+      const line = response.indexOf("\r\n");
+      if (line < 0 && response.length <= MAX_HEAD) return;
+      if (line >= 0 && response.subarray(0, line).toString("latin1").startsWith("HTTP/1.1 101")) {
+        state = "open";
+        data = response;
+        const queued = held.splice(0);
+        for (const { chunk, callback } of queued) chrome.write(chunk, callback);
+      } else {
+        // Chrome said no: pass its answer back and end; what the client sent after the head is never sent.
+        state = "refused";
+        abandon();
+        releaseHeld();
+        guard.push(response);
+        guard.push(null);
+        process.nextTick(() => { if (!guard.writableEnded) guard.end(); });
+        return;
+      }
+    }
+    if (!guard.push(data)) chrome.pause();
+  });
+  // A clean end is pushed through, so bytes Chrome sent just before it are read before this closes; only a close with
+  // no end before it (a reset) closes at once.
+  let ended = false;
+  chrome.on("end", () => { ended = true; releaseHeld(); guard.push(null); });
+  chrome.on("close", () => { if (!ended) guard.destroy(); });
   chrome.on("error", (error) => guard.destroy(error));
+  guard.on("end", () => { if (!guard.writableEnded) guard.end(); });
   return guard;
 }
 
