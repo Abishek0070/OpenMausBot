@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { Audience } from "../audience.ts";
+import type { CloudLendingRefusal } from "../cloud-lending.ts";
 import type { AppConfig } from "../config.ts";
 import { browserEngineAttachCdpUrl, browserProfilePartitionId, browserProfilePartitionTarget, builtInBrowserEnabled, DATA_DIR } from "../config.ts";
 import { BrowserRuntime, TransportError, attachesToChrome, browserRuntimeEnv, formatBrowserTiming } from "../browser-runtime.ts";
@@ -64,8 +65,9 @@ export interface BrowserHostDeps {
   PORT: number;
   /** A Cloud home's way out through the person's own lent computer. */
   device?: EgressSetup["device"];
-  /** Whether a turn may use the person's lent computer (cloud-lending.ts). Without it, no browser a turn holds may. */
-  mayLend?(turn: TurnOwner): boolean;
+  /** Why a turn may not use the person's lent computer (cloud-lending.ts plus the memory check), or null when it may.
+   * Without it, no browser a turn holds may. */
+  lendRefusal?(turn: TurnOwner): LendRefusal | null;
   /** My Cloud's way to the person's own Chrome on the computer that lends it, and which computer that is. */
   lentChrome?: { route(): ChromeRoute | null; lender(): ChromeLender | null };
   /** The engine memory guard, told which browsers each thread's turn starts or holds. */
@@ -89,6 +91,7 @@ function lentDevice(device: NonNullable<EgressSetup["device"]>, holder: (session
 }
 
 type Spec = { command: string; args?: readonly string[]; env: Record<string, string> };
+type LendRefusal = CloudLendingRefusal | "memory-changed";
 const BOT_SESSION = /^bot-[A-Za-z0-9_.-]+$/;
 
 export function createBrowserHost(deps: BrowserHostDeps) {
@@ -122,15 +125,19 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     idleMs,
     log: (line) => console.warn(line),
   });
-  const mayLend = deps.mayLend ?? (() => false);
+  const lendRefusal = deps.lendRefusal ?? ((): LendRefusal => "unproven");
+  const mayLend = (turn: TurnOwner) => lendRefusal(turn) === null;
   const lentChrome = deps.lentChrome;
-  const chromeLends = new Map<string, boolean>();
+  const chromeRefusals = new Map<string, LendRefusal | null>();
   /** lentDevice's rule for the lent Chrome: the last holder's verdict, and a browser no turn has held is the person's own. */
-  function lentChromeAllowed(session: string): boolean {
+  function chromeRefusal(session: string): LendRefusal | null {
     const turn = turnResources.holder(`browser:${session}`);
-    if (turn) chromeLends.set(session, mayLend(turn));
-    return chromeLends.get(session) !== false;
+    if (turn) chromeRefusals.set(session, lendRefusal(turn));
+    return chromeRefusals.get(session) ?? null;
   }
+  const lentChromeAllowed = (session: string) => chromeRefusal(session) === null;
+  /** A new conversation can't undo a memory change, so that refusal points to Memory instead. */
+  const refusedAs = (session: string) => (chromeRefusals.get(session) === "memory-changed" ? "memory-changed" : "not-allowed");
   // The desktop's idle time, not a Cloud home's shorter one: each reconnect may make Chrome ask the person to Allow again.
   const doors = lentChrome ? new LentChromeDoors({ route: () => lentChrome.route(), allowed: lentChromeAllowed, idleMs: () => browserIdleMs(cfg, { cloudHome: false }) }) : undefined;
   const doorUrls = new Map<string, string>();
@@ -153,7 +160,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     afterClaim: (session, spec) => {
       if (!viaDoor(session, spec)) return null;
       const lender = lentChrome?.lender() ?? null;
-      if (!lentChromeAllowed(session)) return lentChromeGuidance("not-allowed", lender);
+      if (!lentChromeAllowed(session)) return lentChromeGuidance(refusedAs(session), lender);
       if (!lender) return lentChromeGuidance("not-lent", null);
       return lender.online ? null : lentChromeGuidance("offline", lender);
     },
@@ -164,14 +171,16 @@ export function createBrowserHost(deps: BrowserHostDeps) {
       const problem = failed?.isError === true && viaDoor(session, spec) ? doors?.problem(session) : null;
       if (!problem) return result;
       const content = Array.isArray(failed.content) ? failed.content : [];
-      return { ...failed, content: [...content, { type: "text", text: lentChromeGuidance(problem, lentChrome?.lender() ?? null) }] };
+      return { ...failed, content: [...content, { type: "text", text: lentChromeGuidance(problem === "not-allowed" ? refusedAs(session) : problem, lentChrome?.lender() ?? null) }] };
     },
   });
   // agent-browser keeps its Chrome connection across turns, so a turn that may not lend must not inherit an open one.
   if (doors) turnResources.onClaim((resource, owner) => {
     const session = resource.startsWith("browser:") ? resource.slice("browser:".length) : null;
-    if (session === null || !doors.owns(session) || mayLend(owner)) return;
-    chromeLends.set(session, false);
+    if (session === null || !doors.owns(session)) return;
+    const refused = lendRefusal(owner);
+    if (refused === null) return;
+    chromeRefusals.set(session, refused);
     doors.drop(session);
   });
   const browserLive = new LiveRouter(agentBrowserLive, chromeEngine);

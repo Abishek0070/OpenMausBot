@@ -40,8 +40,8 @@ afterEach(async () => { await Promise.all(hosts.splice(0).map((host) => host.bro
 
 const turn = { threadId: "thread-1", generation: "gen-1" };
 
-function setup(engine: "chrome" | "agent-browser" | undefined, { cloudHome = false, device, mayLend, holder, audienceOf, bots: botIds = ["scout"], browserBox, lentChrome, turnResources }: {
-  cloudHome?: boolean; device?: BrowserHostDeps["device"]; mayLend?: BrowserHostDeps["mayLend"]; holder?: (resource: string) => TurnOwner | undefined;
+function setup(engine: "chrome" | "agent-browser" | undefined, { cloudHome = false, device, lendRefusal, holder, audienceOf, bots: botIds = ["scout"], browserBox, lentChrome, turnResources }: {
+  cloudHome?: boolean; device?: BrowserHostDeps["device"]; lendRefusal?: BrowserHostDeps["lendRefusal"]; holder?: (resource: string) => TurnOwner | undefined;
   audienceOf?: BrowserHostDeps["audienceOf"]; bots?: string[]; browserBox?: BrowserHostDeps["browserBox"];
   lentChrome?: BrowserHostDeps["lentChrome"]; turnResources?: BrowserHostDeps["turnResources"];
 } = {}) {
@@ -65,7 +65,7 @@ function setup(engine: "chrome" | "agent-browser" | undefined, { cloudHome = fal
     CLOUD_HOME: cloudHome ? { machineId: "m-1" } : null,
     PORT: 4100,
     device,
-    mayLend,
+    lendRefusal,
     audienceOf,
     browserBox,
     lentChrome,
@@ -177,7 +177,7 @@ describe("the person's lent computer's connection, for a bot's browser on My Clo
     const configure = vi.spyOn(browserEgress, "configure");
     const holders = new Map<string, TurnOwner>();
     const upstream = { open: async () => ({ refused: "port" as const }) };
-    setup(undefined, { cloudHome: true, device: () => upstream, mayLend: (turn) => turn.threadId === "owner-thread", holder: (resource) => holders.get(resource) });
+    setup(undefined, { cloudHome: true, device: () => upstream, lendRefusal: (turn) => (turn.threadId === "owner-thread" ? null : "someone-else"), holder: (resource) => holders.get(resource) });
     const device = configure.mock.lastCall![0].device!;
     configure.mockRestore();
     expect(device("bot-1"), "a browser no turn has held is the person's own").toBe(upstream);
@@ -220,7 +220,7 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
    * A personal Cloud home whose bot "scout" uses the My Chrome profile "mine"; `lend` changes which computer lends Chrome.
    * agent-browser is a stub that runs beforeDispatch, as the real one does, and then `engine`: what reaches the daemon.
    */
-  function onMyCloud(found: ChromeLender | null, mayLend: (turn: TurnOwner) => boolean = (holder) => holder.threadId !== GUEST.threadId) {
+  function onMyCloud(found: ChromeLender | null, lendRefusal: BrowserHostDeps["lendRefusal"] = (holder) => (holder.threadId === GUEST.threadId ? "someone-else" : null)) {
     vi.mocked(browserEngineStatus).mockReturnValue({ kind: "ready", binaryPath: "/usr/local/bin/agent-browser", version: "0.37.0", managed: false });
     const engine = vi.fn(async (): Promise<unknown> => ({ content: [{ type: "text", text: "page" }] }));
     vi.spyOn(BrowserRuntime.prototype, "agentRpc").mockImplementation(async (_session, _spec, _method, _params, beforeDispatch) => {
@@ -230,7 +230,7 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
     let current = found;
     const resources = new TurnResources();
     const route = vi.fn(() => null);
-    const made = setup(undefined, { cloudHome: true, mayLend, turnResources: resources, lentChrome: { route, lender: () => current } });
+    const made = setup(undefined, { cloudHome: true, lendRefusal, turnResources: resources, lentChrome: { route, lender: () => current } });
     made.cfg.browserProfiles = [{ id: "mine", name: "Mine", browser: "chrome" }] as AppConfig["browserProfiles"];
     (made.bots[0] as { browserProfile?: string }).browserProfile = "mine";
     /** A tool call as the browser route makes it: beforeDispatch claims the browser for the calling turn. */
@@ -285,6 +285,15 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
     const browser = (await host.browserIntegration("scout", "mine", turn))!;
     expect(await call(browser, GUEST)).toEqual({ isError: true, content: [{ type: "text", text: expect.stringContaining(SOMEONE_ELSE) }] });
     expect(drop, "its claim dropped any connection the person's turn left open").toHaveBeenCalledWith(browser.session);
+    expect(engine).not.toHaveBeenCalled();
+  });
+
+  it("a conversation refused over a memory change is pointed to Memory, not to a new conversation", async () => {
+    const { host, engine, call } = onMyCloud(lender, (holder) => (holder.threadId === GUEST.threadId ? "memory-changed" : null));
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    const answer = await call(browser, GUEST);
+    expect(answer).toEqual({ isError: true, content: [{ type: "text", text: "This bot's memory was changed in a conversation you didn't write. Review it in Memory to use your Chrome again." }] });
+    expect(answer.content[0]!.text).not.toContain(SOMEONE_ELSE);
     expect(engine).not.toHaveBeenCalled();
   });
 

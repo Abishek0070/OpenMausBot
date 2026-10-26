@@ -171,7 +171,7 @@ export class LentChromeDoors {
   }
 }
 
-export function lentChromeGuidance(problem: LentChromeProblem, lender: ChromeLender | null): string {
+export function lentChromeGuidance(problem: LentChromeProblem | "memory-changed", lender: ChromeLender | null): string {
   const name = lender?.name ?? "your computer";
   const device = lender?.device ?? "computer";
   switch (problem) {
@@ -185,5 +185,7 @@ export function lentChromeGuidance(problem: LentChromeProblem, lender: ChromeLen
       return `Chrome on ${name} did not accept the connection; it may be waiting for the person to click Allow. Tell them in one sentence to check Chrome on that ${device}.`;
     case "not-allowed":
       return "Someone else wrote in this conversation, so it can't use your Chrome. Start a new conversation to use it.";
+    case "memory-changed":
+      return "This bot's memory was changed in a conversation you didn't write. Review it in Memory to use your Chrome again.";
   }
 }
