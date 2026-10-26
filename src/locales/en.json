@@ -2815,7 +2815,7 @@
   "settings.profiles.myChromeUnavailable": "My Chrome is for the desktop app, where bots run on your own computer. Anywhere else, such as the Cloud, there is no Chrome of yours to use, so every profile uses the built-in browser.",
   "settings.profiles.myChromeLent": "On My Cloud this is the Chrome on {name}, your {device}. It works while that {device} is awake with OpenMausBot open, in conversations you started yourself.",
   "settings.profiles.myChromeLentOffline": "{name} is offline right now.",
-  "settings.profiles.myChromeLend": "To use My Chrome on My Cloud, lend it from your Mac or PC: open OpenMausBot there, go to Settings → MausBot Cloud, and turn on Your Chrome.",
+  "settings.profiles.myChromeLend": "To use My Chrome on My Cloud, lend it from your Mac or PC: open OpenMausBot there, go to Settings → MausBot Cloud, and turn on Your Chrome. Until then, this profile's bots can't browse. You can also switch the profile to Built-in.",
   "settings.sites.title": "Signed-in sites",
   "logins.site": "Login page address",
   "logins.sitePlaceholder": "accounts.example.com",

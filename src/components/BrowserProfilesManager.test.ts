@@ -103,6 +103,8 @@ describe("browser profile manager", () => {
     fixture.profiles = [{ id: "work", name: "Work", browser: "chrome" }];
     const html = renderToStaticMarkup(createElement(BrowserProfilesManager));
     expect(html).toContain("turn on Your Chrome");
+    expect(html).toContain("this profile&#x27;s bots can&#x27;t browse");
+    expect(html).toContain("switch the profile to Built-in");
     expect(html).not.toContain("there is no Chrome of yours to use");
   });
 

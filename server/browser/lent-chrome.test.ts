@@ -209,5 +209,8 @@ describe("LentChromeDoors", () => {
     expect(text).toContain("Omkar's MacBook");
     expect(text).toContain("open OpenMausBot on that Mac");
     expect(lentChromeGuidance("no-chrome", null)).toContain("chrome://inspect/#remote-debugging");
+    const notLent = lentChromeGuidance("not-lent", null);
+    expect(notLent, "an older desktop has no switch").toContain("updating OpenMausBot there if the switch is missing");
+    expect(notLent, "or the way back to the built-in browser").toContain("switch this profile to Built-in under Settings → Browser profiles");
   });
 });
