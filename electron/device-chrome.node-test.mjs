@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
-import { createServer, connect as tcpConnect } from "node:net";
+import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

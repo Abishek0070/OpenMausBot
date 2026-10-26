@@ -30,6 +30,15 @@ export function parseDevtoolsActivePort(text) {
   return { port, path: second };
 }
 
+// A bare CR or LF would let one line smuggle in another header; HTAB is the only control character a header may hold.
+function hasControlChar(text) {
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if ((code < 0x20 && code !== 0x09) || code === 0x7f) return true;
+  }
+  return false;
+}
+
 /**
  * The request head (request line and headers, no final blank line) as Chrome should see it, or null to refuse. Only a
  * WebSocket upgrade to the browser or a page passes. Chrome answers 404 to a browser path that isn't its own, so that
@@ -46,7 +55,7 @@ export function rewriteHandshake(head, target) {
   let upgrade = false;
   let connection = false;
   let host = false;
-  if (/[\x00-\x08\x0a-\x1f\x7f]/.test(head.replaceAll("\r\n", ""))) return null;
+  if (hasControlChar(head.replaceAll("\r\n", ""))) return null;
   for (const line of headers) {
     const colon = line.indexOf(":");
     const name = colon > 0 ? line.slice(0, colon) : "";
