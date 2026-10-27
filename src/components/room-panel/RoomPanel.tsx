@@ -138,10 +138,15 @@ export function RoomPanel({ group, overlay = false }: { group: Group; overlay?: 
     setPage(null);
   };
 
+  // The row or Back button that was pressed is gone with the view it sat in: focus moves to its counterpart, so the
+  // next Escape still lands in the panel.
   useEffect(() => {
-    if (page !== null || !leftPage.current) return;
-    bodyRef.current?.querySelector<HTMLElement>(`[data-panel-page="${leftPage.current}"]`)?.focus();
-    leftPage.current = null;
+    if (page !== null) {
+      bodyRef.current?.querySelector<HTMLElement>("[data-panel-back]")?.focus();
+    } else if (leftPage.current) {
+      bodyRef.current?.querySelector<HTMLElement>(`[data-panel-page="${leftPage.current}"]`)?.focus();
+      leftPage.current = null;
+    }
   }, [page]);
 
   useEffect(() => {
