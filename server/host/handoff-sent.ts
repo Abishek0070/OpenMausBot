@@ -15,7 +15,7 @@ export function outsideRoomNote(room: AddressedRoom | undefined, via: SentVia): 
   return room && via === "direct" ? `it isn't in ${roomWords(room)}, so it got this directly: ` : "";
 }
 
-export function sentRow(input: { sender: Who; recipient: Who; threadId: string; title?: string; reason?: string; room?: AddressedRoom; via: SentVia }): Omit<Message, "id" | "at"> {
+export function sentRow(input: { sender: Who; recipient: Who; threadId: string; title?: string; reason?: string; doneWhen?: string; room?: AddressedRoom; via: SentVia }): Omit<Message, "id" | "at"> {
   const { sender, recipient, threadId, room, via } = input;
   const outside = room && via === "direct" ? room : undefined;
   return {
@@ -25,6 +25,7 @@ export function sentRow(input: { sender: Who; recipient: Who; threadId: string; 
       name: outside ? `Sent to ${recipient.name} directly: it isn't in ${roomWords(outside)}.` : `Sent to ${recipient.name}${room && !room.here ? ` · ${room.name}` : ""}`,
       ok: true, ...(input.reason ? { output: input.reason } : {}),
     },
+    ...(input.doneWhen ? { doneWhen: input.doneWhen } : {}),
     ...(outside ? { sentDirectly: { name: recipient.name, ...(outside.here ? {} : { room: outside.name }) } } : {}),
     ...(room && via === "room"
       ? { comm: { groupId: room.id, threadId, withBotId: recipient.id, withName: recipient.name, withColor: recipient.color } }
