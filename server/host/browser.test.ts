@@ -369,6 +369,48 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
     expect(engine).toHaveBeenCalledOnce();
   });
 
+  describe("a browser left running before this server opened the session's door, as after a restart", () => {
+    const folders: string[] = [];
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+    });
+    function leftover(session: string | null) {
+      const folder = mkdtempSync(join(tmpdir(), "omb-host-leftover-"));
+      folders.push(folder);
+      mkdirSync(join(folder, "agent-browser"));
+      if (session) writeFileSync(join(folder, "agent-browser", `${session}.pid`), "0");
+      vi.stubEnv("XDG_RUNTIME_DIR", folder);
+    }
+
+    it("is closed once, and no call gets the new door until it is", async () => {
+      const { host } = onMyCloud(lender);
+      const session = host.currentBrowserSession("scout", "mine");
+      leftover(session);
+      let finish = (_closed: boolean) => {};
+      vi.mocked(closeBrowserSession).mockClear().mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+      let settled = false;
+      const both = Promise.all([host.browserIntegration("scout", "mine", turn), host.browserIntegration("scout", "mine", turn)]).finally(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled, "both callers wait for the close").toBe(false);
+      finish(true);
+      const [first, second] = await both;
+      expect(first?.spec.env.AGENT_BROWSER_CDP).toMatch(DOOR);
+      expect(second?.spec.env.AGENT_BROWSER_CDP).toBe(first?.spec.env.AGENT_BROWSER_CDP);
+      expect(vi.mocked(closeBrowserSession).mock.calls.map(([, env]) => env.AGENT_BROWSER_SESSION)).toEqual([session]);
+      await host.browserIntegration("scout", "mine", turn);
+      expect(closeBrowserSession, "the door this server opened is not closed again").toHaveBeenCalledOnce();
+    });
+
+    it("closes nothing when no browser was running", async () => {
+      const { host } = onMyCloud(lender);
+      leftover(null);
+      vi.mocked(closeBrowserSession).mockClear();
+      expect((await host.browserIntegration("scout", "mine", turn))?.spec.env.AGENT_BROWSER_CDP).toMatch(DOOR);
+      expect(closeBrowserSession).not.toHaveBeenCalled();
+    });
+  });
+
   it("the summary says which computer lends Chrome, or that one can", () => {
     const { cfg, host, lend } = onMyCloud(lender);
     expect(host.lentChromeSummary()).toEqual({ myChromeOn: lender });

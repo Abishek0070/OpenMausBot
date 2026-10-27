@@ -141,10 +141,23 @@ export function createBrowserHost(deps: BrowserHostDeps) {
   // The desktop's idle time, not a Cloud home's shorter one: each reconnect may make Chrome ask the person to Allow again.
   const doors = lentChrome ? new LentChromeDoors({ route: () => lentChrome.route(), allowed: lentChromeAllowed, idleMs: () => browserIdleMs(cfg, { cloudHome: false }) }) : undefined;
   const doorUrls = new Map<string, string>();
+  const leftovers = new Map<string, Promise<void>>();
   async function lentChromeDoor(session: string): Promise<string | undefined> {
-    const url = await doors?.door(session);
-    if (url) doorUrls.set(session, url);
+    if (!doors) return undefined;
+    // A browser already running when this server first opens the session's door was told another address: an earlier
+    // server's door, gone after a restart, or none. An attached browser is never swept or idle-closed, so it is closed
+    // before anything uses the new door.
+    if (!doors.owns(session)) leftovers.set(session, closeLeftover(session));
+    const url = await doors.door(session);
+    await leftovers.get(session);
+    doorUrls.set(session, url);
     return url;
+  }
+  async function closeLeftover(session: string): Promise<void> {
+    const engine = browserEngineStatus();
+    if (engine.kind !== "ready" || !browserRunning(session, undefined)) return;
+    const closed = await closeBrowserSession(engine.binaryPath, browserRuntimeEnv({ AGENT_BROWSER_SESSION: session })).catch(() => false);
+    if (!closed) console.warn(`browser ${session}: could not close the browser left running before its door to your Chrome opened`);
   }
   /** A profile switched back to the built-in browser keeps its session name and its door, but its calls no longer use it. */
   function viaDoor(session: string, spec: { env: NodeJS.ProcessEnv }): boolean {
@@ -211,6 +224,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     closeAll: () => {
       doors?.close();
       doorUrls.clear();
+      leftovers.clear();
       return agentBrowserSweep.closeAll();
     },
   };
