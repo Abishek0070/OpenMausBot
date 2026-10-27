@@ -28,3 +28,11 @@ export function responderTitle(group: Group, members: Bot[], jevOn: boolean): st
           : t("room.responder.autoOff", { name: defaultResponderName(group, members) ?? t("room.responder.leadFallback") })
         : t("room.responder.lead", { name: lead?.name ?? t("room.responder.leadFallback") });
 }
+
+export function responderShortLabel(group: Group, members: Bot[]): string {
+  const responder = effectiveDefaultResponder(group, members);
+  if (responder.kind === "everyone") return t("room.panel.responder.everyone");
+  if (responder.kind === "mentions") return t("room.panel.responder.mentions");
+  if (responder.kind === "auto") return t("room.panel.responder.auto");
+  return members.find((member) => member.id === responder.botId)?.name ?? t("room.responder.leadFallback");
+}

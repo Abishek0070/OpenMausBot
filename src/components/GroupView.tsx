@@ -93,6 +93,8 @@ import { HandoffChip } from "./HandoffReply"; import { TeammateChip } from "./Te
 import { RoomWorkingFolder } from "./RoomWorkingFolder";
 import { RoomBulletin } from "./RoomBulletin";
 import { RoomHeader } from "./RoomHeader";
+import { useChatFindRequests } from "@/lib/chat-find";
+import { simpleRoomHeader } from "@/lib/room-panel";
 
 export function RoomToolChip({ message, roomId }: { message: Message; roomId?: string }) {
   const { state, dispatch } = useStore();
@@ -912,6 +914,7 @@ export function GroupView({ group }: { group: Group }) {
   const membersTriggerRef = useRef<HTMLButtonElement>(null);
   const closeMembers = useCallback(() => setMembersOpen(false), []);
   useEffect(() => setFindOpen(false), [group.threadId]);
+  useChatFindRequests(group.threadId, findOpen, setFindOpen);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
@@ -932,6 +935,7 @@ export function GroupView({ group }: { group: Group }) {
   const threadSpeakerId = roomThreadSpeakerId(group, group.threadId);
   const threadSpeaker = threadSpeakerId ? members.find((b) => b.id === threadSpeakerId) : undefined;
   const setupPending = !remoteClient && roomNeedsSetup(group);
+  const simpleHeader = simpleRoomHeader({ advanced: useAdvancedMode(), remoteClient, group, setupPending });
 
   const lastGroupMessage = group.messages.at(-1);
   const toolInFlight = lastGroupMessage?.kind === "activity" && lastGroupMessage.tool?.ok === undefined;
@@ -1027,6 +1031,7 @@ export function GroupView({ group }: { group: Group }) {
       <RoomHeader
         group={group}
         members={members}
+        simple={simpleHeader}
         setupPending={setupPending}
         remoteClient={remoteClient}
         findOpen={findOpen}
@@ -1058,7 +1063,7 @@ export function GroupView({ group }: { group: Group }) {
 
       {!setupPending && !group.dm && <RoomHoldsBanner group={group} members={members} />}
 
-      {!setupPending && <RoomBulletin group={group} remoteClient={remoteClient} />}
+      {!setupPending && !simpleHeader && <RoomBulletin group={group} remoteClient={remoteClient} />}
 
       {!setupPending && folderOpen && !group.dm && (
         <div className="w-full px-5">
