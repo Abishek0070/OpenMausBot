@@ -40,6 +40,7 @@
 //   FAKE_ACP_MODELS_LIST=v2  OpenCode 2: `models` answers empty with exit 0, `models --verbose` exits 1
 //   FAKE_ACP_VERBOSE_FAIL_ONCE  marker path: the first `models --verbose` fails, like a new OpenCode home's first run
 //   FAKE_ACP_MODEL_STICKS  set_config_option succeeds but keeps the old model
+//   FAKE_ACP_EXIT_ON_MODEL  the process exits when set_config_option selects this model
 //   FAKE_ACP_VARIANTS  JSON map model -> {id?, currentValue?, options} of ACP select values
 //   FAKE_ACP_CONFIG_UPDATES  JSON [{after, sessionId?, configOptions, replay?}] emitted after the named response
 //   FAKE_ACP_USAGE_ROOT  usage at the prompt result's root, as opencode 1.18.18 sends it
@@ -90,9 +91,10 @@ let currentMode: string | null = modes[0] ?? null;
 let currentFast: string | null = null;
 const taskIdFile = process.env.FAKE_ACP_TASKID_FILE ?? "";
 const peerIdOf = (list: string): string => /id: ([\w-]+)/.exec(list)?.[1] ?? "";
-function handoffCall(message: string, options: { consult?: boolean; reason?: string } = {}): { name: string; args: (list: string) => object } {
+function handoffCall(message: string, options: { consult?: boolean; reason?: string; doneWhen?: string } = {}): { name: string; args: (list: string) => object } {
   const reason = options.reason ? { reason: options.reason } : {};
-  return { name: "coordinate_bots", args: (list) => ({ bot_ids: [peerIdOf(list)], message, ...(options.consult ? { consult: true } : {}), ...reason }) };
+  const doneWhen = options.doneWhen ? { done_when: options.doneWhen } : {};
+  return { name: "coordinate_bots", args: (list) => ({ bot_ids: [peerIdOf(list)], message, ...(options.consult ? { consult: true } : {}), ...reason, ...doneWhen }) };
 }
 const handoffIdOf = (reply: string): string => /"requestId":"([\w-]+)"/.exec(reply)?.[1] ?? "";
 const statusCall = (id: string): { name: string; args: () => object } => ({ name: "assignment_status", args: () => ({ id }) });
@@ -790,6 +792,7 @@ function handle(msg: any) {
         result(msg.id, process.env.FAKE_ACP_EMPTY_MODE_ACK ? {} : { configOptions: configOptions() });
         break;
       }
+      if (configId === "model" && value === process.env.FAKE_ACP_EXIT_ON_MODEL) process.exit(4);
       if (configId !== "model" || !models.includes(value)) {
         out({
           jsonrpc: "2.0",
@@ -1157,7 +1160,7 @@ function handle(msg: any) {
       if (mode === "delegate-peer" && agentsMcp) {
         void driveMcp(agentsMcp, [
           { name: "list_bots", args: () => ({}) },
-          handoffCall("delegated task", { reason: "followup" }),
+          handoffCall("delegated task", { reason: "followup", doneWhen: "the export opens in Numbers" }),
         ])
           .then((reply) => {
             out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `delegated: ${reply}` } } } });

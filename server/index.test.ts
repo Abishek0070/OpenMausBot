@@ -3731,9 +3731,10 @@ describe("harness HTTP API", () => {
       await expect.poll(roomRows, { timeout: 5_000 }).toEqual([[roomBot.id, null, "queued", 1, COMPUTER_FREE_NOTE]]);
       const roomMessages = (await isolatedApi("GET", `/api/threads/${room.threadId}/messages`)).body.messages;
       expect(roomMessages.filter((message: any) => message.tool?.ok === false && /Computer still busy|Parked/.test(message.tool.name))).toHaveLength(0);
-      const roomEvents = (await isolatedApi("GET", `/api/threads/${room.threadId}/events`)).body.entries;
-      expect(roomEvents.filter((entry: any) => entry.kind === "runtime" && entry.data.type === "turn.wait_ended"))
-        .toMatchObject([{ data: { outcome: "parked" } }]);
+      await expect.poll(async () => {
+        const roomEvents = (await isolatedApi("GET", `/api/threads/${room.threadId}/events`)).body.entries;
+        return roomEvents.filter((entry: any) => entry.kind === "runtime" && entry.data.type === "turn.wait_ended");
+      }, { timeout: 5_000 }).toMatchObject([{ data: { outcome: "parked" } }]);
 
       expect((await isolatedApi("POST", `/api/bots/${botId}/interrupt`, { threadId: sibling.threadId })).status).toBe(200);
       await expect.poll(promptsOnParkBox, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
@@ -6494,6 +6495,11 @@ describe("harness HTTP API", () => {
         return await response.json() as { ok: boolean; text: string };
       };
       expect(await fill()).toEqual({ ok: false, text: "fill_login works in the built-in browser, and this conversation has none. Call request_sign_in instead." });
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "local" })).status).toBe(200);
+      const onScreen = await fill();
+      expect(onScreen.ok).toBe(false);
+      expect(onScreen.text).toContain("it never types one on the screen of this computer");
+      expect(onScreen.text).toContain("Call request_sign_in so the person signs in on this computer.");
       expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "browser" })).status).toBe(200);
       const inBrowser = await fill();
       expect(inBrowser.ok).toBe(false);

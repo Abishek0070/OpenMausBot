@@ -59,7 +59,8 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { VoiceNoteBubble, type VoiceNoteAttachment } from "./VoiceNoteBubble";
 import { RawMarkdownView, RawToggleAction } from "./RawMarkdownToggle";
 import { ThreadChip } from "./ThreadChip";
-import { HandoffChip } from "./HandoffReply";
+import { HandoffChip } from "./HandoffReply"; import { TeammateChip } from "./TeammateChip"; import { useTeammates } from "@/state/team-people"; import type { MentionPeer } from "@/lib/mentions";
+import { NewConversationInstead } from "./NewConversationInstead";
 import { VerifyCard } from "./VerifyCard";
 import { askText, runSkill, runSteps, runSummary, showRun, skillPrompt } from "@/lib/verify-steps";
 import { useShowRunCard } from "@/lib/run-card-preferences";
@@ -141,7 +142,7 @@ interface ChatRows {
   busy: boolean;
   hasMore: boolean;
   bots: readonly Bot[];
-  mentionPeers: readonly Bot[]; mentionPerson: { profileName?: string };
+  mentionPeers: readonly MentionPeer[]; mentionPerson: { profileName?: string };
   /** On a Team Cloud, the viewer's person key: another person's line carries their name. */
   speakerViewer?: string | null;
   focus: AppState["focusMessage"];
@@ -675,7 +676,7 @@ const ActivityChip = memo(function ActivityChip({ message, place = "auto" }: { m
   const { bots, dispatch } = useChatRows();
   const tool = message.tool;
   if (!tool) return null;
-  if (message.threadRef) return <ThreadChip message={message} />;
+  if (message.threadRef) return <ThreadChip message={message} />; if (message.relay) return <TeammateChip message={message} />;
   const comm = message.comm;
   if (comm) {
     return <HandoffChip message={message} bots={bots} title={t("chat.openConversationWith", { name: comm.withName })}
@@ -828,7 +829,7 @@ const MessagesList = memo(function MessagesList({
                   />
                 );
               }
-              if (!showToolCalls && !m.comm && !m.threadRef && !m.dataResult) return null;
+              if (!showToolCalls && !m.comm && !m.threadRef && !m.relay && !m.dataResult) return null;
               return <ActivityChip message={m} place={place} />;
             }
             case "digest":
@@ -953,7 +954,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
   const unreadDivider = useUnreadDivider({ threadId: bot.threadId, messages, following });
 
   const bots = useDrawnBots(state.bots);
-  const mentionPeers = useMemo(() => bots.filter((peer) => peer.id !== bot.id), [bots, bot.id]);
+  const teammates = useTeammates(); const mentionPeers = useMemo(() => [...bots.filter((peer) => peer.id !== bot.id), ...teammates.peers], [bots, bot.id, teammates]);
   const focus = state.focusMessage?.threadId === bot.threadId ? state.focusMessage : null;
   const showToolCalls = showToolCallsEnabled(state.config);
   const tts = state.config?.tts;
@@ -1343,16 +1344,5 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
 
     </main>
     </ThreadLinkContext>
-  );
-}
-
-export function NewConversationInstead({ onNew }: { onNew: () => void }) {
-  return (
-    <div className="pointer-events-auto mx-5 mb-4 flex items-center justify-between gap-3 rounded-2xl border border-hairline/60 bg-raised px-4 py-3" data-testid="cloud-guest-composer">
-      <p className="text-[13px] text-ink-secondary">{t("chat.cloudGuest.notYours")}</p>
-      <button type="button" onClick={onNew} className="shrink-0 rounded-full bg-accent px-3 py-1 text-[13px] font-medium text-white">
-        {t("chat.cloudGuest.newConversation")}
-      </button>
-    </div>
   );
 }
