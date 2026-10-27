@@ -23,7 +23,7 @@ import {
   preloadScreens, RemoteAgentSettingsPanel, RemoteDesktopPanel, RoomPanel, SettingsModal, TeamMapPage, TriggersPage,
 } from "@/components/lazy-screens";
 import { useAdvancedMode } from "@/lib/interface-mode";
-import { closeRoomPanel, useRoomPanel } from "@/lib/room-panel";
+import { useRoomPanelShown } from "@/lib/room-panel";
 import { WorkspaceBackupRecovery } from "@/components/WorkspaceBackupSettings";
 import { NotificationRail, NotificationsPanel } from "@/components/NotificationsPanel";
 import { useNotificationFeed } from "@/lib/notification-preferences";
@@ -129,7 +129,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
   const notificationFeed = useNotificationFeed() && !remoteClient;
   const advanced = useAdvancedMode();
-  const roomPanelOpen = useRoomPanel() === group?.id && !advanced && !remoteClient && state.activeView === "chat";
+  const roomPanelOpen = useRoomPanelShown({ group, state, simple: !advanced && !remoteClient });
   const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || state.computerOpen || state.inspectorOpen || state.activityOpen)) || roomPanelOpen || (notificationFeed && state.notificationsOpen);
   const collapseSidebar = sidePanelOpen && !sidebarAndPanelFit;
   const calendarFocus = state.activeView === "routines" && state.routinesFocus.view === "calendar";
@@ -187,11 +187,6 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   useEffect(() => {
     window.ogb?.setUnreadCount?.(unreadCount);
   }, [unreadCount]);
-
-  useEffect(() => closeRoomPanel(), [state.selectedId, state.activeView, advanced]);
-  useEffect(() => {
-    if (state.settingsOpen) closeRoomPanel();
-  }, [state.settingsOpen]);
 
   useEffect(() => {
     if (!state.connected) return;
