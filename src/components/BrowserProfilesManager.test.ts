@@ -103,9 +103,17 @@ describe("browser profile manager", () => {
     fixture.profiles = [{ id: "work", name: "Work", browser: "chrome" }];
     const html = renderToStaticMarkup(createElement(BrowserProfilesManager));
     expect(html).toContain("turn on Your Chrome");
-    expect(html).toContain("this profile&#x27;s bots can&#x27;t browse");
-    expect(html).toContain("switch the profile to Built-in");
+    expect(html).toContain("bots on a My Chrome profile can&#x27;t browse");
+    expect(html).toContain("switching a profile to Built-in works too");
     expect(html).not.toContain("there is no Chrome of yours to use");
+  });
+
+  it("on My Cloud with nothing lent and every profile Built-in, it never says a profile can't browse", () => {
+    fixture.engine = { myChrome: false, myChromeLendable: true };
+    fixture.profiles = [{ id: "work", name: "Work" }];
+    const html = renderToStaticMarkup(createElement(BrowserProfilesManager));
+    expect(html).toContain("turn on Your Chrome");
+    expect(html).not.toContain("this profile&#x27;s bots");
   });
 
   it("on My Cloud with nothing lent, a My Chrome profile shows the My Chrome note and how to lend it, never a sign-ins list", () => {
