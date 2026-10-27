@@ -2412,8 +2412,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "es": {
       "whop.description": "1a07cf04ef17029448d3781415cbac16d54e66b821907a40d94e0e6349710e70",
@@ -7834,8 +7836,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "fr": {
       "highlevel.unavailable": "87b8ac7f7610e6dd69f520bc59058fd92f307b9f4bcf804075f25d08bcaa7533",
@@ -10230,8 +10234,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "hi": {
       "highlevel.unavailable": "87b8ac7f7610e6dd69f520bc59058fd92f307b9f4bcf804075f25d08bcaa7533",
@@ -12626,8 +12632,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "ja": {
       "whop.description": "1a07cf04ef17029448d3781415cbac16d54e66b821907a40d94e0e6349710e70",
@@ -19011,8 +19019,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "pt-br": {
       "whop.description": "1a07cf04ef17029448d3781415cbac16d54e66b821907a40d94e0e6349710e70",
@@ -25134,8 +25144,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "zh": {
       "highlevel.unavailable": "87b8ac7f7610e6dd69f520bc59058fd92f307b9f4bcf804075f25d08bcaa7533",
@@ -28403,8 +28415,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "zh-tw": {
       "whop.description": "1a07cf04ef17029448d3781415cbac16d54e66b821907a40d94e0e6349710e70",
@@ -32691,8 +32705,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "uk": {
       "highlevel.unavailable": "87b8ac7f7610e6dd69f520bc59058fd92f307b9f4bcf804075f25d08bcaa7533",
@@ -35560,8 +35576,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "vi": {
       "whop.description": "1a07cf04ef17029448d3781415cbac16d54e66b821907a40d94e0e6349710e70",
@@ -40464,8 +40482,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "tr": {
       "whop.description": "1a07cf04ef17029448d3781415cbac16d54e66b821907a40d94e0e6349710e70",
@@ -45368,8 +45388,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "pl": {
       "whop.description": "1a07cf04ef17029448d3781415cbac16d54e66b821907a40d94e0e6349710e70",
@@ -51647,8 +51669,10 @@
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
       "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
-      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2",
-      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc"
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03",
+      "chat.sentDirectly": "3d2f65078e79b440c384b1be451b7c9ae71a3fa4022ea9a00e81a52299a8c8fc",
+      "chat.sentDirectlyNotInRoom": "cbca329afa99d2c950ad28f148b879536063fc1f966546bfbc49944bef0699d2"
     },
     "ru": {
       "whop.description": "1a07cf04ef17029448d3781415cbac16d54e66b821907a40d94e0e6349710e70",
@@ -58037,7 +58061,9 @@
       "sidebar.update.availableOther": "50ce0e6df74d25b1ce8721fa2fc6c7ea2990e1afdfddc95bb909e27cfd15bb16",
       "sidebar.update.upToDateOther": "fdb097b8cd4e3866d54a4b840b38432c4db69c7783112a8b4f80386b1cacbe12",
       "sidebar.update.howOther": "c8c6f89ce0b420107b0bf3e98ccc99ddb4677820437a6e5c87d1e6fea870dcf2",
-      "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7"
+      "sidebar.update.howOtherRestart": "3f3c7744d5366d82720d7dafab9fd13a940da36431e8f2dbed06acd2b73c18f7",
+      "update.card.idleNote": "5d6671e21155381b56faca30f5fb300f0c1cde66ddff40f0d69a6c0ce4fd0575",
+      "update.updatedItself": "120dfee7c90ee87d501e5ffe8f42dc58a6d86bd49c3287a707cf0348cac8ad03"
     }
   }
 }
