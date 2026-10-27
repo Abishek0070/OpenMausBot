@@ -181,7 +181,9 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     // agent-browser's own error names only the CDP connection; the door knows what went wrong on the way.
     afterCall: (session, spec, result) => {
       const failed = result as { isError?: unknown; content?: unknown };
-      const problem = failed?.isError === true && viaDoor(session, spec) ? doors?.problem(session) : null;
+      const found = failed?.isError === true && viaDoor(session, spec) ? doors?.problem(session) : null;
+      // A door refused under an earlier holder says nothing about a caller that may use it.
+      const problem = found === "not-allowed" && lentChromeAllowed(session) ? null : found;
       if (!problem) return result;
       const content = Array.isArray(failed.content) ? failed.content : [];
       return { ...failed, content: [...content, { type: "text", text: lentChromeGuidance(problem === "not-allowed" ? refusedAs(session) : problem, lentChrome?.lender() ?? null) }] };

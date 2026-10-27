@@ -354,6 +354,17 @@ describe("My Chrome on My Cloud, through the person's lent Chrome", () => {
     expect(answer.content[1]!.text).toContain("Mac is lent but offline");
   });
 
+  it("a door refused while a guest held the browser tells the owner nothing about someone else", async () => {
+    const cdpError = { isError: true, content: [{ type: "text", text: "CDP WebSocket connect failed: 403" }] };
+    const { host, resources, engine, call } = onMyCloud(lender);
+    engine.mockResolvedValue(cdpError);
+    const browser = (await host.browserIntegration("scout", "mine", turn))!;
+    expect((await call(browser, GUEST)).isError).toBe(true);
+    expect(await knock(browser.spec.env.AGENT_BROWSER_CDP!), "agent-browser reconnecting while the guest holds it").toBe("HTTP/1.1 403 Forbidden");
+    resources.release(GUEST);
+    expect(await call(browser, OWNER)).toEqual(cdpError);
+  });
+
   it("a profile switched back to the built-in browser keeps its session but none of the lent Chrome's answers", async () => {
     const { cfg, host, engine, call } = onMyCloud(null);
     const browser = (await host.browserIntegration("scout", "mine", turn))!;
